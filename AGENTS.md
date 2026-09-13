@@ -36,6 +36,8 @@ PR レビューで繰り返し指摘されたパターンを `.agents/rules/rule
 | RULE-003 | 設定由来の送信先 origin は HTTPS かループバックに限定する                       | test                 |
 | RULE-004 | エラーを握りつぶすな                                                            | lint + doc           |
 | RULE-005 | 再実行されうる読み込みは古い応答で新しい表示を上書きしない                      | doc                  |
+| RULE-006 | 資格情報を左右する設定は信頼できない場所から上書きさせない                      | doc                  |
+| RULE-007 | 送信中の再送信を状態で止める                                                    | doc                  |
 
 検査は `npm run test:project-rules`。CI と lefthook の pre-push から自動で走る。
 
@@ -61,4 +63,26 @@ npm run harvest:rules -- --new-only
 
 **ルールの追記は自動化しない。** 候補の提示までが機械の仕事で、採否は人間が決める。
 
+棚卸しの手順は `.agents/skills/rule-harvest/SKILL.md` にまとめてある。
+出典の書式やクラスタのキーを間違えると、採用したのに候補が出続ける。
+**候補を扱うときは必ずこれを開くこと**（Claude Code はスキルとして自動で拾うが、
+他のエージェントは自動で読まないので、パスを指定して開かせる）。
+
 仕組みの狙いと運用は [docs/guardrails.md](docs/guardrails.md) を参照。
+
+## スキルの置き方
+
+スキルは `skills` CLI（npm）で入れる。対象は Claude Code と Codex の 2 つだけ。
+
+```bash
+npx skills add ./.agents/skills/<名前> --agent claude-code codex -y
+```
+
+実体は `.agents/skills/<名前>/`（Codex がそのまま読む）、
+`.claude/skills/<名前>` はそこへのシンボリックリンク（Claude Code が自動で拾う）。
+台帳は `skills-lock.json`。
+
+**`npx skills experimental_install` はエージェント連携を復元しない（実測）。**
+`.agents/skills/` は戻るが `.claude/skills/` のリンクは作られず、
+しかも終了コードは 0 になる。だから `.claude/skills/*` のリンクは git で追跡している。
+**これを gitignore すると、clone した人の Claude Code からスキルが黙って消える。**

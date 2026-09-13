@@ -21,3 +21,16 @@
   `apps/vscode-extension/src/` へ移った旧パスのクラスタ。移行後の同じ問題は
   `🩺 Stability & Availability | apps/vscode-extension` に含まれ、そちらは RULE-004 として
   採用済み。パス単位でクラスタを作る都合で分裂しただけなので、重複として却下する（2026-09-10）
+
+- `🗄️ Data Integrity & Integration | apps/desktop` — 修正実績が 1 件のみ。両方とも
+  `selection.ts` のクリップボード復元という Electron 固有の実装詳細で、一般則に昇格しない
+  （2026-09-12）
+- `🎯 Functional Correctness | test/project-rules.test.mjs` — 全件が PR#98 単独。
+  ガードレールの検出器を書いたその回の指摘であり、再発クラスタではない。
+  内容（判定は違反側へ倒す、AST で解析する）は docs/guardrails.md の
+  「検出器そのものを検証する」「既知の限界」に記載済み（2026-09-12）
+- `🗄️ Data Integrity & Integration | scripts/harvest-review-rules.mjs` — 同上。PR#98 単独・
+  同一ファイル。部分取得を成功として返さない点は RULE-004 が既に覆う（2026-09-12）
+- `🎯 Functional Correctness | scripts/harvest-review-rules.mjs` — 同上。PR#98 単独・
+  同一ファイル。採用済み判定の仕様は docs/guardrails.md の「なぜ却下の記録が必要か」に記載済み
+  （2026-09-12）

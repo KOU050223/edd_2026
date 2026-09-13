@@ -6,6 +6,16 @@
       "sourceType": "github",
       "skillPath": "plugins/auth0/skills/auth0/SKILL.md",
       "computedHash": "7b880feacff86c4a64a4291dcfdb361a9fe43fd05f4fab1bca36cd7d481adefa"
+    },
+    "rule-harvest": {
+      "source": "./.agents/skills/rule-harvest",
+      "sourceType": "local",
+      "computedHash": "3f0ac136e5a46fee12aeb35f55c40892bc44b30ef48d4bc7b4ed59e02ac9f725"
+    },
+    "task-manager": {
+      "source": "./.agents/skills/task-manager",
+      "sourceType": "local",
+      "computedHash": "aaea202ca381b8b23e4dcd784bb7732bb47a6cb7109ad32e45a4b720ff336f4c"
     }
   }
 }

@@ -90,3 +90,60 @@
 3. **失敗を成功として扱わない。** HTTP 2xx でも本文の解析に失敗したなら、それは失敗である。
    型付きの結果（`SyncOutcome` のような）へ変換し、呼び出し側が失敗を判別できるようにする。
 4. **フォールバックで失敗を隠さない。** 既定値へ黙って落とすと、壊れていることが誰にも見えなくなる。
+
+---
+
+## RULE-006: 資格情報を左右する設定は、信頼できない場所から上書きさせない
+
+- **enforcement**: `doc`
+- **出典**: PR#63 `apps/vscode-extension/package.json` / PR#63 `apps/vscode-extension/src/learning/sync.ts`
+
+送信先 URL やトークンの設定は、**どこから上書きできるか**まで含めて設計する。
+値の検証だけでは足りない。信頼できない入力元が残っていれば、検証をすり抜ける値が入ってくる。
+
+VS Code の `contributes.configuration` は `scope` を省略すると `window` になり、
+**ワークスペース設定で上書きできる**。利用者が信頼して開いたつもりのリポジトリが
+`.vscode/settings.json` で送信先を書き換えれば、`Authorization: Bearer` ごと
+攻撃者の URL へ学習イベントが飛ぶ。
+
+1. **送信先を決める設定には `scope: "machine"` を指定する。**
+   ワークスペースからは触れなくなる。
+2. **トークンを通常の設定に置かない。** VS Code なら `SecretStorage`
+   （`ExtensionContext.secrets`）を使う。通常の設定は平文の JSON に載り、
+   設定同期で他のマシンへ配られる。
+3. **受け取った値は送信の直前で検証する。** HTTPS かループバックに限ること（RULE-003）。
+
+`scope` と検証は**両方要る**。片方だけでは、上書きされた値が検証を通ってしまうか、
+検証のない経路が残るかのどちらかになる。
+
+## RULE-007: 送信中の再送信を、状態で止める
+
+- **enforcement**: `doc`
+- **出典**: PR#60 `apps/desktop/src/renderer/renderer.js` / PR#60 `apps/desktop/src/main/index.ts`
+
+非同期の送信が終わる前にボタンをもう一度押せると、同じ要求が二重に飛ぶ。
+課金が二重になり、応答が交錯し、後から来た古い応答が新しい表示を上書きする（RULE-005）。
+
+**見た目を無効化するだけでは足りない。** `disabled` は押下を防ぐが、
+キーボードショートカットや別経路からの呼び出しは素通りする。
+**関数の入口で状態を見て弾くこと。**
+
+```js
+const ask = async () => {
+  if (isAsking) return; // 入口で弾く。これが本体。
+  isAsking = true;
+  send.disabled = true; // 見た目。補助でしかない。
+  try {
+    /* ... */
+  } finally {
+    isAsking = false; // 例外が出ても必ず戻す
+    send.disabled = false;
+  }
+};
+```
+
+解除は **`finally` で行う**。`try` の末尾に置くと、失敗したときにボタンが
+戻らないまま固まる。参照実装は `apps/desktop/src/renderer/renderer.js` の `ask`。
+
+保存した設定を送信内容へ反映し忘れるのも同じ根で、
+**画面の状態と実際に送る要求を一致させる**という点で揃えて考える。

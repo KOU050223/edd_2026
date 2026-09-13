@@ -129,6 +129,46 @@ test("収穫は採用済み・却下済みを差し引くための台帳を持�
   assert.match(declined, /## 一覧/, "却下台帳の書式が壊れている");
 });
 
+test("スキルの台帳とエージェント連携のリンクが揃っている", async () => {
+  // `skills experimental_install` は .claude/skills/ のリンクを復元しないまま
+  // 終了コード 0 で終わる（実測）。リンクを git で追跡することだけが配布経路なので、
+  // 追跡から外れると clone した人の Claude Code からスキルが黙って消える。
+  const lock = JSON.parse(await readFile(new URL("../skills-lock.json", import.meta.url), "utf8"));
+  const tracked = execFileSync("git", ["ls-files", "-s", ".claude/skills/"], {
+    cwd: repoRoot,
+    encoding: "utf8",
+  });
+  for (const [name, entry] of Object.entries(lock.skills)) {
+    if (entry.sourceType !== "local") continue;
+    assert.match(
+      tracked,
+      new RegExp(`^120000 \\S+ 0\\t\\.claude/skills/${name}$`, "m"),
+      `${name} の .claude/skills リンクが git に追跡されていない`,
+    );
+  }
+});
+
+test("棚卸しスキルが存在し、AGENTS.md から辿れる", async () => {
+  // スキルは Claude Code だけが自動で拾う。他のエージェントには AGENTS.md の
+  // 導線が唯一の手がかりなので、リンクが切れるとスキルは在るだけで読まれなくなる。
+  const skill = await readFile(
+    new URL("../.agents/skills/rule-harvest/SKILL.md", import.meta.url),
+    "utf8",
+  );
+  // 収穫の入口を Issue 本文ではなくスクリプトに向けているか。Issue は生成時点の描画で古い。
+  assert.match(skill, /npm run harvest:rules -- --new-only/);
+  // 編集は 3 箇所ある。どれが欠けてもメタテストが落ちるか候補が再提示される。
+  for (const path of [".agents/rules/rules.md", ".agents/rules/declined.md", "AGENTS.md"]) {
+    assert.ok(skill.includes(path), `棚卸し手順が ${path} への編集に触れていない`);
+  }
+
+  const agents = await readFile(new URL("../AGENTS.md", import.meta.url), "utf8");
+  assert.ok(
+    agents.includes(".agents/skills/rule-harvest/SKILL.md"),
+    "AGENTS.md から棚卸しスキルへの導線が切れている",
+  );
+});
+
 test("AGENTS.md がルールの正典を読み込ませ、一覧が正典と一致する", async () => {
   // AGENTS.md（= CLAUDE.md）は Claude Code と Codex の両方が自動で読む唯一の入口。
   // ここから正典への導線が切れると、ルールは書いてあるだけで参照されなくなる。
