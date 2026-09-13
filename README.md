@@ -34,6 +34,7 @@
 .
 ├─ apps/
 │  ├─ vscode-extension/         # VS Code固有のUI・コンテキスト収集・ローカルキュー
+│  ├─ desktop/                  # OS常駐で選択テキストを質問するElectronアプリ
 │  ├─ api/                      # 認証、同期、Managed AIを担うAPI Server
 │  └─ web/                      # Learning Mapと設定のWeb App
 ├─ packages/
@@ -56,6 +57,9 @@
 
 - `packages/domain` は他モジュールに依存しないドメイン契約と習熟度規則を置く。VS Code APIをimportしない。
 - `apps/vscode-extension` はVS Code / LSPの生データを構造化し、表示と入力を担当する。
+- `apps/desktop` はOS常駐（macOSのメニューバー / Windowsのタスクトレイ）から、任意のアプリで選択した
+  テキストを受け取り、表示と入力を担当する。エディタに閉じない場面をカバーする。
+  APIトークンはOSのキーチェーンへ預け、本文・質問は永続化しない。
 - `apps/api` は学習イベントの正本、習熟度導出、認証、同期を担当する。
 
 `AIProvider` interface は `apps/vscode-extension/src/ai/` に置く。`AIRequest` / `AIResponse` は
@@ -73,10 +77,10 @@ Concept一覧そのものは `packages/domain/concepts.md` を正典とし、生
 npm install
 npm run compile
 npm run check:concepts   # Concept一覧と生成物が一致しているか検査する
-npm run dev              # API Server と Desktop をまとめて起動する
+npm run dev              # API Server / Desktop / Web App をまとめて起動する
 ```
 
-`npm run dev` は API Server と Desktop を並列で起動し、どちらかが失敗するともう一方も停止する。
+`npm run dev` は API Server / Desktop / Web App を並列で起動し、どれかが失敗すると残りも停止する。
 VS Code Extension は、VS Codeでリポジトリルートを開いて `F5` でExtension Development Hostを起動します。
 全体方針は [`docs/architecture.md`](docs/architecture.md) を参照する。
 
