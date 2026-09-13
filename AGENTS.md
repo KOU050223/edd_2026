@@ -7,6 +7,16 @@ HTTP 2xx でも本文の解析に失敗したならそれは失敗として扱�
 
 ---
 
+## テスト
+
+自動テストの方針・書き方・実行方法は [docs/testing-guide.md](docs/testing-guide.md) を正典とする。
+手動確認の手順は [docs/testing.md](docs/testing.md)。
+
+ロジックを変える PR は実装と同じ PR でテストまで終わらせる。
+ワークスペース固有の事情（テストの置き場所、外部依存の差し替え方）は各 `AGENTS.md` にある。
+
+---
+
 ## プロジェクト固有のルール
 
 PR レビューで繰り返し指摘されたパターンを `.agents/rules/rules.md` に正典としてまとめている。
