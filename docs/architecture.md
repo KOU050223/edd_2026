@@ -56,7 +56,7 @@ Gakushu Sochi の中心的な資産は、単発のAI回答ではなく、ユー�
 
 ### Client connectors
 
-VS Code Extension、Web App、将来のCLIや他IDE連携を指す。
+VS Code Extension、Desktop App、Web App、将来のCLIや他IDE連携を指す。
 
 - 各環境からコード文脈・診断・ユーザー操作を収集する
 - 回答を表示し、Hint → 自力解決 → Answer の対話を成立させる
@@ -203,6 +203,7 @@ VS Code の質問体験をネットワーク必須にしない。
 ```text
 apps/
   vscode-extension/     # VS Code固有のUI・コンテキスト収集・ローカルキュー
+  desktop/              # OS常駐で選択テキストを質問するElectronアプリ
   api/                  # 認証、同期、Managed AI、課金の境界
   web/                  # Learning Map と設定。必要になった時点で追加
 packages/
