@@ -1,9 +1,51 @@
 import { describe, expect, it, vi } from "vitest";
-import { app } from "../app.js";
+import { Hono } from "hono";
+import { createAuth, type AuthVariables } from "../auth/middleware.js";
+import type { AuthVerifier } from "../auth/verifier.js";
+import { rateLimit } from "../auth/rate-limit.js";
+import { createAiRoute } from "./ai.js";
 
 const PROFILE_RATE_LIMITER = {
   limit: () => Promise.resolve({ success: true }),
 } as unknown as RateLimit;
+
+/**
+ * 認証を通ったものとして固定の sub を返す検証器。
+ *
+ * 本物の `Auth0Verifier` は Discovery と JWKS の取得を伴う。ここで確かめたいのは
+ * AI ルートの振る舞いなので、`createAuth` の継ぎ目（docs/auth.md §4）に
+ * これを挿す。検証器そのものの検証は `verifier` 側の責務である。
+ */
+const VERIFIER: AuthVerifier = {
+  verify: (token) =>
+    token === "valid-token"
+      ? Promise.resolve({ sub: "auth0|user-a" })
+      : Promise.reject(new Error("unexpected token in test")),
+};
+
+/** `app.ts` と同じ順序で、AI ルートに必要な分だけを組み立てる。 */
+function buildApp() {
+  const app = new Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>();
+  app.use(
+    "/v1/*",
+    createAuth(() => VERIFIER),
+  );
+  app.use(
+    "/v1/ai/responses",
+    rateLimit((env) => env.PROFILE_RATE_LIMITER),
+  );
+  app.route(
+    "/v1",
+    createAiRoute((env) => ({
+      apiKey: env.GEMINI_API_KEY,
+      model: env.GEMINI_MODEL,
+      fetch: (input, init) => globalThis.fetch(input, init),
+    })),
+  );
+  return app;
+}
+
+const app = buildApp();
 
 describe("POST /v1/ai/responses", () => {
   it("認証済みの質問を Gemini のストリームとして返す", async () => {
@@ -21,7 +63,7 @@ describe("POST /v1/ai/responses", () => {
       "https://api.example.test/v1/ai/responses",
       {
         method: "POST",
-        headers: { Authorization: "Bearer secret", "Content-Type": "application/json" },
+        headers: { Authorization: "Bearer valid-token", "Content-Type": "application/json" },
         body: JSON.stringify({
           selection: "const answer = 42",
           question: "これは何ですか？",
@@ -31,7 +73,6 @@ describe("POST /v1/ai/responses", () => {
         }),
       },
       {
-        DEV_AUTH_TOKEN: "secret",
         GEMINI_API_KEY: "test-key",
         GEMINI_MODEL: "gemini-3.6-flash",
         PROFILE_RATE_LIMITER,
@@ -60,10 +101,10 @@ describe("POST /v1/ai/responses", () => {
       "https://api.example.test/v1/ai/responses",
       {
         method: "POST",
-        headers: { Authorization: "Bearer secret", "Content-Type": "application/json" },
+        headers: { Authorization: "Bearer valid-token", "Content-Type": "application/json" },
         body: JSON.stringify({ selection: "code", question: "explain" }),
       },
-      { DEV_AUTH_TOKEN: "secret", PROFILE_RATE_LIMITER },
+      { PROFILE_RATE_LIMITER },
     );
 
     expect(response.status).toBe(503);
@@ -75,10 +116,10 @@ describe("POST /v1/ai/responses", () => {
       "https://api.example.test/v1/ai/responses",
       {
         method: "POST",
-        headers: { Authorization: "Bearer secret", "Content-Type": "application/json" },
+        headers: { Authorization: "Bearer valid-token", "Content-Type": "application/json" },
         body: JSON.stringify({ selection: "", question: "質問" }),
       },
-      { DEV_AUTH_TOKEN: "secret", GEMINI_API_KEY: "test-key", PROFILE_RATE_LIMITER },
+      { GEMINI_API_KEY: "test-key", PROFILE_RATE_LIMITER },
     );
 
     expect(response.status).toBe(400);
@@ -99,10 +140,10 @@ describe("POST /v1/ai/responses", () => {
       "https://api.example.test/v1/ai/responses",
       {
         method: "POST",
-        headers: { Authorization: "Bearer secret", "Content-Type": "application/json" },
+        headers: { Authorization: "Bearer valid-token", "Content-Type": "application/json" },
         body: JSON.stringify({ selection: "const answer = 42", question: "   " }),
       },
-      { DEV_AUTH_TOKEN: "secret", GEMINI_API_KEY: "test-key", PROFILE_RATE_LIMITER },
+      { GEMINI_API_KEY: "test-key", PROFILE_RATE_LIMITER },
     );
 
     expect(response.status).toBe(200);
