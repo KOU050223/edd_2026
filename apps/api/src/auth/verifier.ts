@@ -102,6 +102,16 @@ const UNKNOWN_KID_COOLDOWN_MS = 60_000;
 const JWKS_REFRESH_FLOOR_MS = 60_000;
 
 /**
+ * 下限の窓ごとに、未知の `kid` のために許す再取得の回数。
+ *
+ * 下限だけにすると、鍵のローテーションで新しい `kid` が現れた瞬間から
+ * 最大 JWKS_REFRESH_FLOOR_MS の間、正当なトークンを 401 にしてしまう。
+ * 窓あたり数回だけ再取得を許せばローテーションには即座に追従でき、
+ * `kid` を変えて投げ続けても外向き通信はこの回数で頭打ちになる。
+ */
+const JWKS_REFRESH_BUDGET_PER_WINDOW = 3;
+
+/**
  * `unknownKids` に残す件数の上限。
  *
  * 攻撃者が与える `kid` は無数にありうる。上限を置かないと、isolate の寿命の間
@@ -167,6 +177,17 @@ export class Auth0Verifier implements AuthVerifier {
 
   /** 直近で JWKS の取得を試みた時刻。取得の間隔に下限を置くために使う。 */
   private lastJwksAttemptAt?: number;
+
+  /** 現在の窓で、未知の `kid` のために使った再取得の回数。 */
+  private refreshesInWindow = 0;
+
+  /**
+   * 直近の取得が失敗したか。
+   *
+   * 下限の窓に入っている理由が「上流が落ちている」のか「その `kid` が本当に
+   * 無い」のかを区別するために持つ。前者を 401 として返さないため。
+   */
+  private lastRefreshFailed = false;
 
   constructor(options: Auth0VerifierOptions) {
     this.issuer = options.issuer;
@@ -264,19 +285,33 @@ export class Auth0Verifier implements AuthVerifier {
     // `kid` を名乗られると外れ続けるため、これが無いと外向き通信を
     // 1リクエストずつ増やせる。
     if (!this.mayAttemptRefresh()) {
+      // 直前の取得が失敗して窓が閉じているなら、それは上流の問題であって
+      // トークンの不正ではない。401 に丸めると、Auth0 への到達不能が
+      // 「トークンが違う」として現れ、利用者は再ログインを試みることになる
+      // （.agents/rules/rules.md RULE-004）。
+      if (this.lastRefreshFailed) {
+        throw new AuthVerificationError(
+          "unavailable",
+          "JWKS could not be fetched; retrying is throttled",
+        );
+      }
       this.rememberUnknownKid(kid);
       throw new AuthVerificationError("invalid_token", "token key id is unknown");
     }
 
+    // 未知の `kid` を解決しに行くので、キャッシュは読まずオリジンへ取りに行く。
+    // キャッシュを先に見ると、鍵のローテーション後その寿命の間だけ新しい鍵を
+    // 取りに行けず、正当なトークンを 401 にし続ける（docs/auth.md §4）。
+    //
     // 相乗りした取得は、この `kid` が公開される前に始まっていたかもしれない。
     // その結果でクールダウンを置くと、鍵の更新中に発行された正当なトークンを
     // 拒み続けることになる。自分のために始まった取得でなければ、
     // もう一度だけ引き直してから判定する。
-    const joined = await this.refreshKeys();
+    const joined = await this.refreshKeys(true);
 
     let refreshed = this.keys.get(kid);
     if (refreshed === undefined && joined) {
-      await this.refreshKeys();
+      await this.refreshKeys(true);
       refreshed = this.keys.get(kid);
     }
 
@@ -299,8 +334,17 @@ export class Auth0Verifier implements AuthVerifier {
     if (this.inflightJwks !== undefined) {
       return true;
     }
+
     const last = this.lastJwksAttemptAt;
-    return last === undefined || Date.now() - last >= JWKS_REFRESH_FLOOR_MS;
+    if (last === undefined || Date.now() - last >= JWKS_REFRESH_FLOOR_MS) {
+      // 窓が空いた。予算を戻す。
+      this.refreshesInWindow = 0;
+      return true;
+    }
+
+    // 窓の中でも、予算の範囲では引き直しを許す。鍵のローテーションに
+    // 追従するために要る。使い切ったら窓が空くまで取りに行かない。
+    return this.refreshesInWindow < JWKS_REFRESH_BUDGET_PER_WINDOW;
   }
 
   /** 解決しなかった `kid` を、件数に上限を置いて記録する。 */
@@ -322,7 +366,7 @@ export class Auth0Verifier implements AuthVerifier {
    * する `kid` が公開される前に始まった取得を見ている可能性があるため、
    * 呼び出し側がその区別を要る（`resolveKey`）。
    */
-  private refreshKeys(): Promise<boolean> {
+  private refreshKeys(skipCache: boolean): Promise<boolean> {
     const inflight = this.inflightJwks;
     if (inflight !== undefined) {
       return inflight.then(() => true);
@@ -331,23 +375,57 @@ export class Auth0Verifier implements AuthVerifier {
     // 実際に取得を始める時刻を記録する。失敗しても記録するのは、
     // 落ちている上流へ毎リクエスト取りに行かないためである。
     this.lastJwksAttemptAt = Date.now();
+    this.refreshesInWindow += 1;
 
     // 失敗も相乗り先へ共有するが、`inflightJwks` は完了時に必ず捨てるため、
     // 次の呼び出しは新しい取得になる。
-    const started = this.fetchKeys().finally(() => {
-      this.inflightJwks = undefined;
-    });
+    const started = this.fetchKeys(skipCache)
+      .then(
+        () => {
+          this.lastRefreshFailed = false;
+        },
+        (error: unknown) => {
+          this.lastRefreshFailed = true;
+          throw error;
+        },
+      )
+      .finally(() => {
+        this.inflightJwks = undefined;
+      });
     this.inflightJwks = started;
     return started.then(() => false);
   }
 
-  private async fetchKeys(): Promise<void> {
+  /**
+   * JWKS を取り込む。
+   *
+   * `skipCache` は「キャッシュを読まずにオリジンへ取りに行く」ことを意味する。
+   * 未知の `kid` を解決したいときに必要である。キャッシュを先に見てしまうと、
+   * 鍵のローテーション後、キャッシュの寿命（最大 JWKS_CACHE_TTL_SECONDS）の間
+   * 新しい鍵を取りに行けず、正当なトークンを 401 にし続ける。
+   * §4 の「`kid` 不一致時のみ再取得する」は、この再取得のことである。
+   */
+  private async fetchKeys(skipCache: boolean): Promise<void> {
     const { jwksUri } = await this.resolveDiscovery();
 
-    const cachedJwks = await this.readCachedJwks(jwksUri);
+    const cachedJwks = skipCache ? undefined : await this.readCachedJwks(jwksUri);
     const jwks = cachedJwks ?? (await this.fetchAndCacheJwks(jwksUri));
 
+    const imported = await this.importKeys(jwks);
+
+    // キャッシュから読んだのに1つも使える鍵が無いなら、キャッシュが古いか壊れている。
+    // オリジンから引き直す。ここで諦めると、壊れた応答が寿命の間ずっと居座る。
+    if (imported === 0 && cachedJwks !== undefined) {
+      console.error("cached JWKS had no usable key; refetching from origin", { jwksUri });
+      await this.importKeys(await this.fetchAndCacheJwks(jwksUri));
+    }
+  }
+
+  /** JWKS の鍵を取り込み、取り込めた件数を返す。 */
+  private async importKeys(jwks: Record<string, unknown>): Promise<number> {
     const keys = Array.isArray(jwks.keys) ? (jwks.keys as JsonWebKey_[]) : [];
+    let imported = 0;
+
     for (const jwk of keys) {
       // 署名用の RSA 鍵だけを取り込む。`alg` は鍵の側の宣言を使う。
       if (jwk.kty !== "RSA" || typeof jwk.kid !== "string") continue;
@@ -355,15 +433,24 @@ export class Auth0Verifier implements AuthVerifier {
       if (jwk.use !== undefined && jwk.use !== "sig") continue;
       if (typeof jwk.n !== "string" || typeof jwk.e !== "string") continue;
 
-      const key = await crypto.subtle.importKey(
-        "jwk",
-        { kty: "RSA", n: jwk.n, e: jwk.e, alg: ALLOWED_ALG, ext: true },
-        { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
-        false,
-        ["verify"],
-      );
-      this.keys.set(jwk.kid, key);
+      // 1件の不正な鍵で他の鍵まで取り込めなくなるのを避ける。ただし黙って
+      // 捨てない。記録して次の鍵へ進む（.agents/rules/rules.md RULE-004）。
+      try {
+        const key = await crypto.subtle.importKey(
+          "jwk",
+          { kty: "RSA", n: jwk.n, e: jwk.e, alg: ALLOWED_ALG, ext: true },
+          { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+          false,
+          ["verify"],
+        );
+        this.keys.set(jwk.kid, key);
+        imported += 1;
+      } catch (cause) {
+        console.error("failed to import a JWKS key", { kid: jwk.kid, cause });
+      }
     }
+
+    return imported;
   }
 
   private async readCachedJwks(jwksUri: string): Promise<Record<string, unknown> | undefined> {
@@ -393,7 +480,13 @@ export class Auth0Verifier implements AuthVerifier {
         "Cache-Control": `max-age=${JWKS_CACHE_TTL_SECONDS}`,
       },
     });
-    await this.cache.put(jwksUri, cacheable);
+    // キャッシュへの保存は副次的な処理である。失敗しても、既に取得できた JWKS を
+    // 捨てる理由にはならない。ただし黙って飲み込まず記録する（RULE-004）。
+    try {
+      await this.cache.put(jwksUri, cacheable);
+    } catch (cause) {
+      console.error("failed to cache JWKS", { jwksUri, cause });
+    }
 
     return body;
   }

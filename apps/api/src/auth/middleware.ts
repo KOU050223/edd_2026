@@ -129,11 +129,12 @@ export function createAuth(resolve: (env: CloudflareBindings) => AuthVerifier) {
       throw new HTTPException(401, { message: "Authorization: Bearer <token> is required" });
     }
 
-    const verifier = resolve(c.env);
-
+    // 検証器の組み立ても同じ try に入れる。設定欠落は `resolve` の側で
+    // AuthVerificationError("configuration") として投げられるため、外に出すと
+    // 種別が失われ、本文が「internal server error」になってしまう。
     let verified;
     try {
-      verified = await verifier.verify(token);
+      verified = await resolve(c.env).verify(token);
     } catch (error) {
       throw toHttpException(error, c.req.path);
     }
