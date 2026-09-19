@@ -41,3 +41,74 @@ jobs:
         run: npm run test:project-rules
       - name: Run tests
         run: npm run test
+
+  deploy-api:
+    name: Deploy API Worker
+    needs: verify
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    concurrency:
+      group: api-production
+      cancel-in-progress: false
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    steps:
+      - name: Check out tested source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.20.0
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Require Cloudflare deployment credential
+        run: test -n "$CLOUDFLARE_API_TOKEN"
+      - name: Apply D1 migrations
+        run: npm run migrate:remote --workspace=@gakushu-sochi/api
+      - name: Deploy API Worker
+        run: npm run deploy --workspace=@gakushu-sochi/api
+
+  deploy-web:
+    name: Deploy Web Worker
+    needs: verify
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    concurrency:
+      group: web-production
+      cancel-in-progress: false
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      WEB_API_TOKEN: ${{ secrets.WEB_API_TOKEN }}
+      WEB_ACCESS_PASSPHRASE: ${{ secrets.WEB_ACCESS_PASSPHRASE }}
+    steps:
+      - name: Check out tested source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.20.0
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Require Cloudflare deployment credential
+        run: test -n "$CLOUDFLARE_API_TOKEN"
+      - name: Require Web Worker secrets
+        run: |
+          test -n "$WEB_API_TOKEN"
+          test -n "$WEB_ACCESS_PASSPHRASE"
+      - name: Deploy Web Worker
+        run: |
+          secrets_file="$(mktemp)"
+          chmod 600 "$secrets_file"
+          trap 'rm -f "$secrets_file"' EXIT
+          node -e 'const { writeFileSync } = require("node:fs"); writeFileSync(process.argv[1], JSON.stringify({ API_TOKEN: process.env.WEB_API_TOKEN, WEB_ACCESS_PASSPHRASE: process.env.WEB_ACCESS_PASSPHRASE }));' "$secrets_file"
+          npm run deploy --workspace=@gakushu-sochi/web -- --secrets-file "$secrets_file"

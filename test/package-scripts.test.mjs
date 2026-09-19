@@ -16,14 +16,6 @@ const webPackageJson = JSON.parse(
 );
 const lefthook = await readFile(new URL("../lefthook.yml", import.meta.url), "utf8");
 const ci = await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
-const deployApi = await readFile(
-  new URL("../.github/workflows/deploy-api.yml", import.meta.url),
-  "utf8",
-);
-const deployWeb = await readFile(
-  new URL("../.github/workflows/deploy-web.yml", import.meta.url),
-  "utf8",
-);
 const webPreview = await readFile(
   new URL("../.github/workflows/preview-web.yml", import.meta.url),
   "utf8",
@@ -56,39 +48,34 @@ test("Web の本番アセットを hook と CI でビルド検証する", () => 
   assert.match(ci, /name: Build Web assets\n\s+run: npm run build:web/);
 });
 
-test("CI は検証だけを担当し、デプロイを含めない", () => {
-  assert.doesNotMatch(ci, /jobs:\n[\s\S]*deploy:/);
-  assert.doesNotMatch(ci, /npm run migrate:remote/);
-  assert.doesNotMatch(ci, /npm run deploy --workspace/);
-});
-
-test("main の CI 成功後に API を単独でデプロイする", () => {
+test("main の CI 成功後に API を同じコミットへ紐づけてデプロイする", () => {
   assert.equal(
     apiPackageJson.scripts.deploy,
     "npm run compile --workspace=@gakushu-sochi/domain && wrangler deploy",
   );
-  assert.match(deployApi, /name: Deploy API/);
-  assert.match(deployApi, /workflow_run:/);
-  assert.match(deployApi, /workflows: \["CI"\]/);
-  assert.match(deployApi, /workflow_run\.conclusion == 'success'/);
-  assert.match(deployApi, /workflow_run\.head_branch == 'main'/);
-  assert.match(deployApi, /ref: \$\{\{ github\.event\.workflow_run\.head_sha \}\}/);
-  assert.match(deployApi, /npm run migrate:remote --workspace=@gakushu-sochi\/api/);
-  assert.match(deployApi, /npm run deploy --workspace=@gakushu-sochi\/api/);
+  assert.match(ci, /deploy-api:\n\s+name: Deploy API Worker/);
+  assert.match(ci, /deploy-api:[\s\S]*needs: verify/);
+  assert.match(ci, /deploy-api:[\s\S]*github\.event_name == 'push'/);
+  assert.match(ci, /deploy-api:[\s\S]*github\.ref == 'refs\/heads\/main'/);
+  assert.match(ci, /deploy-api:[\s\S]*ref: \$\{\{ github\.sha \}\}/);
+  assert.match(ci, /deploy-api:[\s\S]*npm run migrate:remote --workspace=@gakushu-sochi\/api/);
+  assert.match(ci, /deploy-api:[\s\S]*npm run deploy --workspace=@gakushu-sochi\/api/);
 });
 
-test("main の CI 成功後に Web を単独でデプロイする", () => {
+test("main の CI 成功後に Web を同じコミットへ紐づけてデプロイする", () => {
   assert.equal(webPackageJson.scripts.deploy, "npm run build && wrangler deploy");
-  assert.match(deployWeb, /name: Deploy Web/);
-  assert.match(deployWeb, /workflow_run:/);
-  assert.match(deployWeb, /workflows: \["CI"\]/);
-  assert.match(deployWeb, /workflow_run\.conclusion == 'success'/);
-  assert.match(deployWeb, /workflow_run\.head_branch == 'main'/);
-  assert.match(deployWeb, /ref: \$\{\{ github\.event\.workflow_run\.head_sha \}\}/);
-  assert.match(deployWeb, /WEB_API_TOKEN: \$\{\{ secrets\.WEB_API_TOKEN \}\}/);
-  assert.match(deployWeb, /WEB_ACCESS_PASSPHRASE: \$\{\{ secrets\.WEB_ACCESS_PASSPHRASE \}\}/);
-  assert.match(deployWeb, /name: Require Web Worker secrets/);
-  assert.match(deployWeb, /--secrets-file "\$secrets_file"/);
+  assert.match(ci, /deploy-web:\n\s+name: Deploy Web Worker/);
+  assert.match(ci, /deploy-web:[\s\S]*needs: verify/);
+  assert.match(ci, /deploy-web:[\s\S]*github\.event_name == 'push'/);
+  assert.match(ci, /deploy-web:[\s\S]*github\.ref == 'refs\/heads\/main'/);
+  assert.match(ci, /deploy-web:[\s\S]*ref: \$\{\{ github\.sha \}\}/);
+  assert.match(ci, /deploy-web:[\s\S]*WEB_API_TOKEN: \$\{\{ secrets\.WEB_API_TOKEN \}\}/);
+  assert.match(
+    ci,
+    /deploy-web:[\s\S]*WEB_ACCESS_PASSPHRASE: \$\{\{ secrets\.WEB_ACCESS_PASSPHRASE \}\}/,
+  );
+  assert.match(ci, /deploy-web:[\s\S]*name: Require Web Worker secrets/);
+  assert.match(ci, /deploy-web:[\s\S]*--secrets-file "\$secrets_file"/);
 });
 
 test("PR 作成・更新時は本番へ昇格しない Web Preview を発行する", () => {

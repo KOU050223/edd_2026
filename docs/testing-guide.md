@@ -77,10 +77,9 @@ npm run format:check && npm run lint && npm run compile && \
 ```
 
 pre-commit（format / lint / compile）と pre-push（生成物の検査 + テスト一式）は
-lefthook が自動で走らせる。CI 成功後のデプロイは API と Web で分離している。
-配線は [`lefthook.yml`](../lefthook.yml)、[`.github/workflows/ci.yml`](../.github/workflows/ci.yml)、
-[`.github/workflows/deploy-api.yml`](../.github/workflows/deploy-api.yml)、
-[`.github/workflows/deploy-web.yml`](../.github/workflows/deploy-web.yml)。
+lefthook が自動で走らせる。main への push では CI の検証成功後に API と Web を
+同じワークフロー内でデプロイするため、デプロイ失敗も対象コミットの CI 結果に現れる。
+配線は [`lefthook.yml`](../lefthook.yml) と [`.github/workflows/ci.yml`](../.github/workflows/ci.yml)。
 
 ---
 
