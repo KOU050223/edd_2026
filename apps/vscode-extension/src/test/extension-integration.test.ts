@@ -205,6 +205,10 @@ test("回答に含まれるConceptをAPI同期内容へ引き継ぐ", async () =
       conceptIds: ["ts.variable_declaration"],
       language: "typescript",
     }),
-    { apiBaseUrl: "https://api.example.com", apiToken: "api-token", clientId: "client-1" },
+    {
+      apiBaseUrl: "https://api.example.com",
+      apiToken: expect.any(Function),
+      clientId: "client-1",
+    },
   );
 });

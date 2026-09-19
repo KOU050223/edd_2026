@@ -12,7 +12,7 @@ const EVENT: LearningEvent = {
 
 const CONFIG = {
   apiBaseUrl: "https://api.example.com",
-  apiToken: "test-token",
+  apiToken: async () => "test-token",
   clientId: "client-1",
 };
 
@@ -20,13 +20,13 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-test("トークン未設定なら送らずに理由を返す", async () => {
+test("トークン取得に失敗したら送らずに再ログインを案内する", async () => {
   const fetchMock = vi.fn();
   vi.stubGlobal("fetch", fetchMock);
 
-  const outcome = await syncEvent(EVENT, { ...CONFIG, apiToken: "" });
+  const outcome = await syncEvent(EVENT, { ...CONFIG, apiToken: async () => "" });
 
-  expect(outcome).toEqual({ ok: false, reason: expect.stringContaining("api.token") });
+  expect(outcome).toEqual({ ok: false, reason: "再ログインが必要です" });
   expect(fetchMock).not.toHaveBeenCalled();
 });
 
@@ -82,11 +82,19 @@ test("末尾のスラッシュがあっても二重にならない", async () =>
 });
 
 test("HTTPエラーなら理由付きで失敗を返す", async () => {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("", { status: 500 })));
+
+  const outcome = await syncEvent(EVENT, CONFIG);
+
+  expect(outcome).toEqual({ ok: false, reason: "HTTP 500" });
+});
+
+test("認証切れの401なら再ログインを案内する", async () => {
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("", { status: 401 })));
 
   const outcome = await syncEvent(EVENT, CONFIG);
 
-  expect(outcome).toEqual({ ok: false, reason: "HTTP 401" });
+  expect(outcome).toEqual({ ok: false, reason: "再ログインが必要です" });
 });
 
 test("ネットワークエラーなら例外を投げず失敗を返す", async () => {
@@ -96,6 +104,17 @@ test("ネットワークエラーなら例外を投げず失敗を返す", async
 
   expect(outcome.ok).toBe(false);
   expect((outcome as { reason: string }).reason).toContain("fetch failed");
+});
+
+test("認証エラーならネットワークエラーではなく再ログインを案内する", async () => {
+  const outcome = await syncEvent(EVENT, {
+    ...CONFIG,
+    apiToken: async () => {
+      throw new Error("再ログインが必要です");
+    },
+  });
+
+  expect(outcome).toEqual({ ok: false, reason: "再ログインが必要です" });
 });
 
 test("重複ならstatus: duplicateと理由を返す", async () => {
