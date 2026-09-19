@@ -1,4 +1,4 @@
-name: Web Preview
+name: Preview Web
 
 on:
   pull_request:
@@ -9,10 +9,10 @@ permissions:
   pull-requests: write
 
 jobs:
-  deploy-preview:
+  preview-web:
     # Fork PR には本番用の Cloudflare Secret を渡さない。
     if: github.event.pull_request.head.repo.full_name == github.repository
-    name: Deploy Web Preview
+    name: Preview Web Worker
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: production
