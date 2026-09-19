@@ -58,8 +58,16 @@ function parseDeviceCode(value: unknown): DeviceCodeResponse {
         ? value.verification_uri_complete
         : undefined,
     expires_in: value.expires_in,
-    interval: typeof value.interval === "number" ? value.interval : undefined,
+    interval: parsePositiveFiniteNumber(value.interval, "interval"),
   };
+}
+
+function parsePositiveFiniteNumber(value: unknown, field: string): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    throw new DeviceAuthError(`認証サーバーの ${field} が不正です`);
+  }
+  return value;
 }
 
 function parseToken(value: unknown): TokenResponse {
@@ -98,6 +106,7 @@ export interface DeviceAuthOptions {
 /** Auth0 Device Authorization Grant を扱う。アクセストークンはこのインスタンス内だけに保持する。 */
 export class DeviceAuth {
   private accessToken: { value: string; expiresAt: number } | undefined;
+  private refreshPromise: Promise<string> | undefined;
   private readonly sleep: (milliseconds: number) => Promise<void>;
 
   constructor(
@@ -123,6 +132,18 @@ export class DeviceAuth {
     if (this.accessToken && this.accessToken.expiresAt > Date.now() + 30_000) {
       return this.accessToken.value;
     }
+    if (this.refreshPromise) return this.refreshPromise;
+
+    const refreshPromise = this.refreshAccessToken();
+    this.refreshPromise = refreshPromise;
+    try {
+      return await refreshPromise;
+    } finally {
+      if (this.refreshPromise === refreshPromise) this.refreshPromise = undefined;
+    }
+  }
+
+  private async refreshAccessToken(): Promise<string> {
     const refreshToken = await this.secrets.get(REFRESH_TOKEN_KEY);
     if (!refreshToken) throw new DeviceAuthError("再ログインが必要です");
 

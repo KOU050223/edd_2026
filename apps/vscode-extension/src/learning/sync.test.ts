@@ -106,6 +106,17 @@ test("ネットワークエラーなら例外を投げず失敗を返す", async
   expect((outcome as { reason: string }).reason).toContain("fetch failed");
 });
 
+test("認証エラーならネットワークエラーではなく再ログインを案内する", async () => {
+  const outcome = await syncEvent(EVENT, {
+    ...CONFIG,
+    apiToken: async () => {
+      throw new Error("再ログインが必要です");
+    },
+  });
+
+  expect(outcome).toEqual({ ok: false, reason: "再ログインが必要です" });
+});
+
 test("重複ならstatus: duplicateと理由を返す", async () => {
   vi.stubGlobal(
     "fetch",

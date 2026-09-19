@@ -93,3 +93,48 @@ test("Refresh Token のローテーション応答を保存する", async () => 
   await expect(new DeviceAuth(storage).getAccessToken()).resolves.toBe("access-2");
   expect(storage.store).toHaveBeenCalledWith("gakushuSochi.auth.refreshToken", "refresh-new");
 });
+
+test("同時に要求されたトークン更新は1回だけ実行する", async () => {
+  const storage = secrets({ "gakushuSochi.auth.refreshToken": "refresh-old" });
+  let resolveFetch: ((response: Response) => void) | undefined;
+  const fetchPromise = new Promise<Response>((resolve) => {
+    resolveFetch = resolve;
+  });
+  const fetchMock = vi.fn().mockReturnValue(fetchPromise);
+  vi.stubGlobal("fetch", fetchMock);
+
+  const auth = new DeviceAuth(storage);
+  const first = auth.getAccessToken();
+  const second = auth.getAccessToken();
+  await Promise.resolve();
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+
+  resolveFetch?.(
+    new Response(
+      JSON.stringify({ access_token: "access-shared", token_type: "Bearer", expires_in: 900 }),
+    ),
+  );
+  await expect(Promise.all([first, second])).resolves.toEqual(["access-shared", "access-shared"]);
+});
+
+test("intervalが正の有限値でなければDevice Flowを開始しない", async () => {
+  const storage = secrets();
+  const sleep = vi.fn(async () => undefined);
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          device_code: "device-1",
+          user_code: "ABCD-EFGH",
+          verification_uri: "https://example.com/activate",
+          expires_in: 600,
+          interval: 0,
+        }),
+      ),
+    ),
+  );
+
+  await expect(new DeviceAuth(storage, { sleep }).login()).rejects.toThrow("interval が不正です");
+  expect(sleep).not.toHaveBeenCalled();
+});

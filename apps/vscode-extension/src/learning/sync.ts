@@ -113,6 +113,9 @@ export async function syncEvent(event: LearningEvent, config: SyncConfig): Promi
     }
     result = body.results[0];
   } catch (error) {
+    if (error instanceof Error && error.message === "再ログインが必要です") {
+      return { ok: false, reason: "再ログインが必要です" };
+    }
     return { ok: false, reason: `ネットワークエラー: ${String(error)}` };
   }
 
