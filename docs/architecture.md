@@ -67,6 +67,40 @@ VS Code Extension、Desktop App、Web App、将来のCLIや他IDE連携を指す
 ほかの端末と共有する履歴の正本を持たない。ローカル保存は、オフライン時の操作を保つための
 キャッシュおよび送信キューであり、サーバーと並ぶ正本ではない。
 
+### Web App と API Server の境界
+
+Web App は React による画面と、ブラウザからの認証要求を受け付ける Web Worker で構成する。
+React は学習プロフィールを表示し、Web Worker はブラウザに API の資格情報を渡さずに
+`apps/api` へ要求を中継する。ブラウザには HttpOnly のセッション Cookie だけを渡し、
+API 用の Access Token やサービス用トークンを保存させない。
+
+以下は認証方式を Auth0 に統一した後の責務である。移行が完了するまでは、開発環境に限り
+`DEV_AUTH_TOKEN` を使う経路が残る。
+
+Web Worker は次の処理を担当する。
+
+- Auth0 のログイン開始とコールバック処理
+- HttpOnly・Secure・SameSite Cookie による Web セッションの発行と失効
+- セッションに対応する Auth0 Access Token の取得と更新
+- 認証済み要求への Access Token 付与
+- `/api/*` の同一オリジン中継
+
+API Server は次の処理を担当する。
+
+- Auth0 JWT の署名・発行者・Audience の検証
+- JWT の Subject に基づくユーザー特定
+- 学習イベント、Learner Profile、Concept Mastery の処理
+- API の認可、レート制限、データ永続化
+
+Web Worker は API の認証方式を独自に持たない。Auth0 への移行後は、取得した Access Token
+を付与し、API Server が JWT の検証と認可を行う。移行完了後、Web Worker から API へ
+共有 API トークンを送る経路は使用しない。
+
+この構成では、ブラウザは API Server と直接通信しない。そのため、Web 用の CORS 設定を
+必要とせず、API の資格情報をブラウザへ公開せずに済む。Web Worker を削除してブラウザから
+API Server を直接呼ぶ構成へ移行する場合は、Auth0 の SPA 認証、トークンの保持、CORS、
+本番 API URL の設定を別途設計してから変更する。
+
 ### API Server
 
 複数クライアントから利用する、プロダクトのバックエンド境界である。

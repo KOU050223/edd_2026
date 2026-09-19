@@ -16,6 +16,10 @@ const webPackageJson = JSON.parse(
 );
 const lefthook = await readFile(new URL("../lefthook.yml", import.meta.url), "utf8");
 const ci = await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+const webPreview = await readFile(
+  new URL("../.github/workflows/web-preview.yml", import.meta.url),
+  "utf8",
+);
 const harvestWorkflow = await readFile(
   new URL("../.github/workflows/harvest-rules.yml", import.meta.url),
   "utf8",
@@ -63,6 +67,19 @@ test("Web の初回 deploy は required secrets を secrets file で渡す", () 
   assert.match(ci, /WEB_ACCESS_PASSPHRASE: \$\{\{ secrets\.WEB_ACCESS_PASSPHRASE \}\}/);
   assert.match(ci, /name: Require Web Worker secrets/);
   assert.match(ci, /--secrets-file "\$secrets_file"/);
+});
+
+test("PR 作成・更新時は本番へ昇格しない Web Preview を発行する", () => {
+  assert.match(webPreview, /pull_request:/);
+  assert.match(webPreview, /synchronize/);
+  assert.match(webPreview, /head\.repo\.full_name == github\.repository/);
+  assert.match(webPreview, /wrangler versions upload/);
+  assert.match(webPreview, /--preview-alias "pr-\$\{PR_NUMBER\}"/);
+  assert.match(webPreview, /--secrets-file "\$secrets_file"/);
+  assert.match(webPreview, /pull-requests: write/);
+  assert.match(webPreview, /actions\/github-script@v7/);
+  assert.match(webPreview, /context\.payload\.pull_request\.head\.sha\.slice\(0, 7\)/);
+  assert.doesNotMatch(webPreview, /context\.sha\.slice\(0, 7\)/);
 });
 
 test("VS Code Extension はコンパイル後に VSIX を生成できる", () => {

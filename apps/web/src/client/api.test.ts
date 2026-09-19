@@ -14,6 +14,12 @@ test("API の 401 理由を利用者が取れるエラー種別へ写像する",
   ).rejects.toEqual(new ApiError("api_token_invalid"));
 });
 
+test("2xx でも JSON の解析に失敗したら利用不能エラーとして扱う", async () => {
+  await expect(
+    requestJson("/api/v1/learning-profile", async () => new Response("not-json", { status: 200 })),
+  ).rejects.toEqual(new ApiError("unavailable"));
+});
+
 test("ログイン直後だけ、セッション未伝播の 401 を一度だけ再試行する", async () => {
   let calls = 0;
   const response = await requestJson<{ ok: boolean }>(
