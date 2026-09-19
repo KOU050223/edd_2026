@@ -78,6 +78,8 @@ test("PR 作成・更新時は本番へ昇格しない Web Preview を発行す�
   assert.match(webPreview, /--secrets-file "\$secrets_file"/);
   assert.match(webPreview, /pull-requests: write/);
   assert.match(webPreview, /actions\/github-script@v7/);
+  assert.match(webPreview, /context\.payload\.pull_request\.head\.sha\.slice\(0, 7\)/);
+  assert.doesNotMatch(webPreview, /context\.sha\.slice\(0, 7\)/);
 });
 
 test("VS Code Extension はコンパイル後に VSIX を生成できる", () => {
