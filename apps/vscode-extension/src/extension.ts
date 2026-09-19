@@ -11,6 +11,7 @@ import { readClipboard, readTerminalSelection } from "./context/clipboard";
 import { collectFromEditor, collectFromText } from "./context/collector";
 import { rangesOverlap } from "./context/diagnostics";
 import { getOrCreateClientId, loadProfile, recordEvent } from "./learning/store";
+import { DeviceAuth } from "./learning/device-auth";
 import { shouldRecordSolvedIndependently } from "./learning/resolution";
 import { syncEvent } from "./learning/sync";
 import { confirmSend } from "./ui/confirm";
@@ -81,6 +82,18 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(channel);
   channel.appendLine("Gakushu Sochi がアクティブになりました。");
   const pendingChatContext = new PendingChatContext();
+  const deviceAuth = new DeviceAuth(context.secrets);
+  context.subscriptions.push(
+    vscode.commands.registerCommand("gakushuSochi.login", async () => {
+      try {
+        await deviceAuth.login();
+        vscode.window.showInformationMessage("Gakushu Sochi にログインしました");
+      } catch (error) {
+        channel.appendLine(`ログインに失敗しました: ${String(error)}`);
+        vscode.window.showErrorMessage(`ログインに失敗しました: ${String(error)}`);
+      }
+    }),
+  );
   // ユーザー自身の Copilot 契約を使って回答を生成する。
   // onDebug: Concept抽出（AI/03 #12）の切り分け用。モデルの生の応答を出力チャンネルへ流す。
   const provider: AIProvider = new VSCodeLMProvider((message) => channel.appendLine(message));
@@ -112,7 +125,7 @@ export function activate(context: vscode.ExtensionContext): void {
       const clientId = await getOrCreateClientId(context);
       const outcome = await syncEvent(event, {
         apiBaseUrl,
-        apiToken: config.get<string>("api.token", ""),
+        apiToken: () => deviceAuth.getAccessToken(),
         clientId,
       });
 

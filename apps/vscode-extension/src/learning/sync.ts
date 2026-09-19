@@ -20,8 +20,8 @@ import type { LearningEvent } from "@gakushu-sochi/domain";
 export interface SyncConfig {
   /** 例: https://gakushu-sochi-api.uozumi05.workers.dev */
   apiBaseUrl: string;
-  /** `Authorization: Bearer <token>` に使う。開発用トークンで暫定運用中（docs/architecture.md）。 */
-  apiToken: string;
+  /** `Authorization: Bearer <token>` に使う短命トークンを取得する。 */
+  apiToken: () => Promise<string>;
   /** この端末のID。store.ts の getOrCreateClientId で取得する。 */
   clientId: string;
 }
@@ -72,13 +72,6 @@ function isSafeApiBaseUrl(value: string): boolean {
  * まとめ送りは、送信頻度が実際に問題になってから最適化する。
  */
 export async function syncEvent(event: LearningEvent, config: SyncConfig): Promise<SyncOutcome> {
-  if (!config.apiToken) {
-    // 設定漏れを「同期しない」で黙って済ませない。devAuth（apps/api）は
-    // トークン無しのリクエストを401で拒否するだけなので、ここで理由を残さないと
-    // 「同期されていない」原因を利用者が追えなくなる。
-    return { ok: false, reason: "APIトークンが未設定です（gakushuSochi.api.token）" };
-  }
-
   if (!isSafeApiBaseUrl(config.apiBaseUrl)) {
     // トークンを載せる前に弾く。ワークスペース設定で書き換えられた不正なURLへ
     // 送ってしまうと、トークンと学習イベントが第三者へ渡る。
@@ -92,11 +85,13 @@ export async function syncEvent(event: LearningEvent, config: SyncConfig): Promi
 
   let result: { status: SyncEventStatus; reason?: string } | undefined;
   try {
+    const apiToken = await config.apiToken();
+    if (!apiToken) return { ok: false, reason: "再ログインが必要です" };
     const response = await fetch(url, {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        authorization: `Bearer ${config.apiToken}`,
+        authorization: `Bearer ${apiToken}`,
       },
       body: JSON.stringify({ clientId: config.clientId, events: [event] }),
       // リダイレクトを自動追跡しない。転送先へ Authorization ヘッダごと
@@ -106,6 +101,7 @@ export async function syncEvent(event: LearningEvent, config: SyncConfig): Promi
     });
 
     if (!response.ok) {
+      if (response.status === 401) return { ok: false, reason: "再ログインが必要です" };
       return { ok: false, reason: `HTTP ${response.status}` };
     }
 
