@@ -3,7 +3,7 @@ import { expect, test, vi } from "vitest";
 vi.mock("vscode", () => ({}));
 
 import { createEmptyProfile, type LearnerProfile } from "@gakushu-sochi/domain";
-import { getOrCreateClientId, loadProfile } from "../learning/store";
+import { getOrCreateClientId, loadProfile } from "./store";
 import type * as vscode from "vscode";
 
 const CURRENT_KEY = "gakushuSochi.learnerProfile";

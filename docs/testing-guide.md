@@ -96,8 +96,8 @@ apps/api/src/routes/
 └─ learning-events.test.ts
 ```
 
-**例外: `apps/vscode-extension` は `src/test/` にまとめている。**
-このワークスペースへ足すときは既存に合わせる。他は併置。
+**例外: `apps/vscode-extension` の拡張全体の結線テストとマニフェスト検査は `src/test/` に置く。**
+それ以外は対象実装と併置する。
 
 `apps/desktop` だけ `vitest.config.ts` で `src/**/*.test.ts` を拾い、
 残りは `vitest run src` のように npm script の引数で範囲を決めている。
@@ -224,7 +224,7 @@ expect(chunks).toEqual(["こんにちは", "！"]);
 
 `vscode` のように import 自体が実環境を要求するものだけに使う。
 `vi.mock` は巻き上げられるため、モックが変数を参照するなら `vi.hoisted` で作る
-（`apps/vscode-extension/src/test/vscode-lm.test.ts` が見本）。
+（`apps/vscode-extension/src/ai/vscode-lm.test.ts` が見本）。
 
 ```ts
 const { selectChatModels } = vi.hoisted(() => ({ selectChatModels: vi.fn() }));

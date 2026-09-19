@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { CONSUMED_CONTEXT_MESSAGE, describePendingContext } from "../chat/context-summary";
+import { CONSUMED_CONTEXT_MESSAGE, describePendingContext } from "./context-summary";
 
 test("Chatリクエストへ添付する選択コードとLSP定義を説明する", () => {
   expect(

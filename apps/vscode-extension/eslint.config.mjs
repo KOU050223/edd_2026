@@ -33,7 +33,7 @@ export default [
     // AIProvider interface の実装として他から差し替え可能であればよい
     // （呼び出し側の provider.ts / mock.ts が vscode非依存であることが本来の目的）。
     files: ["src/ai/**/*.ts"],
-    ignores: ["src/ai/vscodeLm.ts"],
+    ignores: ["src/ai/vscodeLm.ts", "src/ai/vscode-lm.test.ts"],
     rules: {
       "@typescript-eslint/no-restricted-imports": [
         "error",

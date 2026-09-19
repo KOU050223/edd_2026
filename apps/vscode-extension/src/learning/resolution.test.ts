@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { shouldRecordSolvedIndependently } from "../learning/resolution";
+import { shouldRecordSolvedIndependently } from "./resolution";
 
 test("初回応答がresolvedを返しても自力解決イベントを記録しない", () => {
   expect(

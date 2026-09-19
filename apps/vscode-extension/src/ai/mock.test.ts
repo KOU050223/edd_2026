@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { MockProvider } from "../ai/mock";
+import { MockProvider } from "./mock";
 
 test("MockProviderはHintリクエストにHint応答を返す", async () => {
   const provider = new MockProvider();
