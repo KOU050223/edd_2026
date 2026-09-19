@@ -77,13 +77,11 @@
         <div class="settings-panel">
           <h2 id="settings-title">設定</h2>
           <label>API URL<input id="api-base-url" type="url" required /></label>
-          <label
-            >API トークン<input
-              id="api-token"
-              type="password"
-              autocomplete="off"
-              placeholder="変更時のみ入力"
-          /></label>
+          <div class="auth-settings">
+            <span>アカウント</span>
+            <button type="button" id="auth-login">ブラウザでログイン</button>
+            <span id="auth-status" role="status"></span>
+          </div>
           <label>ショートカット<input id="shortcut" required /></label>
           <label>モデル<input id="model" required /></label>
           <label>温度<input id="temperature" type="number" min="0" max="2" step="0.1" /></label>

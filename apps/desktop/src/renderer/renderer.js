@@ -91,6 +91,21 @@ const resetCard = () => {
   chips.replaceChildren();
 };
 
+const login = $("auth-login");
+login.onclick = async () => {
+  login.disabled = true;
+  $("auth-status").textContent = "ブラウザでログインしています…";
+  try {
+    await window.desktop.login();
+    $("auth-status").textContent = "ログイン済み";
+  } catch (e) {
+    $("auth-status").textContent = "ログインに失敗しました";
+    showError(e instanceof Error ? e.message : String(e));
+  } finally {
+    login.disabled = false;
+  }
+};
+
 window.desktop.onSelection(({ selection: text, error: message }) => {
   renderCode(text);
   if (message) showError(message);
@@ -162,6 +177,7 @@ const openSettings = async () => {
   });
   $("restore").checked = s.restoreClipboard;
   $("login").checked = s.launchAtLogin;
+  $("auth-status").textContent = s.hasRefreshToken ? "ログイン済み" : "未ログイン";
   form.hidden = false;
   // モーダルの背後へ Tab で抜けさせない（inert は form の祖先には置けないため兄弟に置く）。
   backdrop.forEach((element) => element.setAttribute("inert", ""));
@@ -189,7 +205,6 @@ form.onsubmit = async (event) => {
     await window.desktop.saveSettings({
       apiBaseUrl: $("api-base-url").value,
       shortcut: $("shortcut").value,
-      apiToken: $("api-token").value,
       model: $("model").value,
       temperature: Number($("temperature").value),
       maxTokens: Number($("max-tokens").value),
