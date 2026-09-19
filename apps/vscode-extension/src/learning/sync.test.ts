@@ -1,6 +1,6 @@
 import { afterEach, expect, test, vi } from "vitest";
 import type { LearningEvent } from "@gakushu-sochi/domain";
-import { syncEvent } from "../learning/sync";
+import { syncEvent } from "./sync";
 
 const EVENT: LearningEvent = {
   id: "event-1",

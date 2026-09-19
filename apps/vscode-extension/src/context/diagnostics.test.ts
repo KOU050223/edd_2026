@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { rangesOverlap } from "../context/diagnostics";
+import { rangesOverlap } from "./diagnostics";
 
 const range = (
   startLine: number,

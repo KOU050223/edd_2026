@@ -11,7 +11,8 @@
 
 書き方・実行方法は [`docs/testing-guide.md`](../../docs/testing-guide.md) を参照する。
 
-- **テストは `src/test/` にまとめる**（このワークスペースだけ併置していない）。
+- **通常のテストは対象実装の横に置く**。拡張全体の結線テストとマニフェスト検査だけ
+  `src/test/` に置く。
 - VS Code 本体は起動しない。`vscode` を import する経路は `vi.mock("vscode", ...)` で
   差し替える。モックが変数を参照するなら `vi.hoisted` で作る。
 - `vscode` に触れないロジックは `src/ai/` や `src/learning/` 側へ寄せ、モック無しで検証する。

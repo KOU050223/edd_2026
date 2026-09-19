@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { PendingChatContext } from "../chat/pending-context";
+import { PendingChatContext } from "./pending-context";
 
 test("Chatを開く前に収集した文脈をParticipantのリクエストまで保持する", () => {
   const pending = new PendingChatContext();

@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { createChatAIRequest } from "../chat/request";
+import { createChatAIRequest } from "./request";
 
 test("Chatの質問とLSP文脈をVS Code非依存のAIRequestへ変換する", () => {
   const context = {

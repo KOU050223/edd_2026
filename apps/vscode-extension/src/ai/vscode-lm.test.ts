@@ -24,7 +24,7 @@ vi.mock("vscode", () => ({
   },
 }));
 
-import { VSCodeLMProvider } from "../ai/vscodeLm";
+import { VSCodeLMProvider } from "./vscodeLm";
 import * as vscode from "vscode";
 
 /** for-await できる最小限の LanguageModelChatResponse を組む。 */

@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { openGakushuSochiChat } from "../chat/open";
+import { openGakushuSochiChat } from "./open";
 
 test("@gakushu-sochiを入力済みかつ未送信でChatを開く", async () => {
   const calls: unknown[][] = [];

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { buildPrompt } from "../ai/prompt";
+import { buildPrompt } from ".";
 
 const baseRequest = {
   mode: "explain" as const,
