@@ -35,7 +35,13 @@ export async function requestJson<T>(
       return requestJson(path, fetcher, false, wait);
     }
   }
-  if (response.ok) return response.json() as Promise<T>;
+  if (response.ok) {
+    try {
+      return (await response.json()) as T;
+    } catch {
+      throw new ApiError("unavailable");
+    }
+  }
   const body = (await response.json().catch(() => ({}))) as { error?: string };
   if (body.error === "session_expired") throw new ApiError("session_expired");
   if (body.error === "api_token_invalid") throw new ApiError("api_token_invalid");
