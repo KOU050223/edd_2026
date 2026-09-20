@@ -265,6 +265,7 @@ test("回答に含まれるConceptをAPI同期内容へ引き継ぐ", async () =
       apiBaseUrl: "https://api.example.com",
       apiToken: expect.any(Function),
       clientId: "client-1",
+      canSend: expect.any(Function),
     },
   );
 });

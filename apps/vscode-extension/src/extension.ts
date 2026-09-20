@@ -95,7 +95,10 @@ export function activate(context: vscode.ExtensionContext): void {
   );
   // ユーザー自身の Copilot 契約を使って回答を生成する。
   // onDebug: Concept抽出（AI/03 #12）の切り分け用。モデルの生の応答を出力チャンネルへ流す。
-  const provider: AIProvider = new VSCodeLMProvider((message) => channel.appendLine(message));
+  const provider: AIProvider = new VSCodeLMProvider(
+    (message) => channel.appendLine(message),
+    () => hasConsent(context),
+  );
 
   // MVP/02 (#23): 学習フィードバックをローカル保存する。
   // メモリ上に持ち、イベントのたびに globalState へ反映する
@@ -134,6 +137,7 @@ export function activate(context: vscode.ExtensionContext): void {
         apiBaseUrl,
         apiToken: () => deviceAuth.getAccessToken(),
         clientId,
+        canSend: () => hasConsent(context),
       });
 
       if (!outcome.ok) {

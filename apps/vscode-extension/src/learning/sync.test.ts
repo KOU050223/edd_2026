@@ -30,6 +30,24 @@ test("トークン取得に失敗したら送らずに再ログインを案内�
   expect(fetchMock).not.toHaveBeenCalled();
 });
 
+test("トークン取得後に同意が取り消されたらfetchしない", async () => {
+  const fetchMock = vi.fn();
+  vi.stubGlobal("fetch", fetchMock);
+  let canSend = true;
+
+  const outcome = await syncEvent(EVENT, {
+    ...CONFIG,
+    apiToken: async () => {
+      canSend = false;
+      return "test-token";
+    },
+    canSend: () => canSend,
+  });
+
+  expect(outcome).toEqual({ ok: false, reason: "送信の同意が取り消されました" });
+  expect(fetchMock).not.toHaveBeenCalled();
+});
+
 test("受理されたら status: accepted を返す", async () => {
   vi.stubGlobal(
     "fetch",

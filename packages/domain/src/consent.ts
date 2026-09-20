@@ -15,7 +15,7 @@
  * （`isConsentGranted` が false を返す）。利用者が知らないうちに
  * 送信先や送信内容が増えている状態を作らないための仕掛けである。
  */
-export const CONSENT_NOTICE_VERSION = 1;
+export const CONSENT_NOTICE_VERSION = 2;
 
 /** 同意ダイアログの見出し。 */
 export const CONSENT_NOTICE_TITLE = "Gakushu Sochi は、選択したコードと質問文を外部へ送ります";
@@ -31,6 +31,7 @@ export const CONSENT_NOTICE_DETAIL = [
   "【AI（GitHub Copilot / あなた自身の契約）へ送るもの】",
   "選択したコード本文、その周辺コード、選択範囲のエラー・警告メッセージ、",
   "質問文、同じチャット内の会話履歴、言語とファイル名。",
+  "選択範囲から参照した他ファイルの定義コード（最大3件、各最大5行）とファイルパス・シンボル名。",
   "本プロダクトはこれらを保存しません（Copilot 側の扱いは同社の規約によります）。",
   "",
   "【学習記録サーバーへ送るもの】",

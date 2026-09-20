@@ -24,6 +24,8 @@ export interface SyncConfig {
   apiToken: () => Promise<string>;
   /** この端末のID。store.ts の getOrCreateClientId で取得する。 */
   clientId: string;
+  /** トークン取得の待機中に同意が取り消されていないか、送信直前に確認する。 */
+  canSend?: () => boolean;
 }
 
 /** サーバーがイベント1件ごとに返す結果種別。apps/api/src/contract/learning-event.ts の SyncResultStatus と対応する。 */
@@ -87,6 +89,11 @@ export async function syncEvent(event: LearningEvent, config: SyncConfig): Promi
   try {
     const apiToken = await config.apiToken();
     if (!apiToken) return { ok: false, reason: "再ログインが必要です" };
+    // トークン取得中に同意が取り消されることがある。Authorization ヘッダーを
+    // 付けた fetch の直前で再確認し、取り消し後の送信を防ぐ。
+    if (config.canSend && !config.canSend()) {
+      return { ok: false, reason: "送信の同意が取り消されました" };
+    }
     const response = await fetch(url, {
       method: "POST",
       headers: {
