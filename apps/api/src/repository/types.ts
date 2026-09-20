@@ -11,6 +11,7 @@
  */
 
 import type { LearningEvent } from "@gakushu-sochi/domain";
+import type { MasteryStatus } from "@gakushu-sochi/domain";
 
 /** 保存するイベント。検証済みの `LearningEvent` に、サーバー側が付与する情報を足したもの。 */
 export interface StoredEventInput {
@@ -75,4 +76,19 @@ export interface LearningEventRepository {
 
   /** 1ユーザーのイベント総件数。Profile レスポンスの `eventCount` に使う。 */
   countByUser(userId: string): Promise<number>;
+}
+
+export interface MasteryOverride {
+  status: MasteryStatus;
+  updatedAt: string;
+}
+
+export interface MasteryOverrideRepository {
+  listByUser(userId: string): Promise<Record<string, MasteryOverride>>;
+  put(
+    userId: string,
+    conceptId: string,
+    status: MasteryStatus | null,
+    updatedAt: string,
+  ): Promise<Record<string, MasteryOverride>>;
 }

@@ -8,15 +8,12 @@ import {
   readSession,
   sessionCookie,
 } from "./session.js";
-import { parseOverrideRequest, readOverrides, writeOverride } from "./mastery-overrides.js";
 
 type WebBindings = CloudflareBindings;
 type Fetch = typeof globalThis.fetch;
 
 export interface WebAppDeps {
   fetch: Fetch;
-  /** 手動上書きの記録時刻。テストで固定するために注入する。 */
-  now?: () => string;
 }
 
 type SessionContext = {
@@ -121,36 +118,6 @@ export function createWebApp(
       status: 204,
       headers: { "set-cookie": expiredSessionCookie, "cache-control": "no-store" },
     });
-  });
-
-  // 理解度の手動上書き。API Server ではなく Web の KV が持つ。
-  // 保存するのは上書きの記録だけで、習熟度の正本は API Server のまま
-  // （mastery-overrides.ts の説明を参照）。
-  // `/api/*` の逆プロキシより**前**に置くこと。後ろだと上流へ中継されてしまう。
-  app.get("/api/web/mastery-overrides", async (c) => {
-    if (!(await hasSession(c))) return sessionExpired(c);
-    return c.json(await readOverrides(c.env.MASTERY_OVERRIDES), 200, {
-      "cache-control": "no-store",
-    });
-  });
-
-  app.put("/api/web/mastery-overrides", async (c) => {
-    if (!(await hasSession(c))) return sessionExpired(c);
-    let payload: unknown;
-    try {
-      payload = await c.req.json();
-    } catch {
-      throw new HTTPException(400, { message: "invalid request body" });
-    }
-    const parsed = parseOverrideRequest(payload);
-    if ("error" in parsed) throw new HTTPException(400, { message: parsed.error });
-    const overrides = await writeOverride(
-      c.env.MASTERY_OVERRIDES,
-      parsed.conceptId,
-      parsed.status,
-      deps.now,
-    );
-    return c.json(overrides, 200, { "cache-control": "no-store" });
   });
 
   app.all("/api/*", async (c) => {

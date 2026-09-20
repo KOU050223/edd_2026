@@ -24,7 +24,7 @@ export async function requestJson<T>(
 ): Promise<T> {
   let response: Response;
   try {
-    response = await fetcher(path, { cache: "no-store" });
+    response = await fetcher(path, { cache: "no-store", signal: AbortSignal.timeout(10_000) });
   } catch {
     throw new ApiError("unavailable");
   }
@@ -47,6 +47,20 @@ export async function requestJson<T>(
   if (body.error === "api_token_invalid") throw new ApiError("api_token_invalid");
   if (response.status === 429) throw new ApiError("rate_limited");
   throw new ApiError("unavailable");
+}
+
+export function createOperationQueue() {
+  let tail = Promise.resolve();
+  return {
+    run<T>(operation: () => Promise<T>): Promise<T> {
+      const result = tail.then(operation);
+      tail = result.then(
+        () => undefined,
+        () => undefined,
+      );
+      return result;
+    },
+  };
 }
 
 export interface ActivityDay {

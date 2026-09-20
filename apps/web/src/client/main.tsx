@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   ApiError,
+  createOperationQueue,
   createRequestTracker,
   createSubmitGuard,
   fillActivityDays,
@@ -21,7 +22,7 @@ import "./style.css";
 
 type Profile = { derivedAt: string; eventCount: number; concepts: Concept[] };
 
-const OVERRIDES_PATH = "/api/web/mastery-overrides";
+const OVERRIDES_PATH = "/api/v1/mastery-overrides";
 const statusLabel: Record<MasteryStatus, string> = {
   confirmed: "確認済み",
   learning: "学習中",
@@ -185,6 +186,7 @@ function LearningMap() {
   const [pending, setPending] = useState<readonly string[]>([]);
   const requestTracker = useRef(createRequestTracker());
   const submitGuard = useRef(createSubmitGuard());
+  const overrideQueue = useRef(createOperationQueue());
 
   // 習熟度と手動上書きは別の要求だが、**同じ世代**で追う。
   // 別々に追うと、古い片方が新しいもう片方と混ざった表示になる
@@ -195,7 +197,7 @@ function LearningMap() {
     const retry = takeLoginRetry();
     Promise.all([
       requestJson<Profile>("/api/v1/learning-profile", fetch, retry),
-      requestJson<MasteryOverrides>(OVERRIDES_PATH, fetch, retry),
+      overrideQueue.current.run(() => requestJson<MasteryOverrides>(OVERRIDES_PATH, fetch, retry)),
     ])
       .then(([loadedProfile, loadedOverrides]) => {
         if (!isLatest()) return;
@@ -220,11 +222,19 @@ function LearningMap() {
         try {
           // 応答は保存後の上書き一覧。これをそのまま採用するので、
           // 画面の状態と保存された内容が食い違わない。
-          setOverrides(await putJson<MasteryOverrides>(OVERRIDES_PATH, { conceptId, status }));
+          const saved = await overrideQueue.current.run(() =>
+            putJson<MasteryOverrides>(OVERRIDES_PATH, { conceptId, status }),
+          );
+          setOverrides(saved);
         } catch (value: unknown) {
           // 保存の失敗を黙って飲み込まない（RULE-004）。
           // 一覧の読み込みエラーとは別に出し、表示は自動算出のまま保つ。
-          setSaveError(value as ApiError);
+          const saveError = value as ApiError;
+          if (saveError.kind === "session_expired") {
+            window.location.href = "/login";
+            return;
+          }
+          setSaveError(saveError);
         }
       })
       .finally(() => {
@@ -254,7 +264,9 @@ function LearningMap() {
         <div>
           <strong>{summary.unobserved}</strong>未観測
         </div>
-        <button onClick={load}>再読み込み</button>
+        <button onClick={load} disabled={pending.length > 0}>
+          再読み込み
+        </button>
       </section>
       {saveError && (
         <section className="message error">

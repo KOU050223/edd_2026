@@ -2,6 +2,7 @@ import { expect, test } from "vitest";
 import {
   ApiError,
   createRequestTracker,
+  createOperationQueue,
   createSubmitGuard,
   fillActivityDays,
   putJson,
@@ -25,6 +26,18 @@ test("2xx でも JSON の解析に失敗したら利用不能エラーとして�
   await expect(
     requestJson("/api/v1/learning-profile", async () => new Response("not-json", { status: 200 })),
   ).rejects.toEqual(new ApiError("unavailable"));
+});
+
+test("単発の読み込みにタイムアウト用の signal を渡す", async () => {
+  let signal: AbortSignal | undefined;
+  await expect(
+    requestJson("/api/v1/learning-profile", async (_input, init) => {
+      signal = init?.signal as AbortSignal;
+      return Response.json({ ok: true });
+    }),
+  ).resolves.toEqual({ ok: true });
+
+  expect(signal).toBeInstanceOf(AbortSignal);
 });
 
 test("ログイン直後だけ、セッション未伝播の 401 を一度だけ再試行する", async () => {
@@ -103,7 +116,7 @@ test("送信が失敗しても、その Concept はもう一度送信できる",
 test("理解度の保存で 2xx でも JSON の解析に失敗したら利用不能エラーとして扱う", async () => {
   await expect(
     putJson(
-      "/api/web/mastery-overrides",
+      "/api/v1/mastery-overrides",
       { conceptId: "go.pointer", status: "confirmed" },
       async () => new Response("not-json", { status: 200 }),
     ),
@@ -113,7 +126,7 @@ test("理解度の保存で 2xx でも JSON の解析に失敗したら利用不
 test("理解度の保存が 401 で拒まれた理由を利用者が取れるエラー種別へ写像する", async () => {
   await expect(
     putJson(
-      "/api/web/mastery-overrides",
+      "/api/v1/mastery-overrides",
       { conceptId: "go.pointer", status: "confirmed" },
       async () => Response.json({ error: "session_expired" }, { status: 401 }),
     ),
@@ -137,4 +150,22 @@ test("送信中に弾かれた再送信は、実行中の送信の状態を巻�
   expect(stillRunningWhenBlocked).toBe(true);
   expect(stillRunningAfterBlocked).toBe(true);
   expect(guard.isRunning("go.pointer")).toBe(false);
+});
+
+test("上書き操作を登録順に実行し、後続の読み込みが保存後の値を見る", async () => {
+  const queue = createOperationQueue();
+  const order: string[] = [];
+
+  const first = queue.run(async () => {
+    order.push("first-start");
+    await Promise.resolve();
+    order.push("first-end");
+  });
+  const second = queue.run(async () => {
+    order.push("second");
+  });
+
+  await Promise.all([first, second]);
+
+  expect(order).toEqual(["first-start", "first-end", "second"]);
 });
