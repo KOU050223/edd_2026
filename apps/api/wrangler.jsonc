@@ -53,6 +53,12 @@
       "namespace_id": "1002",
       "simple": { "limit": 30, "period": 60 },
     },
+    {
+      // 手動上書きはイベント全件の導出をしないため、Profile と別枠にする。
+      "name": "MASTERY_OVERRIDE_RATE_LIMITER",
+      "namespace_id": "1003",
+      "simple": { "limit": 60, "period": 60 },
+    },
   ],
   "d1_databases": [
     {

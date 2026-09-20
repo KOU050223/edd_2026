@@ -1,4 +1,5 @@
 import type { Concept } from "./profile.js";
+import { MASTERY_SCORE_RANGE } from "@gakushu-sochi/domain";
 import { MASTERY_STATUSES, type MasteryOverrides, type MasteryStatus } from "../shared/mastery.js";
 
 export { MASTERY_STATUSES };
@@ -10,7 +11,9 @@ export type { MasteryOverride, MasteryOverrides, MasteryStatus } from "../shared
  * `status` / `score` は上書き後の表示用の値で、`derived` に自動算出の元の値が残る。
  * 「手動で確認済みにしたが、自動算出では学習中」という状態を画面で区別できるようにするため。
  */
-export interface OverlaidConcept extends Concept {
+export interface OverlaidConcept extends Omit<Concept, "score"> {
+  /** 未観測ではスコアを表示しない。 */
+  score: number | null;
   /** 手動で上書きされているか。 */
   manual: boolean;
   /** 自動算出のままの値。手動上書きの有無にかかわらず常に元の値。 */
@@ -20,19 +23,13 @@ export interface OverlaidConcept extends Concept {
 /**
  * status ごとに `score` が取りうる範囲。
  *
- * `packages/domain` の `MASTERY_SCORE_RANGE` と同じ規則。`apps/web` は domain に
- * 依存していない（`Concept` も再宣言している）ので、依存を増やさず同じ規則を持つ。
+ * `packages/domain` の `MASTERY_SCORE_RANGE` を共有する。
  * status だけ手動で変えて score を自動算出のまま残すと、
  * 「確認済みなのに 45%」のようにバッジとメーターが矛盾した表示になる。
  */
-const MASTERY_SCORE_RANGE: Record<MasteryStatus, { min: number; max: number }> = {
-  unobserved: { min: 0, max: 0 },
-  learning: { min: 0, max: 0.69 },
-  confirmed: { min: 0.7, max: 1 },
-};
-
 /** 自動算出の score を、手動で選ばれた status と矛盾しない範囲へ収める。 */
-export function clampScoreToStatus(score: number, status: MasteryStatus): number {
+export function clampScoreToStatus(score: number, status: MasteryStatus): number | null {
+  if (status === "unobserved") return null;
   const range = MASTERY_SCORE_RANGE[status];
   return Math.min(range.max, Math.max(range.min, score));
 }

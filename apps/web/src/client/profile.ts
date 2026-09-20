@@ -6,7 +6,9 @@ export interface Concept {
   evidence: { solvedIndependentlyCount: number; hintUsedCount: number };
 }
 
-export function summarizeConcepts(concepts: readonly Concept[]) {
+export function summarizeConcepts<T extends Pick<Concept, "conceptId" | "status">>(
+  concepts: readonly T[],
+) {
   return concepts.reduce(
     (summary, concept) => ({ ...summary, [concept.status]: summary[concept.status] + 1 }),
     { confirmed: 0, learning: 0, unobserved: 0 },

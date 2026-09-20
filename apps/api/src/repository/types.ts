@@ -44,6 +44,9 @@ export interface AppendResult {
  * これが無いと同期は必ず FOREIGN KEY constraint failed で落ちる。
  */
 export interface IdentityRepository {
+  /** ユーザー行を用意する。既にあれば何もしない。 */
+  ensureUser(params: { userId: string; nowMs: number }): Promise<void>;
+
   /**
    * ユーザーと端末の行を用意する。既にあれば何もしない。
    *

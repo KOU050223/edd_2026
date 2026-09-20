@@ -46,8 +46,8 @@ test("確認済みへ手動で上げたらメーターの割合も確認済み�
   expect(overlaid[0]?.score).toBe(0.7);
 });
 
-test("未観測へ手動で下げたら割合は 0 になる", () => {
-  expect(clampScoreToStatus(0.95, "unobserved")).toBe(0);
+test("未観測へ手動で下げたら割合は表示しない", () => {
+  expect(clampScoreToStatus(0.95, "unobserved")).toBeNull();
   expect(clampScoreToStatus(0.95, "learning")).toBe(0.69);
   expect(clampScoreToStatus(0.1, "confirmed")).toBe(0.7);
 });

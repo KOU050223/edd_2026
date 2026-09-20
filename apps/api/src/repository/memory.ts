@@ -75,12 +75,17 @@ export class InMemoryIdentityRepository implements IdentityRepository {
    */
   private readonly devicesByUser = new Map<string, Map<string, { lastSeenAtMs: number }>>();
 
+  ensureUser(params: { userId: string; nowMs: number }): Promise<void> {
+    if (!this.users.has(params.userId)) {
+      this.users.set(params.userId, { createdAtMs: params.nowMs });
+    }
+    return Promise.resolve();
+  }
+
   ensureUserAndDevice(params: { userId: string; clientId: string; nowMs: number }): Promise<void> {
     const { userId, clientId, nowMs } = params;
 
-    if (!this.users.has(userId)) {
-      this.users.set(userId, { createdAtMs: nowMs });
-    }
+    void this.ensureUser({ userId, nowMs });
 
     let devices = this.devicesByUser.get(userId);
     if (devices === undefined) {

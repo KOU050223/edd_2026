@@ -185,6 +185,7 @@ function LearningMap() {
   const [saveError, setSaveError] = useState<ApiError>();
   const [pending, setPending] = useState<readonly string[]>([]);
   const requestTracker = useRef(createRequestTracker());
+  const overrideTracker = useRef(createRequestTracker());
   const submitGuard = useRef(createSubmitGuard());
   const overrideQueue = useRef(createOperationQueue());
 
@@ -192,7 +193,8 @@ function LearningMap() {
   // 別々に追うと、古い片方が新しいもう片方と混ざった表示になる
   // （.agents/rules/rules.md RULE-005）。
   const load = () => {
-    const isLatest = requestTracker.current.start();
+    const isLatestProfile = requestTracker.current.start();
+    const isLatestOverrides = overrideTracker.current.start();
     setError(undefined);
     const retry = takeLoginRetry();
     Promise.all([
@@ -200,12 +202,11 @@ function LearningMap() {
       overrideQueue.current.run(() => requestJson<MasteryOverrides>(OVERRIDES_PATH, fetch, retry)),
     ])
       .then(([loadedProfile, loadedOverrides]) => {
-        if (!isLatest()) return;
-        setProfile(loadedProfile);
-        setOverrides(loadedOverrides);
+        if (isLatestProfile()) setProfile(loadedProfile);
+        if (isLatestOverrides()) setOverrides(loadedOverrides);
       })
       .catch((value: unknown) => {
-        if (isLatest()) setError(value as ApiError);
+        if (isLatestProfile() || isLatestOverrides()) setError(value as ApiError);
       });
   };
   useEffect(load, []);
@@ -215,6 +216,7 @@ function LearningMap() {
     // 同じ Concept が二重に積まれ、弾かれた側の finally が両方を消すため、
     // 最初の保存がまだ終わっていないのに入力が有効へ戻る。
     if (submitGuard.current.isRunning(conceptId)) return;
+    const isLatestSave = overrideTracker.current.start();
     setSaveError(undefined);
     setPending((current) => [...current, conceptId]);
     void submitGuard.current
@@ -225,7 +227,7 @@ function LearningMap() {
           const saved = await overrideQueue.current.run(() =>
             putJson<MasteryOverrides>(OVERRIDES_PATH, { conceptId, status }),
           );
-          setOverrides(saved);
+          if (isLatestSave()) setOverrides(saved);
         } catch (value: unknown) {
           // 保存の失敗を黙って飲み込まない（RULE-004）。
           // 一覧の読み込みエラーとは別に出し、表示は自動算出のまま保つ。
@@ -284,9 +286,9 @@ function LearningMap() {
               </span>
             </div>
             <div className="meter">
-              <i style={{ width: `${Math.round(item.score * 100)}%` }} />
+              {item.score !== null && <i style={{ width: `${Math.round(item.score * 100)}%` }} />}
             </div>
-            <b>{Math.round(item.score * 100)}%</b>
+            <b>{item.score === null ? "—" : `${Math.round(item.score * 100)}%`}</b>
             <p>
               自力解決 {item.evidence.solvedIndependentlyCount} 回・ヒント利用{" "}
               {item.evidence.hintUsedCount} 回

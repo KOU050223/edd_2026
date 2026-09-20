@@ -78,7 +78,7 @@ app.use(
 );
 app.use(
   "/v1/mastery-overrides",
-  rateLimit((env) => env.PROFILE_RATE_LIMITER),
+  rateLimit((env) => env.MASTERY_OVERRIDE_RATE_LIMITER),
 );
 // AIは外部プロバイダのコストが発生するため、Profileと同じユーザー単位の
 // レート制限を適用する。認証後に実行されるため userId で数えられる。
@@ -131,7 +131,9 @@ app.route(
 app.route(
   "/v1",
   createMasteryOverridesRoute((env) => ({
+    identity: new D1IdentityRepository(env.DB),
     repository: new D1MasteryOverrideRepository(env.DB),
     nowIso: () => new Date().toISOString(),
+    nowMs: () => Date.now(),
   })),
 );

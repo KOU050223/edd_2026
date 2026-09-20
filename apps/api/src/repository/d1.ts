@@ -147,6 +147,13 @@ export class D1LearningEventRepository implements LearningEventRepository {
 export class D1IdentityRepository implements IdentityRepository {
   constructor(private readonly db: D1Database) {}
 
+  async ensureUser(params: { userId: string; nowMs: number }): Promise<void> {
+    await this.db
+      .prepare("INSERT INTO users (id, created_at_ms) VALUES (?, ?) ON CONFLICT (id) DO NOTHING")
+      .bind(params.userId, params.nowMs)
+      .run();
+  }
+
   async ensureUserAndDevice(params: {
     userId: string;
     clientId: string;

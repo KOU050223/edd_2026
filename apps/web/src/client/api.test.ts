@@ -81,6 +81,14 @@ test("新しい要求が始まると古い要求の状態更新を許可しな�
   expect(secondIsLatest()).toBe(true);
 });
 
+test("保存が始まると、それより前に始まった再読み込みの上書き反映を許可しない", () => {
+  const tracker = createRequestTracker();
+  const loadIsLatest = tracker.start();
+  tracker.start();
+
+  expect(loadIsLatest()).toBe(false);
+});
+
 test("送信が終わるまで同じ Concept の再送信を受け付けない", async () => {
   const guard = createSubmitGuard();
   let release = () => {};
