@@ -1,5 +1,9 @@
-import { expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { PendingChatContext } from "./pending-context";
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 test("Chatを開く前に収集した文脈をParticipantのリクエストまで保持する", () => {
   const pending = new PendingChatContext();
@@ -110,4 +114,25 @@ test("選択時に取得したDiagnosticsを同じChatリクエストまで保�
   const id = pending.set(context, diagnostics);
 
   expect(pending.take(id)).toEqual({ context, diagnostics });
+});
+
+test("送信されない文脈は有効期限が切れると解放される", () => {
+  vi.useFakeTimers();
+  const pending = new PendingChatContext({ ttlMs: 1_000 });
+  const context = {
+    code: "secret-token",
+    source: "clipboard" as const,
+    contextLevel: 1 as const,
+    surroundingCode: "",
+  };
+
+  const id = pending.set(context);
+
+  vi.advanceTimersByTime(999);
+  expect(pending.take(id)?.context).toBe(context);
+
+  const expiredId = pending.set(context);
+  vi.advanceTimersByTime(1_000);
+
+  expect(pending.take(expiredId)).toBeUndefined();
 });
