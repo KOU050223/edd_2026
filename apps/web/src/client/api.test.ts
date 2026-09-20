@@ -1,5 +1,12 @@
 import { expect, test } from "vitest";
-import { ApiError, createRequestTracker, fillActivityDays, requestJson } from "./api.js";
+import {
+  ApiError,
+  createRequestTracker,
+  createSubmitGuard,
+  fillActivityDays,
+  putJson,
+  requestJson,
+} from "./api.js";
 
 test("API の 401 理由を利用者が取れるエラー種別へ写像する", async () => {
   await expect(
@@ -59,4 +66,56 @@ test("新しい要求が始まると古い要求の状態更新を許可しな�
 
   expect(firstIsLatest()).toBe(false);
   expect(secondIsLatest()).toBe(true);
+});
+
+test("送信が終わるまで同じ Concept の再送信を受け付けない", async () => {
+  const guard = createSubmitGuard();
+  let release = () => {};
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+
+  const first = guard.run("go.pointer", () => blocked);
+  const second = await guard.run("go.pointer", async () => {
+    throw new Error("二重送信してはいけない");
+  });
+  const other = await guard.run("go.defer", async () => undefined);
+  release();
+
+  expect(second).toBe(false);
+  expect(other).toBe(true);
+  await expect(first).resolves.toBe(true);
+});
+
+test("送信が失敗しても、その Concept はもう一度送信できる", async () => {
+  const guard = createSubmitGuard();
+
+  await expect(
+    guard.run("go.pointer", async () => {
+      throw new Error("保存に失敗");
+    }),
+  ).rejects.toThrow("保存に失敗");
+
+  expect(guard.isRunning("go.pointer")).toBe(false);
+  await expect(guard.run("go.pointer", async () => undefined)).resolves.toBe(true);
+});
+
+test("理解度の保存で 2xx でも JSON の解析に失敗したら利用不能エラーとして扱う", async () => {
+  await expect(
+    putJson(
+      "/api/web/mastery-overrides",
+      { conceptId: "go.pointer", status: "confirmed" },
+      async () => new Response("not-json", { status: 200 }),
+    ),
+  ).rejects.toEqual(new ApiError("unavailable"));
+});
+
+test("理解度の保存が 401 で拒まれた理由を利用者が取れるエラー種別へ写像する", async () => {
+  await expect(
+    putJson(
+      "/api/web/mastery-overrides",
+      { conceptId: "go.pointer", status: "confirmed" },
+      async () => Response.json({ error: "session_expired" }, { status: 401 }),
+    ),
+  ).rejects.toEqual(new ApiError("session_expired"));
 });

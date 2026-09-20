@@ -14,7 +14,10 @@
   },
   "vars": { "API_ORIGIN": "https://gakushu-sochi-api.uozumi05.workers.dev" },
   "secrets": { "required": ["API_TOKEN", "WEB_ACCESS_PASSPHRASE"] },
-  "kv_namespaces": [{ "binding": "SESSIONS", "id": "c652d3fa57234d318beffb571e594eb3" }],
+  "kv_namespaces": [
+    { "binding": "SESSIONS", "id": "c652d3fa57234d318beffb571e594eb3" },
+    { "binding": "MASTERY_OVERRIDES", "id": "22f96dcf879c4e0e84bf01e80b692696" },
+  ],
   "ratelimits": [
     {
       "name": "LOGIN_RATE_LIMITER",

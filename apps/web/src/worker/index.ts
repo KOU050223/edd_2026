@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { HTTPException } from "hono/http-exception";
 import {
   cookieValue,
@@ -8,12 +8,29 @@ import {
   readSession,
   sessionCookie,
 } from "./session.js";
+import { parseOverrideRequest, readOverrides, writeOverride } from "./mastery-overrides.js";
 
 type WebBindings = CloudflareBindings;
 type Fetch = typeof globalThis.fetch;
 
 export interface WebAppDeps {
   fetch: Fetch;
+  /** 手動上書きの記録時刻。テストで固定するために注入する。 */
+  now?: () => string;
+}
+
+type SessionContext = {
+  env: WebBindings;
+  req: { header(name: string): string | undefined };
+};
+
+function hasSession(c: SessionContext): Promise<boolean> {
+  return readSession(c.env.SESSIONS, cookieValue(c.req.header("cookie"), "session"));
+}
+
+/** セッションが無いことを、利用者が再ログインへ倒せる理由付きで返す。 */
+function sessionExpired(c: Context<{ Bindings: WebBindings }>) {
+  return c.json({ error: "session_expired" }, 401, { "cache-control": "no-store" });
 }
 
 function timingSafeEqual(a: string, b: string): boolean {
@@ -106,10 +123,38 @@ export function createWebApp(
     });
   });
 
-  app.all("/api/*", async (c) => {
-    if (!(await readSession(c.env.SESSIONS, cookieValue(c.req.header("cookie"), "session")))) {
-      return c.json({ error: "session_expired" }, 401, { "cache-control": "no-store" });
+  // 理解度の手動上書き。API Server ではなく Web の KV が持つ。
+  // 保存するのは上書きの記録だけで、習熟度の正本は API Server のまま
+  // （mastery-overrides.ts の説明を参照）。
+  // `/api/*` の逆プロキシより**前**に置くこと。後ろだと上流へ中継されてしまう。
+  app.get("/api/web/mastery-overrides", async (c) => {
+    if (!(await hasSession(c))) return sessionExpired(c);
+    return c.json(await readOverrides(c.env.MASTERY_OVERRIDES), 200, {
+      "cache-control": "no-store",
+    });
+  });
+
+  app.put("/api/web/mastery-overrides", async (c) => {
+    if (!(await hasSession(c))) return sessionExpired(c);
+    let payload: unknown;
+    try {
+      payload = await c.req.json();
+    } catch {
+      throw new HTTPException(400, { message: "invalid request body" });
     }
+    const parsed = parseOverrideRequest(payload);
+    if ("error" in parsed) throw new HTTPException(400, { message: parsed.error });
+    const overrides = await writeOverride(
+      c.env.MASTERY_OVERRIDES,
+      parsed.conceptId,
+      parsed.status,
+      deps.now,
+    );
+    return c.json(overrides, 200, { "cache-control": "no-store" });
+  });
+
+  app.all("/api/*", async (c) => {
+    if (!(await hasSession(c))) return sessionExpired(c);
     const origin = apiOrigin(c.env.API_ORIGIN);
     const token = configured(c.env.API_TOKEN, "API_TOKEN");
     const requestUrl = new URL(c.req.url);
