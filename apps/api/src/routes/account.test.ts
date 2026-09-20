@@ -2,7 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import { createAuth, type AuthVariables } from "../auth/middleware.js";
 import type { AuthVerifier } from "../auth/verifier.js";
-import { InMemoryIdentityRepository } from "../repository/memory.js";
+import {
+  createInMemoryRepositoryStore,
+  InMemoryIdentityRepository,
+  InMemoryLearningEventRepository,
+} from "../repository/memory.js";
 import { createAccountRoute, type IdentityProviderUsers } from "./account.js";
 
 const VERIFIER: AuthVerifier = {
@@ -20,7 +24,13 @@ const VERIFIER: AuthVerifier = {
  */
 function buildDeps(options: { d1Fails?: boolean; idpFails?: boolean } = {}) {
   const calls: string[] = [];
-  const identity = new InMemoryIdentityRepository();
+  // D1 では learning_events / devices が users(id) を ON DELETE CASCADE で
+  // 参照しており、1文で全部消える。インメモリ実装は別クラスに分かれているため、
+  // ストアを共有させて初めて同じ形になる。片方だけ新しく作ると、
+  // 退会後もイベントが残る差分をテストが見逃す。
+  const store = createInMemoryRepositoryStore();
+  const identity = new InMemoryIdentityRepository(store);
+  const events = new InMemoryLearningEventRepository(store);
   const originalStart = identity.startUserDeletion.bind(identity);
   identity.startUserDeletion = (userId: string) => {
     calls.push("mark");
@@ -42,7 +52,7 @@ function buildDeps(options: { d1Fails?: boolean; idpFails?: boolean } = {}) {
     },
   };
 
-  return { calls, identity, idp };
+  return { calls, identity, events, idp };
 }
 
 function buildApp(deps: { identity: InMemoryIdentityRepository; idp: IdentityProviderUsers }) {
@@ -76,6 +86,42 @@ describe("DELETE /v1/me", () => {
     expect(response.status).toBe(204);
     expect(deps.calls).toEqual(["mark", "d1", "auth0"]);
     expect(deps.identity.users.has("auth0|user-a")).toBe(false);
+  });
+
+  it("退会でユーザー・端末・学習イベントがまとめて消える", async () => {
+    // D1 の ON DELETE CASCADE と同じ結果になることを確かめる。users 行だけを
+    // 見ていると、子テーブルが消えずに残る実装でもテストが通ってしまい、
+    // 退会したはずの利用者の学習データが保持され続ける。
+    const deps = buildDeps();
+    await deps.identity.ensureUserAndDevice({
+      userId: "auth0|user-a",
+      clientId: "client-1",
+      nowMs: 0,
+    });
+    await deps.events.append("auth0|user-a", [
+      {
+        event: {
+          id: "e1",
+          occurredAt: "2026-09-05T00:00:00.000Z",
+          type: "question_asked",
+          origin: "vscode",
+          conceptIds: ["go.defer"],
+        },
+        clientId: "client-1",
+        receivedAtMs: 0,
+      },
+    ]);
+
+    // 前提が崩れたまま緑になるのを防ぐ。消える前に在ったことを確かめる。
+    expect(deps.identity.deviceCount).toBe(1);
+    expect(await deps.events.countByUser("auth0|user-a")).toBe(1);
+
+    const response = await request(buildApp(deps));
+
+    expect(response.status).toBe(204);
+    expect(deps.identity.users.has("auth0|user-a")).toBe(false);
+    expect(deps.identity.getDevice("auth0|user-a", "client-1")).toBeUndefined();
+    expect(await deps.events.countByUser("auth0|user-a")).toBe(0);
   });
 
   it("D1 の削除が失敗したら Auth0 のユーザーを消しに行かない", async () => {
