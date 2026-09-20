@@ -292,25 +292,95 @@ function findIdentifierPositions(
   document: vscode.TextDocument,
   selection: vscode.Selection,
 ): vscode.Position[] {
-  const positions: vscode.Position[] = [];
+  const prioritized: vscode.Position[] = [];
+  const deferred: vscode.Position[] = [];
   const identifier = /[A-Za-z_][A-Za-z0-9_]*/g;
   const lastLine = Math.min(document.lineCount - 1, selection.end.line);
+  let importBlockState: ImportBlockScanState | undefined;
 
   for (let line = selection.start.line; line <= lastLine; line++) {
     const text = document.lineAt(line).text;
+    const isImportBlockLine = importBlockState !== undefined;
+    const target = isImportBlockLine || isImportOrIncludeLine(text) ? deferred : prioritized;
 
     identifier.lastIndex = 0;
 
     for (let match = identifier.exec(text); match; match = identifier.exec(text)) {
-      positions.push(new vscode.Position(line, match.index));
+      if (target.length < MAX_DEFINITIONS * 4) {
+        target.push(new vscode.Position(line, match.index));
+      }
+    }
 
-      // 候補を出しすぎても、実際に問い合わせるのは期限が尽きるまでの分だけで、
-      // 残りは捨てられる。位置の列挙自体に時間をかけないよう全体で打ち切る。
-      if (positions.length >= MAX_DEFINITIONS * 4) {
-        return positions;
+    if (importBlockState !== undefined) {
+      if (scanImportBlockLine(text, importBlockState)) {
+        importBlockState = undefined;
+      }
+    } else if (isImportBlockStart(text)) {
+      const state: ImportBlockScanState = { inBlockComment: false, quote: undefined };
+
+      if (!scanImportBlockLine(text, state)) {
+        importBlockState = state;
       }
     }
   }
 
-  return positions;
+  // import/include だけを選択した場合にも定義を取得できるよう、後回しにするだけで除外はしない。
+  // 判定は一般的な import/include 宣言の構文に限られ、言語ごとの構文を網羅するものではない。
+  return [...prioritized, ...deferred].slice(0, MAX_DEFINITIONS * 4);
+}
+
+type ImportBlockScanState = {
+  inBlockComment: boolean;
+  quote: '"' | "'" | "`" | undefined;
+};
+
+function isImportBlockStart(text: string): boolean {
+  return /^\s*import\s*\(/.test(text);
+}
+
+function scanImportBlockLine(text: string, state: ImportBlockScanState): boolean {
+  let escaped = false;
+
+  for (let index = 0; index < text.length; index++) {
+    const character = text[index];
+    const nextCharacter = text[index + 1];
+
+    if (state.inBlockComment) {
+      if (character === "*" && nextCharacter === "/") {
+        state.inBlockComment = false;
+        index++;
+      }
+      continue;
+    }
+
+    if (state.quote !== undefined) {
+      if (state.quote !== "`" && escaped) {
+        escaped = false;
+      } else if (state.quote !== "`" && character === "\\") {
+        escaped = true;
+      } else if (character === state.quote) {
+        state.quote = undefined;
+      }
+      continue;
+    }
+
+    if (character === "/" && nextCharacter === "/") {
+      break;
+    }
+
+    if (character === "/" && nextCharacter === "*") {
+      state.inBlockComment = true;
+      index++;
+    } else if (character === '"' || character === "'" || character === "`") {
+      state.quote = character;
+    } else if (character === ")") {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function isImportOrIncludeLine(text: string): boolean {
+  return /^\s*(?:#\s*include\b|import\b|from\b.*\bimport\b|use\b|using\b)/.test(text);
 }
