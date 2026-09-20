@@ -292,25 +292,29 @@ function findIdentifierPositions(
   document: vscode.TextDocument,
   selection: vscode.Selection,
 ): vscode.Position[] {
-  const positions: vscode.Position[] = [];
+  const prioritized: vscode.Position[] = [];
+  const deferred: vscode.Position[] = [];
   const identifier = /[A-Za-z_][A-Za-z0-9_]*/g;
   const lastLine = Math.min(document.lineCount - 1, selection.end.line);
 
   for (let line = selection.start.line; line <= lastLine; line++) {
     const text = document.lineAt(line).text;
+    const target = isImportOrIncludeLine(text) ? deferred : prioritized;
 
     identifier.lastIndex = 0;
 
     for (let match = identifier.exec(text); match; match = identifier.exec(text)) {
-      positions.push(new vscode.Position(line, match.index));
-
-      // 候補を出しすぎても、実際に問い合わせるのは期限が尽きるまでの分だけで、
-      // 残りは捨てられる。位置の列挙自体に時間をかけないよう全体で打ち切る。
-      if (positions.length >= MAX_DEFINITIONS * 4) {
-        return positions;
+      if (target.length < MAX_DEFINITIONS * 4) {
+        target.push(new vscode.Position(line, match.index));
       }
     }
   }
 
-  return positions;
+  // import/include だけを選択した場合にも定義を取得できるよう、後回しにするだけで除外はしない。
+  // 判定は一般的な import/include 宣言の構文に限られ、言語ごとの構文を網羅するものではない。
+  return [...prioritized, ...deferred].slice(0, MAX_DEFINITIONS * 4);
+}
+
+function isImportOrIncludeLine(text: string): boolean {
+  return /^\s*(?:#\s*include\b|import\b|from\b.*\bimport\b|use\b|using\b)/.test(text);
 }
