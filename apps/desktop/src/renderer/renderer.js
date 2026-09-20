@@ -1,4 +1,5 @@
 import { renderMarkdown } from "./markdown.js";
+import { AUTH_LABELS, authStatusLabel, shouldApplyAuthState } from "./auth-status.js";
 
 const $ = (id) => document.getElementById(id);
 const error = $("error"),
@@ -92,19 +93,43 @@ const resetCard = () => {
 };
 
 const login = $("auth-login");
+// ログイン状態は main からの通知（auth:state）でも書き換わる。進行中かどうかは
+// disabled ではなくこの状態で判断する（.agents/rules/rules.md RULE-007）。
+let authView = { loggingIn: false, hasRefreshToken: false };
+
+const renderAuthStatus = () => {
+  $("auth-status").textContent = authStatusLabel(authView);
+};
+
+const setAuthState = (hasRefreshToken) => {
+  authView = { ...authView, hasRefreshToken };
+  renderAuthStatus();
+};
+
 login.onclick = async () => {
+  if (authView.loggingIn) return; // 入口で弾く。disabled は見た目でしかない。
+  authView = { ...authView, loggingIn: true };
   login.disabled = true;
-  $("auth-status").textContent = "ブラウザでログインしています…";
+  renderAuthStatus();
   try {
     await window.desktop.login();
-    $("auth-status").textContent = "ログイン済み";
+    authView = { loggingIn: false, hasRefreshToken: true };
+    renderAuthStatus();
   } catch (e) {
-    $("auth-status").textContent = "ログインに失敗しました";
+    authView = { ...authView, loggingIn: false };
+    $("auth-status").textContent = AUTH_LABELS.failed;
     showError(e instanceof Error ? e.message : String(e));
   } finally {
+    authView = { ...authView, loggingIn: false };
     login.disabled = false;
   }
 };
+
+window.desktop.onAuthState(({ hasRefreshToken }) => {
+  // ログイン中に届いた通知は取り込まない。走っているログインについて画面が嘘をつく。
+  if (!shouldApplyAuthState({ ...authView, hasRefreshToken })) return;
+  setAuthState(hasRefreshToken);
+});
 
 window.desktop.onSelection(({ selection: text, error: message }) => {
   renderCode(text);
@@ -177,7 +202,7 @@ const openSettings = async () => {
   });
   $("restore").checked = s.restoreClipboard;
   $("login").checked = s.launchAtLogin;
-  $("auth-status").textContent = s.hasRefreshToken ? "ログイン済み" : "未ログイン";
+  setAuthState(s.hasRefreshToken);
   form.hidden = false;
   // モーダルの背後へ Tab で抜けさせない（inert は form の祖先には置けないため兄弟に置く）。
   backdrop.forEach((element) => element.setAttribute("inert", ""));

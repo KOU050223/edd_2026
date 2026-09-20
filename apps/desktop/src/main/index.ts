@@ -439,6 +439,8 @@ async function refreshAccessTokenOrClearOnInvalidGrant(refreshToken: string) {
   } catch (error) {
     if (error instanceof OAuthTokenError && error.code === "invalid_grant") {
       refreshTokenStore().clear();
+      // 消したことを画面へ伝える。伝えないと設定を開き直すまで「ログイン済み」のままになる。
+      popup?.webContents.send("auth:state", { hasRefreshToken: false });
       throw new Error("ログインの有効期限が切れました。設定から再ログインしてください。", {
         cause: error,
       });
