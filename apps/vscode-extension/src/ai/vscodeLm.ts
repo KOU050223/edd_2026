@@ -157,7 +157,10 @@ export class VSCodeLMProvider implements AIProvider {
    * 期待通り動いているかは、モデルの生の応答を見ないと切り分けられない。
    * 未指定なら何も出力しない。
    */
-  constructor(private readonly onDebug?: (message: string) => void) {}
+  constructor(
+    private readonly onDebug?: (message: string) => void,
+    private readonly canSend: () => boolean = () => true,
+  ) {}
 
   /**
    * デバッグ出力の失敗を質問処理へ波及させない。
@@ -174,7 +177,7 @@ export class VSCodeLMProvider implements AIProvider {
 
   async ask(request: AIRequest): Promise<AIResponse> {
     try {
-      const models = await vscode.lm.selectChatModels();
+      const models = await vscode.lm.selectChatModels({ vendor: "copilot" });
 
       if (models.length === 0) {
         return {
@@ -187,9 +190,18 @@ export class VSCodeLMProvider implements AIProvider {
         };
       }
 
-      // 用途外のモデルを避けるため family を指定して選ぶ。無ければ先頭にフォールバックする
-      // （フォールバック時も応答が空になりうることは docs/lm-api.md に記録済み）。
+      // 用途外のモデルを避けるため family を指定して選ぶ。selector で Copilot に
+      // 限定しているため、family が無ければ Copilot の一覧から選ぶ。
       const model = models.find((m) => m.family === DEFAULT_FAMILY) ?? models[0];
+
+      // 同意の取り消しはモデル選択の待機中にも起こりうる。実際にコードを外へ出す
+      // sendRequest の直前で再確認し、取り消し後の送信を防ぐ。
+      if (!this.canSend()) {
+        return {
+          ok: false,
+          error: { reason: "consent-denied", detail: "送信の同意が取り消されました。" },
+        };
+      }
 
       // sendRequest は初回呼び出し時にユーザーへ同意ダイアログを表示する。
       // ユーザー操作（コマンド実行）への応答として呼ぶ必要があり、ここはその文脈で呼ばれる。

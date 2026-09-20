@@ -192,10 +192,14 @@ test("正しい署名のトークンはsubを返して通す", async () => {
 });
 
 test("署名が改ざんされていれば401にする", async () => {
-  // 署名の最後の1文字だけを差し替える。他はすべて正しいトークンのまま。
+  // 署名の先頭1文字だけを差し替える。他はすべて正しいトークンのまま。
+  // Base64URL の末尾文字には未使用ビットがあるため、末尾を変えても同じバイトへ
+  // デコードされる場合がある。先頭文字なら署名データの有効ビットが必ず変わる。
   const { verifier } = buildVerifier();
   const token = await signJwt();
-  const tampered = token.slice(0, -1) + (token.endsWith("A") ? "B" : "A");
+  const [header, payload, signature] = token.split(".");
+  const tamperedSignature = `${signature[0] === "A" ? "B" : "A"}${signature.slice(1)}`;
+  const tampered = `${header}.${payload}.${tamperedSignature}`;
 
   await expectRejection(verifier.verify(tampered), "invalid_token");
 });

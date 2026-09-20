@@ -12,6 +12,7 @@ const {
   activeTextEditor,
   confirmSend,
   collectFromEditor,
+  showWarningMessage,
   executeCommand,
   getConfiguration,
   getOrCreateClientId,
@@ -33,6 +34,7 @@ const {
   },
   confirmSend: vi.fn(),
   collectFromEditor: vi.fn(),
+  showWarningMessage: vi.fn(),
   executeCommand: vi.fn(),
   getConfiguration: vi.fn(),
   getOrCreateClientId: vi.fn(),
@@ -55,6 +57,7 @@ vi.mock("vscode", () => ({
     createOutputChannel: vi.fn(() => outputChannel),
     showErrorMessage: vi.fn(),
     showInformationMessage: vi.fn(),
+    showWarningMessage,
   },
   commands: {
     executeCommand,
@@ -117,6 +120,34 @@ vi.mock("../learning/store", () => ({
 vi.mock("../learning/sync", () => ({ syncEvent }));
 
 import { activate } from "../extension";
+import { CONSENT_KEY } from "../consent/consent";
+import { CONSENT_NOTICE_VERSION } from "@gakushu-sochi/domain";
+
+/**
+ * activate() に渡す最小の ExtensionContext。
+ *
+ * globalState を持たせるのは、#119 の同意がここに記録されるため。
+ * 同意の有無で送信が止まることを、実際の保存先ごしに確かめる。
+ */
+function createExtensionContext(consented: boolean) {
+  const state = new Map<string, unknown>();
+  if (consented) {
+    state.set(CONSENT_KEY, {
+      version: CONSENT_NOTICE_VERSION,
+      grantedAt: "2026-09-21T00:00:00.000Z",
+    });
+  }
+  return {
+    subscriptions: [] as unknown[],
+    globalState: {
+      get: (key: string) => state.get(key),
+      update: async (key: string, value: unknown) => {
+        if (value === undefined) state.delete(key);
+        else state.set(key, value);
+      },
+    },
+  };
+}
 
 const CONTEXT: CodeContext = {
   code: "const value = 1",
@@ -142,7 +173,7 @@ test("クリップボード本文を送信前に出力パネルへ表示しな�
   executeCommand.mockResolvedValueOnce(undefined);
   loadProfile.mockReturnValueOnce({ events: [], mastery: {} });
 
-  const context = { subscriptions: [] as unknown[] };
+  const context = createExtensionContext(true);
   activate(context as never);
 
   await registeredCommands.get("gakushuSochi.askClipboard")?.();
@@ -166,7 +197,7 @@ test("選択したコードの文脈をChatの質問から回答記録まで引�
     },
   });
 
-  const context = { subscriptions: [] as unknown[] };
+  const context = createExtensionContext(true);
   activate(context as never);
 
   await registeredCommands.get("gakushuSochi.askSelection")?.();
@@ -211,7 +242,7 @@ test("回答に含まれるConceptをAPI同期内容へ引き継ぐ", async () =
   });
   syncEvent.mockResolvedValueOnce({ ok: true, status: "accepted" });
 
-  const context = { subscriptions: [] as unknown[] };
+  const context = createExtensionContext(true);
   activate(context as never);
   await registeredCommands.get("gakushuSochi.askSelection")?.();
 
@@ -234,6 +265,152 @@ test("回答に含まれるConceptをAPI同期内容へ引き継ぐ", async () =
       apiBaseUrl: "https://api.example.com",
       apiToken: expect.any(Function),
       clientId: "client-1",
+      canSend: expect.any(Function),
     },
   );
+});
+
+// --- #119: 同意するまで送らない -------------------------------------------------
+
+test("同意していなければ、選択したコードを収集も送信もしない", async () => {
+  // 「同意しない」を押した状態。
+  showWarningMessage.mockResolvedValueOnce("同意しない");
+  loadProfile.mockReturnValueOnce({ events: [], mastery: {} });
+
+  const context = createExtensionContext(false);
+  activate(context as never);
+
+  await registeredCommands.get("gakushuSochi.askSelection")?.();
+
+  // 収集すらしない。集めた時点で周辺コードや定義参照が動くため、
+  // 「送らないなら集めない」を境界にする。
+  expect(collectFromEditor).not.toHaveBeenCalled();
+  expect(
+    executeCommand.mock.calls.some(([command]) => command === "workbench.action.chat.open"),
+  ).toBe(false);
+  expect(syncEvent).not.toHaveBeenCalled();
+});
+
+test("同意していなければ、クリップボードの本文を送信しない", async () => {
+  readClipboard.mockResolvedValueOnce({ ok: true, text: "秘密のクリップボード本文" });
+  showWarningMessage.mockResolvedValueOnce(undefined); // ダイアログを閉じただけ
+  loadProfile.mockReturnValueOnce({ events: [], mastery: {} });
+
+  const context = createExtensionContext(false);
+  activate(context as never);
+
+  await registeredCommands.get("gakushuSochi.askClipboard")?.();
+
+  // 同意が無い時点で止まるので、本文プレビューの確認にも進まない。
+  expect(confirmSend).not.toHaveBeenCalled();
+  expect(
+    executeCommand.mock.calls.some(([command]) => command === "workbench.action.chat.open"),
+  ).toBe(false);
+});
+
+test("同意したうえで初めて、選択したコードの送信へ進む", async () => {
+  showWarningMessage.mockResolvedValueOnce("同意して続ける");
+  collectFromEditor.mockResolvedValueOnce(CONTEXT);
+  loadProfile.mockReturnValueOnce({ events: [], mastery: {} });
+
+  const context = createExtensionContext(false);
+  activate(context as never);
+
+  await registeredCommands.get("gakushuSochi.askSelection")?.();
+
+  expect(collectFromEditor).toHaveBeenCalled();
+  expect(
+    executeCommand.mock.calls.some(([command]) => command === "workbench.action.chat.open"),
+  ).toBe(true);
+  // 同意は記録されるので、2回目はもう聞かれない。
+  expect(showWarningMessage).toHaveBeenCalledTimes(1);
+
+  collectFromEditor.mockResolvedValueOnce(CONTEXT);
+  await registeredCommands.get("gakushuSochi.askSelection")?.();
+  expect(showWarningMessage).toHaveBeenCalledTimes(1);
+});
+
+test("同意を取り消すと、次の送信から止まる", async () => {
+  collectFromEditor.mockResolvedValueOnce(CONTEXT);
+  loadProfile.mockReturnValueOnce({ events: [], mastery: {} });
+
+  const context = createExtensionContext(true);
+  activate(context as never);
+
+  await registeredCommands.get("gakushuSochi.askSelection")?.();
+  expect(collectFromEditor).toHaveBeenCalledTimes(1);
+
+  await registeredCommands.get("gakushuSochi.revokeConsent")?.();
+
+  // 取り消し後は、再度同意を求められる（= 保存済みの同意が消えている）。
+  showWarningMessage.mockResolvedValueOnce("同意しない");
+  await registeredCommands.get("gakushuSochi.askSelection")?.();
+
+  expect(collectFromEditor).toHaveBeenCalledTimes(1);
+});
+
+test("文脈を積んだ後に同意を取り消したら、AIへ送らない", async () => {
+  collectFromEditor.mockResolvedValueOnce(CONTEXT);
+  loadProfile.mockReturnValueOnce({ events: [], mastery: {} });
+
+  const context = createExtensionContext(true);
+  activate(context as never);
+
+  await registeredCommands.get("gakushuSochi.askSelection")?.();
+  const chatOpen = executeCommand.mock.calls.find(
+    ([command]) => command === "workbench.action.chat.open",
+  );
+
+  // Chat を開いてから、回答が返る前に取り消す。
+  await registeredCommands.get("gakushuSochi.revokeConsent")?.();
+
+  const response = { markdown: vi.fn(), progress: vi.fn() };
+  await participantHandlers[0]?.(
+    { prompt: `${chatOpen?.[1].query.replace("@gakushu-sochi ", "")}このコードは？` },
+    { history: [] },
+    response,
+  );
+
+  expect(response.progress).not.toHaveBeenCalled();
+  expect(response.markdown).toHaveBeenCalledWith(expect.stringContaining("同意"));
+  expect(recordEvent).not.toHaveBeenCalled();
+});
+
+test("同意を取り消すと、学習イベントをAPIへ同期しない", async () => {
+  collectFromEditor.mockResolvedValueOnce(CONTEXT);
+  loadProfile.mockReturnValueOnce({ events: [], mastery: {} });
+  recordEvent.mockImplementation(async (_context, _profile, event: LearningEvent) => ({
+    events: [event],
+    mastery: {},
+  }));
+  getConfiguration.mockReturnValue({
+    get: (key: string) => (key === "api.baseUrl" ? "https://api.example.com" : "api-token"),
+  });
+
+  const context = createExtensionContext(true);
+  activate(context as never);
+
+  await registeredCommands.get("gakushuSochi.askSelection")?.();
+  const chatOpen = executeCommand.mock.calls.find(
+    ([command]) => command === "workbench.action.chat.open",
+  );
+  const contextMarker = chatOpen?.[1].query.replace("@gakushu-sochi ", "");
+
+  // 文脈は同意済みのうちに積み、Chat 応答の直前に取り消す……のではなく、
+  // ここでは「同意したまま回答し、その後の同期だけ止まる」経路を切り分けて確かめたいので、
+  // 回答は通し、persistEvent の直前に取り消しが入る状況を作る。
+  recordEvent.mockImplementationOnce(async (_context, _profile, event: LearningEvent) => {
+    await registeredCommands.get("gakushuSochi.revokeConsent")?.();
+    return { events: [event], mastery: {} };
+  });
+
+  const response = { markdown: vi.fn(), progress: vi.fn() };
+  await participantHandlers[0]?.(
+    { prompt: `${contextMarker}このコードは？` },
+    { history: [] },
+    response,
+  );
+
+  expect(response.markdown).toHaveBeenCalledWith("変数宣言についての回答");
+  expect(syncEvent).not.toHaveBeenCalled();
 });
