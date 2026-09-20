@@ -3,11 +3,16 @@ import { cors } from "hono/cors";
 import { HTTPException } from "hono/http-exception";
 import { requireAuth, type AuthVariables } from "./auth/middleware.js";
 import { rateLimit } from "./auth/rate-limit.js";
-import { D1IdentityRepository, D1LearningEventRepository } from "./repository/d1.js";
+import {
+  D1IdentityRepository,
+  D1LearningEventRepository,
+  D1MasteryOverrideRepository,
+} from "./repository/d1.js";
 import { createLearningEventsRoute } from "./routes/learning-events.js";
 import { createLearningProfileRoute } from "./routes/learning-profile.js";
 import { createLearningActivityRoute } from "./routes/learning-activity.js";
 import { createAiRoute } from "./routes/ai.js";
+import { createMasteryOverridesRoute } from "./routes/mastery-overrides.js";
 
 /** Cloudflare Worker から提供する HTTP API。 */
 export const app = new Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>();
@@ -51,7 +56,7 @@ app.use("/v1/*", (c, next) => {
         .map((origin) => origin.trim())
         .filter((origin) => origin.length > 0)
     : [];
-  return cors({ origin: origins, allowMethods: ["GET", "POST", "OPTIONS"] })(c, next);
+  return cors({ origin: origins, allowMethods: ["GET", "POST", "PUT", "OPTIONS"] })(c, next);
 });
 
 app.use("/v1/*", requireAuth);
@@ -70,6 +75,10 @@ app.use(
 app.use(
   "/v1/learning-activity",
   rateLimit((env) => env.PROFILE_RATE_LIMITER),
+);
+app.use(
+  "/v1/mastery-overrides",
+  rateLimit((env) => env.MASTERY_OVERRIDE_RATE_LIMITER),
 );
 // AIは外部プロバイダのコストが発生するため、Profileと同じユーザー単位の
 // レート制限を適用する。認証後に実行されるため userId で数えられる。
@@ -116,5 +125,15 @@ app.route(
   createLearningActivityRoute((env) => ({
     events: new D1LearningEventRepository(env.DB),
     now: () => new Date(),
+  })),
+);
+
+app.route(
+  "/v1",
+  createMasteryOverridesRoute((env) => ({
+    identity: new D1IdentityRepository(env.DB),
+    repository: new D1MasteryOverrideRepository(env.DB),
+    nowIso: () => new Date().toISOString(),
+    nowMs: () => Date.now(),
   })),
 );

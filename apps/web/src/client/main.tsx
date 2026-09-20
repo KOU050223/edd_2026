@@ -2,15 +2,32 @@ import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   ApiError,
+  createOperationQueue,
   createRequestTracker,
+  createSubmitGuard,
   fillActivityDays,
+  putJson,
   requestJson,
   type ActivityDay,
 } from "./api.js";
+import {
+  applyOverrides,
+  MASTERY_STATUSES,
+  type MasteryOverrides,
+  type MasteryStatus,
+  type OverlaidConcept,
+} from "./overrides.js";
 import { summarizeConcepts, type Concept } from "./profile.js";
 import "./style.css";
 
 type Profile = { derivedAt: string; eventCount: number; concepts: Concept[] };
+
+const OVERRIDES_PATH = "/api/v1/mastery-overrides";
+const statusLabel: Record<MasteryStatus, string> = {
+  confirmed: "確認済み",
+  learning: "学習中",
+  unobserved: "未観測",
+};
 type Activity = { from: string; to: string; days: ActivityDay[] };
 
 // ログイン・ログアウトは単発リクエスト。応答が返らないまま待ち続けると
@@ -126,25 +143,111 @@ function Login() {
   );
 }
 
+/** 1 つの Concept の理解度を手動で選び直す。送信中は入口で弾く（RULE-007）。 */
+function MasteryPicker({
+  concept,
+  pending,
+  onChange,
+}: {
+  concept: OverlaidConcept;
+  pending: boolean;
+  onChange: (status: MasteryStatus | null) => void;
+}) {
+  return (
+    <div className="mastery-edit">
+      <label>
+        理解度を修正
+        <select
+          value={concept.status}
+          disabled={pending}
+          onChange={(event) => onChange(event.target.value as MasteryStatus)}
+        >
+          {MASTERY_STATUSES.map((status) => (
+            <option value={status} key={status}>
+              {statusLabel[status]}
+            </option>
+          ))}
+        </select>
+      </label>
+      {concept.manual && (
+        <button className="link" disabled={pending} onClick={() => onChange(null)}>
+          自動算出（{statusLabel[concept.derived.status]}）へ戻す
+        </button>
+      )}
+    </div>
+  );
+}
+
 function LearningMap() {
   const [profile, setProfile] = useState<Profile>();
+  const [overrides, setOverrides] = useState<MasteryOverrides>({});
   const [error, setError] = useState<ApiError>();
+  const [saveError, setSaveError] = useState<ApiError>();
+  const [pending, setPending] = useState<readonly string[]>([]);
   const requestTracker = useRef(createRequestTracker());
+  const overrideTracker = useRef(createRequestTracker());
+  const submitGuard = useRef(createSubmitGuard());
+  const overrideQueue = useRef(createOperationQueue());
+
+  // 習熟度と手動上書きは別の要求だが、**同じ世代**で追う。
+  // 別々に追うと、古い片方が新しいもう片方と混ざった表示になる
+  // （.agents/rules/rules.md RULE-005）。
   const load = () => {
-    const isLatest = requestTracker.current.start();
+    const isLatestProfile = requestTracker.current.start();
+    const isLatestOverrides = overrideTracker.current.start();
     setError(undefined);
-    requestJson<Profile>("/api/v1/learning-profile", fetch, takeLoginRetry())
-      .then((value) => {
-        if (isLatest()) setProfile(value);
+    const retry = takeLoginRetry();
+    Promise.all([
+      requestJson<Profile>("/api/v1/learning-profile", fetch, retry),
+      overrideQueue.current.run(() => requestJson<MasteryOverrides>(OVERRIDES_PATH, fetch, retry)),
+    ])
+      .then(([loadedProfile, loadedOverrides]) => {
+        if (isLatestProfile()) setProfile(loadedProfile);
+        if (isLatestOverrides()) setOverrides(loadedOverrides);
       })
       .catch((value: unknown) => {
-        if (isLatest()) setError(value as ApiError);
+        if (isLatestProfile() || isLatestOverrides()) setError(value as ApiError);
       });
   };
   useEffect(load, []);
+
+  const changeStatus = (conceptId: string, status: MasteryStatus | null) => {
+    // 入口で弾く（.agents/rules/rules.md RULE-007）。ここを通さずに setPending すると、
+    // 同じ Concept が二重に積まれ、弾かれた側の finally が両方を消すため、
+    // 最初の保存がまだ終わっていないのに入力が有効へ戻る。
+    if (submitGuard.current.isRunning(conceptId)) return;
+    const isLatestSave = overrideTracker.current.start();
+    setSaveError(undefined);
+    setPending((current) => [...current, conceptId]);
+    void submitGuard.current
+      .run(conceptId, async () => {
+        try {
+          // 応答は保存後の上書き一覧。これをそのまま採用するので、
+          // 画面の状態と保存された内容が食い違わない。
+          const saved = await overrideQueue.current.run(() =>
+            putJson<MasteryOverrides>(OVERRIDES_PATH, { conceptId, status }),
+          );
+          if (isLatestSave()) setOverrides(saved);
+        } catch (value: unknown) {
+          // 保存の失敗を黙って飲み込まない（RULE-004）。
+          // 一覧の読み込みエラーとは別に出し、表示は自動算出のまま保つ。
+          const saveError = value as ApiError;
+          if (saveError.kind === "session_expired") {
+            window.location.href = "/login";
+            return;
+          }
+          setSaveError(saveError);
+        }
+      })
+      .finally(() => {
+        setPending((current) => current.filter((id) => id !== conceptId));
+      });
+  };
+
   if (error) return <ErrorPanel error={error} retry={load} />;
   if (!profile) return <p className="message">読み込み中…</p>;
-  const summary = summarizeConcepts(profile.concepts);
+  const concepts = applyOverrides(profile.concepts, overrides);
+  const summary = summarizeConcepts(concepts);
   if (profile.eventCount === 0)
     return (
       <>
@@ -163,29 +266,39 @@ function LearningMap() {
         <div>
           <strong>{summary.unobserved}</strong>未観測
         </div>
-        <button onClick={load}>再読み込み</button>
+        <button onClick={load} disabled={pending.length > 0}>
+          再読み込み
+        </button>
       </section>
+      {saveError && (
+        <section className="message error">
+          <p>理解度の保存に失敗しました：{errorText[saveError.kind]}</p>
+        </section>
+      )}
       <section className="concepts">
-        {profile.concepts.map((item) => (
+        {concepts.map((item) => (
           <article className="concept" key={item.conceptId}>
             <div>
               <h2>{item.label ?? item.conceptId}</h2>
               <span className={`status ${item.status}`}>
-                {item.status === "confirmed"
-                  ? "確認済み"
-                  : item.status === "learning"
-                    ? "学習中"
-                    : "未観測"}
+                {statusLabel[item.status]}
+                {item.manual && <em className="manual">手動</em>}
               </span>
             </div>
             <div className="meter">
-              <i style={{ width: `${Math.round(item.score * 100)}%` }} />
+              {item.score !== null && <i style={{ width: `${Math.round(item.score * 100)}%` }} />}
             </div>
-            <b>{Math.round(item.score * 100)}%</b>
+            <b>{item.score === null ? "—" : `${Math.round(item.score * 100)}%`}</b>
             <p>
               自力解決 {item.evidence.solvedIndependentlyCount} 回・ヒント利用{" "}
               {item.evidence.hintUsedCount} 回
+              {item.manual && `（自動算出では ${statusLabel[item.derived.status]}）`}
             </p>
+            <MasteryPicker
+              concept={item}
+              pending={pending.includes(item.conceptId)}
+              onChange={(status) => changeStatus(item.conceptId, status)}
+            />
           </article>
         ))}
       </section>

@@ -43,7 +43,10 @@ test("Web の開発サーバーは API とポートを分け、Worker 経由で�
 });
 
 test("Web の本番アセットを hook と CI でビルド検証する", () => {
-  assert.equal(packageJson.scripts["build:web"], "npm run build --workspace=@gakushu-sochi/web");
+  assert.equal(
+    packageJson.scripts["build:web"],
+    "npm run compile --workspace=@gakushu-sochi/domain && npm run build --workspace=@gakushu-sochi/web",
+  );
   assert.match(lefthook, /web-build:\n\s+run: npm run build:web/);
   assert.match(ci, /name: Build Web assets\n\s+run: npm run build:web/);
 });
