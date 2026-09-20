@@ -138,3 +138,57 @@ test("intervalが正の有限値でなければDevice Flowを開始しない", a
   await expect(new DeviceAuth(storage, { sleep }).login()).rejects.toThrow("interval が不正です");
   expect(sleep).not.toHaveBeenCalled();
 });
+
+test("ログアウトは先にローカルの Refresh Token を破棄してから撤回する", async () => {
+  // 順序の記録。逆だと、撤回の通信で失敗したときに SecretStorage へ
+  // トークンが残り、ログアウトしたつもりの端末がログイン済みのままになる。
+  const calls: string[] = [];
+  const storage = secrets({ "gakushuSochi.auth.refreshToken": "refresh-1" });
+  storage.delete.mockImplementation(async () => void calls.push("clear"));
+  const fetchMock = vi.fn(async () => {
+    calls.push("revoke");
+    return new Response(null, { status: 200 });
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  await new DeviceAuth(storage).logout();
+
+  expect(calls).toEqual(["clear", "revoke"]);
+
+  const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+  expect(url).toBe("https://gakushu-sochi.jp.auth0.com/oauth/revoke");
+  // public client なので client_secret は送らない（配布物に隠せない）。
+  expect(JSON.parse(init.body as string)).toEqual({
+    client_id: "QkzWUVBYTbVYoye8SbHxaKbam6sSj014",
+    token: "refresh-1",
+  });
+  expect(init.redirect).toBe("error");
+});
+
+test("撤回に失敗してもローカルの Refresh Token は消えたままで、例外にしない", async () => {
+  const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+  const storage = secrets({ "gakushuSochi.auth.refreshToken": "refresh-1" });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => new Response(JSON.stringify({ error: "invalid_request" }), { status: 400 })),
+  );
+
+  // 利用者から見たログアウトは、ローカルの破棄が終わった時点で成立している。
+  await expect(new DeviceAuth(storage).logout()).resolves.toBeUndefined();
+
+  expect(await storage.get("gakushuSochi.auth.refreshToken")).toBeUndefined();
+  // 握りつぶさず記録する（.agents/rules/rules.md RULE-004）。
+  expect(consoleError).toHaveBeenCalled();
+
+  consoleError.mockRestore();
+});
+
+test("保存された Refresh Token が無ければ撤回を空撃ちしない", async () => {
+  const storage = secrets();
+  const fetchMock = vi.fn();
+  vi.stubGlobal("fetch", fetchMock);
+
+  await new DeviceAuth(storage).logout();
+
+  expect(fetchMock).not.toHaveBeenCalled();
+});

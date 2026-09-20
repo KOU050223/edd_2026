@@ -50,6 +50,17 @@ export interface IdentityRepository {
    * 端末ごとに変わり続ける値であり、初回登録時の値を残しても意味を持たないため。
    */
   ensureUserAndDevice(params: { userId: string; clientId: string; nowMs: number }): Promise<void>;
+
+  /**
+   * ユーザーと、それにぶら下がる全データを消す（退会）。
+   *
+   * `learning_events` と `devices` は `users(id)` を `ON DELETE CASCADE` で
+   * 参照しているため、`users` の1行を消せば両方が消える。
+   *
+   * 行が無くても成功とする。退会の再実行（Auth0 側の削除だけが失敗した場合）で
+   * 呼ばれうるため、存在しないことを失敗にすると復旧の手順が塞がる。
+   */
+  deleteUser(userId: string): Promise<void>;
 }
 
 export interface LearningEventRepository {

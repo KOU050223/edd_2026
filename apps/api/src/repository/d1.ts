@@ -167,4 +167,12 @@ export class D1IdentityRepository implements IdentityRepository {
         .bind(userId, clientId, nowMs, nowMs),
     ]);
   }
+
+  async deleteUser(userId: string): Promise<void> {
+    // 1文で足りる。learning_events と devices は users(id) を
+    // ON DELETE CASCADE で参照している（migrations/0001_initial.sql）。
+    // 子テーブルを個別に消しに行くと、順序を間違えたときに部分的に消えた
+    // 状態を作る。
+    await this.db.prepare(`DELETE FROM users WHERE id = ?`).bind(userId).run();
+  }
 }

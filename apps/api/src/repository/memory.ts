@@ -98,6 +98,19 @@ export class InMemoryIdentityRepository implements IdentityRepository {
     return Promise.resolve();
   }
 
+  /**
+   * ユーザーと端末を消す。D1 側の `ON DELETE CASCADE` に対応する。
+   *
+   * イベントは別の実装（`InMemoryLearningEventRepository`）が持つため、
+   * ここでは消せない。D1 では1文で両方消えるという差があるので、
+   * 退会をまたいでイベントを確かめるテストは D1 と同じ形にならない点に注意する。
+   */
+  deleteUser(userId: string): Promise<void> {
+    this.users.delete(userId);
+    this.devicesByUser.delete(userId);
+    return Promise.resolve();
+  }
+
   /** テストから端末を参照するための補助。 */
   getDevice(userId: string, clientId: string): { lastSeenAtMs: number } | undefined {
     return this.devicesByUser.get(userId)?.get(clientId);

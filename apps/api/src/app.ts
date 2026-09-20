@@ -8,6 +8,8 @@ import { createLearningEventsRoute } from "./routes/learning-events.js";
 import { createLearningProfileRoute } from "./routes/learning-profile.js";
 import { createLearningActivityRoute } from "./routes/learning-activity.js";
 import { createAiRoute } from "./routes/ai.js";
+import { createAccountRoute } from "./routes/account.js";
+import { createManagementUsers } from "./auth/management.js";
 
 /** Cloudflare Worker から提供する HTTP API。 */
 export const app = new Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>();
@@ -77,6 +79,12 @@ app.use(
   "/v1/ai/responses",
   rateLimit((env) => env.PROFILE_RATE_LIMITER),
 );
+// 退会は Auth0 の Management API を呼ぶ。Auth0 側にもレート制限があるため、
+// 認証済みであっても叩き放題にしない。頻度の想定は Profile より遥かに低い。
+app.use(
+  "/v1/me",
+  rateLimit((env) => env.PROFILE_RATE_LIMITER),
+);
 
 app.route(
   "/v1",
@@ -116,5 +124,19 @@ app.route(
   createLearningActivityRoute((env) => ({
     events: new D1LearningEventRepository(env.DB),
     now: () => new Date(),
+  })),
+);
+
+// 退会。D1 の削除と Auth0 の削除の順序は route 側が固定する（docs/auth.md §8）。
+app.route(
+  "/v1",
+  createAccountRoute((env) => ({
+    identity: new D1IdentityRepository(env.DB),
+    idp: createManagementUsers({
+      issuer: env.AUTH_ISSUER,
+      clientId: env.AUTH_MANAGEMENT_CLIENT_ID,
+      clientSecret: env.AUTH_MANAGEMENT_CLIENT_SECRET,
+      fetch: (input, init) => globalThis.fetch(input, init),
+    }),
   })),
 );

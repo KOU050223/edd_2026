@@ -21,6 +21,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 
 import { createCredentialStore } from "./credentials.js";
+import { performLogout } from "./logout.js";
 import {
   BOOKMARK_TYPE,
   captureSelection,
@@ -42,6 +43,7 @@ import {
   parseCallbackUrl,
   refreshAccessToken,
   OAuthTokenError,
+  revokeRefreshToken,
   type OAuthConfig,
 } from "./oauth.js";
 import { describeApiFailure } from "./api-error.js";
@@ -142,6 +144,18 @@ async function loginWithBrowser(): Promise<void> {
   } finally {
     callback.close();
   }
+}
+
+/** ログアウトの順序は `logout.ts` が固定する（docs/auth.md §8）。ここは配線だけ。 */
+async function logout(): Promise<void> {
+  const store = refreshTokenStore();
+  await performLogout({
+    readRefreshToken: () => store.get(),
+    clearRefreshToken: () => store.clear(),
+    revoke: (refreshToken) => revokeRefreshToken(OAUTH_CONFIG, refreshToken),
+    notify: (state) => popup?.webContents.send("auth:state", state),
+    logError: (message, detail) => console.error(message, detail),
+  });
 }
 
 function randomState(): string {
@@ -537,6 +551,7 @@ app
       await saveSettings(valid);
     });
     ipcMain.handle("auth:login", loginWithBrowser);
+    ipcMain.handle("auth:logout", logout);
     ipcMain.handle("selection:retry", openForSelection);
     ipcMain.handle("answer:ask", async (event, selection: string, question: string) => {
       if (!selection.trim()) throw new Error("選択テキストを取得できませんでした。");

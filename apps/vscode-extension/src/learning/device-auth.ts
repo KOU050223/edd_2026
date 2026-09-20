@@ -182,6 +182,63 @@ export class DeviceAuth {
     await this.secrets.delete(REFRESH_TOKEN_KEY);
   }
 
+  /**
+   * ログアウトする（docs/auth.md §8）。
+   *
+   * **先にローカルの Refresh Token を破棄し、その後 `POST /oauth/revoke` を呼ぶ。**
+   * 利用者を守っているのはローカルの破棄であり、撤回の成否ではない。順序が逆だと、
+   * 撤回の通信で失敗したときに SecretStorage へトークンが残り、
+   * ログアウトしたつもりの端末がログイン済みのままになる。
+   *
+   * 撤回の失敗は握りつぶさず記録するが、例外にはしない
+   * （.agents/rules/rules.md RULE-004）。利用者から見たログアウトは
+   * ローカルの破棄が終わった時点で既に成立しており、ここで投げると
+   * 「ログアウトに失敗した」と表示され、実際には消えているのに
+   * もう一度押させることになる。露出はアクセストークンの寿命（15分）に上限される。
+   */
+  async logout(): Promise<void> {
+    // 破棄の前に読む。破棄してから読むと、撤回する対象が取れない。
+    const refreshToken = await this.secrets.get(REFRESH_TOKEN_KEY);
+
+    await this.clear();
+
+    if (!refreshToken) return;
+
+    try {
+      await this.revokeRefreshToken(refreshToken);
+    } catch (error) {
+      console.error("failed to revoke the refresh token after local logout", {
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * IdP 側で Refresh Token を撤回する。
+   *
+   * public client なので `client_secret` は送らない（配布物に隠せない）。
+   * Auth0 は `token_endpoint_auth_method` が `none` のクライアントに対して、
+   * `client_id` と `token` だけでの撤回を認めている。
+   */
+  private async revokeRefreshToken(refreshToken: string): Promise<void> {
+    const response = await fetch(endpoint("/oauth/revoke"), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ client_id: CLIENT_ID, token: refreshToken }),
+      // 資格情報を載せるのでリダイレクトを追跡しない（RULE-002）。
+      redirect: "error",
+      // 単発の外向きリクエスト。応答が返らないまま待ち続けない（RULE-001）。
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+
+    // 2xx 以外を成功に丸めない。呼び出し側が記録できるよう投げる（RULE-004）。
+    if (!response.ok) {
+      throw new DeviceAuthError(
+        `トークンの撤回に失敗しました: ${this.oauthError(await responseJson(response).catch(() => undefined))}`,
+      );
+    }
+  }
+
   private async requestDeviceCode(): Promise<DeviceCodeResponse> {
     let response: Response;
     try {

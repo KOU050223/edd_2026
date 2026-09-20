@@ -92,6 +92,14 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     }),
   );
+  context.subscriptions.push(
+    vscode.commands.registerCommand("gakushuSochi.logout", async () => {
+      // `logout` はローカルの破棄を先に済ませ、撤回の失敗は内部で記録して
+      // 投げない（docs/auth.md §8）。ここまで来たらログアウトは成立している。
+      await deviceAuth.logout();
+      vscode.window.showInformationMessage("Gakushu Sochi からログアウトしました");
+    }),
+  );
   // ユーザー自身の Copilot 契約を使って回答を生成する。
   // onDebug: Concept抽出（AI/03 #12）の切り分け用。モデルの生の応答を出力チャンネルへ流す。
   const provider: AIProvider = new VSCodeLMProvider((message) => channel.appendLine(message));
