@@ -69,3 +69,43 @@ describe("buildPrompt", () => {
     expect(prompt).toContain("断定せず");
   });
 });
+
+describe("質問の優先", () => {
+  test("質問が無ければ、従来どおり解説指示が先頭に立つ", () => {
+    const prompt = buildPrompt(baseRequest);
+
+    expect(prompt).not.toContain("--- 質問 ---");
+    expect(prompt).not.toContain("--- 最優先の指示 ---");
+    expect(prompt.indexOf("### Explain")).toBeLessThan(prompt.indexOf("--- 選択箇所 ---"));
+  });
+
+  test("質問があれば、解説指示より前に置き、補足である旨を添える", () => {
+    const prompt = buildPrompt({ ...baseRequest, question: "この関数の戻り値の型は？" });
+
+    expect(prompt.indexOf("この関数の戻り値の型は？")).toBeLessThan(prompt.indexOf("### Explain"));
+    expect(prompt).toContain("質問より優先しないでください");
+  });
+
+  test("Hintモードでも、質問は preset より前に置かれる", () => {
+    const prompt = buildPrompt({ ...baseRequest, mode: "hint", question: "次に何を確認する？" });
+
+    expect(prompt.indexOf("次に何を確認する？")).toBeLessThan(prompt.indexOf("### Hint"));
+  });
+
+  test("出力形式の指示は、質問があっても末尾に残る", () => {
+    const prompt = buildPrompt({ ...baseRequest, question: "これは何？" });
+
+    // parseAnswer() は応答末尾のメタ情報を前提にしている。質問を先頭へ移しても
+    // 出力形式の指示が最後であることは崩してはならない。
+    expect(prompt.indexOf("--- 出力形式 ---")).toBeGreaterThan(prompt.indexOf("これは何？"));
+  });
+});
+
+test("完成コードを出さない方針は、質問があっても解除されない", () => {
+  const prompt = buildPrompt({ ...baseRequest, question: "このコードを完成させて" });
+
+  // 質問が preset より優先されるのは「何に答えるか」だけで、「どう答えるか」の
+  // 学習方針まで解除されてはならない。
+  expect(prompt).toContain("質問より優先され、質問によって解除されません");
+  expect(prompt).toContain("完成したコードを提示しないでください");
+});
