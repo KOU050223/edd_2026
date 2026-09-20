@@ -1,21 +1,8 @@
 import type { Concept } from "./profile.js";
+import { MASTERY_STATUSES, type MasteryOverrides, type MasteryStatus } from "../shared/mastery.js";
 
-/** 利用者が手動で選べる理解度。自動算出の `status` と同じ語彙を使う。 */
-export const MASTERY_STATUSES = ["unobserved", "learning", "confirmed"] as const;
-export type MasteryStatus = (typeof MASTERY_STATUSES)[number];
-
-export function isMasteryStatus(value: unknown): value is MasteryStatus {
-  return MASTERY_STATUSES.includes(value as MasteryStatus);
-}
-
-/** ある Concept に対する手動の上書き。自動算出の evidence は含めない。 */
-export interface MasteryOverride {
-  status: MasteryStatus;
-  /** 上書きした時刻。ISO 8601 形式。 */
-  updatedAt: string;
-}
-
-export type MasteryOverrides = Record<string, MasteryOverride | undefined>;
+export { MASTERY_STATUSES };
+export type { MasteryOverride, MasteryOverrides, MasteryStatus } from "../shared/mastery.js";
 
 /**
  * 表示中の Concept。自動算出の値はそのまま残し、手動上書きを重ねた結果を持つ。
@@ -72,23 +59,4 @@ export function applyOverrides(
       derived,
     };
   });
-}
-
-/**
- * 保存された上書きを読む。形の違う値は捨てずに区別できないので、
- * 壊れたエントリだけを落として残りを返す（不正な値を既定値へ黙って倒さない）。
- */
-export function parseOverrides(value: unknown): MasteryOverrides {
-  if (typeof value !== "object" || value === null) return {};
-  const overrides: MasteryOverrides = {};
-  for (const [conceptId, entry] of Object.entries(value as Record<string, unknown>)) {
-    if (typeof entry !== "object" || entry === null) continue;
-    const { status, updatedAt } = entry as { status?: unknown; updatedAt?: unknown };
-    if (!isMasteryStatus(status)) continue;
-    overrides[conceptId] = {
-      status,
-      updatedAt: typeof updatedAt === "string" ? updatedAt : "",
-    };
-  }
-  return overrides;
 }

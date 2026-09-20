@@ -209,6 +209,10 @@ function LearningMap() {
   useEffect(load, []);
 
   const changeStatus = (conceptId: string, status: MasteryStatus | null) => {
+    // 入口で弾く（.agents/rules/rules.md RULE-007）。ここを通さずに setPending すると、
+    // 同じ Concept が二重に積まれ、弾かれた側の finally が両方を消すため、
+    // 最初の保存がまだ終わっていないのに入力が有効へ戻る。
+    if (submitGuard.current.isRunning(conceptId)) return;
     setSaveError(undefined);
     setPending((current) => [...current, conceptId]);
     void submitGuard.current

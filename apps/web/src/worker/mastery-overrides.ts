@@ -6,21 +6,14 @@
  * 自動算出の status / score / evidence は API の応答のまま変えず、
  * 表示のときにこの記録を重ねる。VS Code 拡張への同期は Issue #47 のスコープ外。
  */
+import {
+  isMasteryStatus,
+  MASTERY_STATUSES,
+  type MasteryOverrides,
+  type MasteryStatus,
+} from "../shared/mastery.js";
+
 const OVERRIDES_KEY = "mastery-overrides";
-
-export const MASTERY_STATUSES = ["unobserved", "learning", "confirmed"] as const;
-export type MasteryStatus = (typeof MASTERY_STATUSES)[number];
-
-export interface MasteryOverride {
-  status: MasteryStatus;
-  updatedAt: string;
-}
-
-export type MasteryOverrides = Record<string, MasteryOverride>;
-
-function isMasteryStatus(value: unknown): value is MasteryStatus {
-  return MASTERY_STATUSES.includes(value as MasteryStatus);
-}
 
 /** 保存された JSON を読む。壊れていたら捨てずに失敗させる（握りつぶさない）。 */
 export async function readOverrides(kv: KVNamespace): Promise<MasteryOverrides> {

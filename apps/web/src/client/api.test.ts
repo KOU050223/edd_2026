@@ -119,3 +119,22 @@ test("理解度の保存が 401 で拒まれた理由を利用者が取れるエ
     ),
   ).rejects.toEqual(new ApiError("session_expired"));
 });
+
+test("送信中に弾かれた再送信は、実行中の送信の状態を巻き戻さない", async () => {
+  const guard = createSubmitGuard();
+  let release = () => {};
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+
+  const first = guard.run("go.pointer", () => blocked);
+  const stillRunningWhenBlocked = guard.isRunning("go.pointer");
+  await guard.run("go.pointer", async () => undefined);
+  const stillRunningAfterBlocked = guard.isRunning("go.pointer");
+  release();
+  await first;
+
+  expect(stillRunningWhenBlocked).toBe(true);
+  expect(stillRunningAfterBlocked).toBe(true);
+  expect(guard.isRunning("go.pointer")).toBe(false);
+});

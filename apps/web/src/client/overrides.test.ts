@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { applyOverrides, clampScoreToStatus, parseOverrides } from "./overrides.js";
+import { applyOverrides, clampScoreToStatus } from "./overrides.js";
 import { summarizeConcepts, type Concept } from "./profile.js";
 
 const CONCEPTS: Concept[] = [
@@ -66,16 +66,4 @@ test("手動で変えた理解度は集計にも反映される", () => {
   });
 
   expect(summarizeConcepts(overlaid)).toEqual({ confirmed: 1, learning: 1, unobserved: 0 });
-});
-
-test("保存された上書きのうち、理解度として読めないものは採用しない", () => {
-  expect(
-    parseOverrides({
-      "go.pointer": { status: "confirmed", updatedAt: "2026-09-21T00:00:00.000Z" },
-      "go.broken": { status: "mastered" },
-      "go.null": null,
-    }),
-  ).toEqual({
-    "go.pointer": { status: "confirmed", updatedAt: "2026-09-21T00:00:00.000Z" },
-  });
 });
