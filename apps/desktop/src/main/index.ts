@@ -55,6 +55,11 @@ const OAUTH_CONFIG: OAuthConfig = {
   audience: "https://api.gakushu-sochi.dev",
 };
 const OAUTH_CALLBACK_TIMEOUT_MS = 5 * 60 * 1_000;
+// Auth0 の Allowed Callback URLs はポートにワイルドカードを使えない。ポート 0（OS 任せ）
+// にすると起動ごとに redirect_uri が変わり、毎回 "Callback URL mismatch" で弾かれる。
+// そのため固定する。この値を変えるときは Auth0 側の登録も同時に変えること。
+const OAUTH_CALLBACK_PORT = 53682;
+export const OAUTH_REDIRECT_URI = `http://127.0.0.1:${OAUTH_CALLBACK_PORT}/callback`;
 const ACCESSIBILITY_SETTINGS_URL =
   "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
 let popup: BrowserWindow | undefined;
@@ -147,15 +152,22 @@ async function waitForOAuthCallback(
 ): Promise<{ redirectUri: string; code: Promise<string>; close: () => void }> {
   const server = createServer();
   await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => resolve());
+    server.once("error", (error: NodeJS.ErrnoException) => {
+      // 握りつぶして別ポートへ逃げない。逃げた先は Auth0 に登録されておらず、
+      // どのみち "Callback URL mismatch" になる（.agents/rules/rules.md RULE-004）。
+      reject(
+        error.code === "EADDRINUSE"
+          ? new Error(
+              `OAuth のコールバック待受ポート ${OAUTH_CALLBACK_PORT} が使用中です。` +
+                "このポートを使っているアプリを終了してから、もう一度ログインしてください。",
+              { cause: error },
+            )
+          : error,
+      );
+    });
+    server.listen(OAUTH_CALLBACK_PORT, "127.0.0.1", () => resolve());
   });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    server.close();
-    throw new Error("OAuth のコールバック待受ポートを取得できませんでした。");
-  }
-  const redirectUri = `http://127.0.0.1:${address.port}/callback`;
+  const redirectUri = OAUTH_REDIRECT_URI;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const close = () => {
     if (timer) clearTimeout(timer);
@@ -171,7 +183,7 @@ async function waitForOAuthCallback(
         response.writeHead(404).end();
         return;
       }
-      const callbackUrl = `http://127.0.0.1:${address.port}${request.url}`;
+      const callbackUrl = `http://127.0.0.1:${OAUTH_CALLBACK_PORT}${request.url}`;
       try {
         const authorizationCode = parseCallbackUrl(callbackUrl, expectedState);
         response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
