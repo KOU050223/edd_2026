@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { HTTPException } from "hono/http-exception";
 import {
   cookieValue,
@@ -14,6 +14,20 @@ type Fetch = typeof globalThis.fetch;
 
 export interface WebAppDeps {
   fetch: Fetch;
+}
+
+type SessionContext = {
+  env: WebBindings;
+  req: { header(name: string): string | undefined };
+};
+
+function hasSession(c: SessionContext): Promise<boolean> {
+  return readSession(c.env.SESSIONS, cookieValue(c.req.header("cookie"), "session"));
+}
+
+/** セッションが無いことを、利用者が再ログインへ倒せる理由付きで返す。 */
+function sessionExpired(c: Context<{ Bindings: WebBindings }>) {
+  return c.json({ error: "session_expired" }, 401, { "cache-control": "no-store" });
 }
 
 function timingSafeEqual(a: string, b: string): boolean {
@@ -107,9 +121,7 @@ export function createWebApp(
   });
 
   app.all("/api/*", async (c) => {
-    if (!(await readSession(c.env.SESSIONS, cookieValue(c.req.header("cookie"), "session")))) {
-      return c.json({ error: "session_expired" }, 401, { "cache-control": "no-store" });
-    }
+    if (!(await hasSession(c))) return sessionExpired(c);
     const origin = apiOrigin(c.env.API_ORIGIN);
     const token = configured(c.env.API_TOKEN, "API_TOKEN");
     const requestUrl = new URL(c.req.url);
@@ -122,6 +134,7 @@ export function createWebApp(
       method: c.req.method,
       headers,
       body: c.req.raw.body,
+      redirect: "error",
     });
     const responseHeaders = new Headers(upstream.headers);
     responseHeaders.set("cache-control", "no-store");

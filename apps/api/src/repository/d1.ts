@@ -10,6 +10,8 @@ import type {
   AppendResult,
   IdentityRepository,
   LearningEventRepository,
+  MasteryOverride,
+  MasteryOverrideRepository,
   StoredEventInput,
 } from "./types.js";
 
@@ -162,6 +164,13 @@ export class D1LearningEventRepository implements LearningEventRepository {
 export class D1IdentityRepository implements IdentityRepository {
   constructor(private readonly db: D1Database) {}
 
+  async ensureUser(params: { userId: string; nowMs: number }): Promise<void> {
+    await this.db
+      .prepare("INSERT INTO users (id, created_at_ms) VALUES (?, ?) ON CONFLICT (id) DO NOTHING")
+      .bind(params.userId, params.nowMs)
+      .run();
+  }
+
   async ensureUserAndDevice(params: {
     userId: string;
     clientId: string;
@@ -214,5 +223,56 @@ export class D1IdentityRepository implements IdentityRepository {
     // 子テーブルを個別に消しに行くと、順序を間違えたときに部分的に消えた
     // 状態を作る。
     await this.db.prepare(`DELETE FROM users WHERE id = ?`).bind(userId).run();
+  }
+}
+
+export class D1MasteryOverrideRepository implements MasteryOverrideRepository {
+  constructor(private readonly db: D1Database) {}
+
+  async listByUser(userId: string): Promise<Record<string, MasteryOverride>> {
+    const { results } = await this.db
+      .prepare("SELECT concept_id, status, updated_at FROM mastery_overrides WHERE user_id = ?")
+      .bind(userId)
+      .all<{ concept_id: string; status: string; updated_at: string }>();
+    const overrides: Record<string, MasteryOverride> = {};
+    for (const row of results) {
+      if (
+        (row.status !== "unobserved" && row.status !== "learning" && row.status !== "confirmed") ||
+        Number.isNaN(Date.parse(row.updated_at))
+      ) {
+        throw new Error(`mastery_overrides contains invalid data (concept_id=${row.concept_id})`);
+      }
+      overrides[row.concept_id] = {
+        status: row.status as MasteryOverride["status"],
+        updatedAt: row.updated_at,
+      };
+    }
+    return overrides;
+  }
+
+  async put(
+    userId: string,
+    conceptId: string,
+    status: MasteryOverride["status"] | null,
+    updatedAt: string,
+  ): Promise<Record<string, MasteryOverride>> {
+    if (status === null) {
+      await this.db
+        .prepare("DELETE FROM mastery_overrides WHERE user_id = ? AND concept_id = ?")
+        .bind(userId, conceptId)
+        .run();
+    } else {
+      await this.db
+        .prepare(
+          `INSERT INTO mastery_overrides (user_id, concept_id, status, updated_at)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT (user_id, concept_id) DO UPDATE SET
+             status = excluded.status,
+             updated_at = excluded.updated_at`,
+        )
+        .bind(userId, conceptId, status, updatedAt)
+        .run();
+    }
+    return this.listByUser(userId);
   }
 }

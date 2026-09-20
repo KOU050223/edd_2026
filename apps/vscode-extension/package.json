@@ -44,6 +44,14 @@
       {
         "command": "gakushuSochi.askClipboard",
         "title": "Gakushu Sochi: Ask Clipboard"
+      },
+      {
+        "command": "gakushuSochi.reviewConsent",
+        "title": "Gakushu Sochi: 送信内容の同意を確認する"
+      },
+      {
+        "command": "gakushuSochi.revokeConsent",
+        "title": "Gakushu Sochi: 送信内容の同意を取り消す"
       }
     ],
     "keybindings": [

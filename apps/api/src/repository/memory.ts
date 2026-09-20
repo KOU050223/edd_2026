@@ -107,6 +107,13 @@ export class InMemoryIdentityRepository implements IdentityRepository {
     this.devicesByUser = store.devicesByUser;
   }
 
+  ensureUser(params: { userId: string; nowMs: number }): Promise<void> {
+    if (!this.users.has(params.userId)) {
+      this.users.set(params.userId, { createdAtMs: params.nowMs });
+    }
+    return Promise.resolve();
+  }
+
   ensureUserAndDevice(params: { userId: string; clientId: string; nowMs: number }): Promise<void> {
     const { userId, clientId, nowMs } = params;
 
@@ -114,9 +121,7 @@ export class InMemoryIdentityRepository implements IdentityRepository {
       return Promise.reject(new Error("user deletion is in progress"));
     }
 
-    if (!this.users.has(userId)) {
-      this.users.set(userId, { createdAtMs: nowMs });
-    }
+    void this.ensureUser({ userId, nowMs });
 
     let devices = this.devicesByUser.get(userId);
     if (devices === undefined) {

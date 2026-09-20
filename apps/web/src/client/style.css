@@ -115,6 +115,54 @@ form button {
 .learning {
   color: #b45309;
 }
+.mastery-edit {
+  grid-column: 1/-1;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  font-size: 14px;
+  color: #475569;
+}
+.mastery-edit label {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.mastery-edit select {
+  font: inherit;
+  padding: 6px 8px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #fff;
+  color: #1f2937;
+}
+.mastery-edit select:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+button.link {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: #0f766e;
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+button.link:disabled {
+  color: #94a3b8;
+  cursor: progress;
+}
+.manual {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: #e0e7ff;
+  color: #3730a3;
+  font-size: 11px;
+  font-style: normal;
+}
 .meter {
   height: 9px;
   background: #e2e8f0;

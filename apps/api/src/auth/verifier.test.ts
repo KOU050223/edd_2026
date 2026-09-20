@@ -86,6 +86,13 @@ function base64Url(bytes: Uint8Array): string {
   return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
 }
 
+function decodeBase64Url(value: string): Uint8Array {
+  const normalized = value.replaceAll("-", "+").replaceAll("_", "/");
+  const padded = normalized + "=".repeat((4 - (normalized.length % 4)) % 4);
+  const binary = atob(padded);
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+}
+
 function encodeSegment(value: unknown): string {
   return base64Url(new TextEncoder().encode(JSON.stringify(value)));
 }
@@ -192,10 +199,15 @@ test("正しい署名のトークンはsubを返して通す", async () => {
 });
 
 test("署名が改ざんされていれば401にする", async () => {
-  // 署名の最後の1文字だけを差し替える。他はすべて正しいトークンのまま。
+  // 署名の先頭バイトを反転する。他はすべて正しいトークンのまま。
+  // Base64URL の末尾文字は未使用ビットを含む場合があり、文字だけの差し替えでは
+  // 復号後の署名が変わらないことがある。
   const { verifier } = buildVerifier();
   const token = await signJwt();
-  const tampered = token.slice(0, -1) + (token.endsWith("A") ? "B" : "A");
+  const [header, payload, encodedSignature] = token.split(".");
+  const signature = decodeBase64Url(encodedSignature!);
+  signature[0] = (signature[0] ?? 0) ^ 0xff;
+  const tampered = `${header}.${payload}.${base64Url(signature)}`;
 
   await expectRejection(verifier.verify(tampered), "invalid_token");
 });

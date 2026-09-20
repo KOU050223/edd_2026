@@ -13,7 +13,7 @@
     "gen:concepts": "npm run gen:concepts --workspace=@gakushu-sochi/domain",
     "check:concepts": "npm run check:concepts --workspace=@gakushu-sochi/domain",
     "check:worker-types": "npm run check:worker-types --workspace=@gakushu-sochi/api && npm run check:worker-types --workspace=@gakushu-sochi/web",
-    "build:web": "npm run build --workspace=@gakushu-sochi/web",
+    "build:web": "npm run compile --workspace=@gakushu-sochi/domain && npm run build --workspace=@gakushu-sochi/web",
     "test": "npm run test:package-scripts && npm run test:project-rules && npm run compile && npm run test:unit --workspace=@gakushu-sochi/domain && npm run test:unit --workspace=@gakushu-sochi/api && npm run test:unit --workspace=gakushu-sochi && npm run test:unit --workspace=@gakushu-sochi/desktop && npm run test:unit --workspace=@gakushu-sochi/web",
     "test:package-scripts": "node --test test/package-scripts.test.mjs",
     "test:project-rules": "node --test test/project-rules.test.mjs",
