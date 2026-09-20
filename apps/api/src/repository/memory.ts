@@ -15,11 +15,34 @@ import type {
   StoredEventInput,
 } from "./types.js";
 
+export interface InMemoryRepositoryStore {
+  readonly users: Map<string, { createdAtMs: number }>;
+  readonly devicesByUser: Map<string, Map<string, { lastSeenAtMs: number }>>;
+  readonly eventsByUser: Map<string, Map<string, LearningEvent>>;
+  readonly deletingUsers: Set<string>;
+}
+
+export function createInMemoryRepositoryStore(): InMemoryRepositoryStore {
+  return {
+    users: new Map(),
+    devicesByUser: new Map(),
+    eventsByUser: new Map(),
+    deletingUsers: new Set(),
+  };
+}
+
 export class InMemoryLearningEventRepository implements LearningEventRepository {
   /** userId -> (eventId -> event)。ユーザー単位で冪等にするための入れ子。 */
-  private readonly byUser = new Map<string, Map<string, LearningEvent>>();
+  private readonly byUser: Map<string, Map<string, LearningEvent>>;
+
+  constructor(private readonly store = createInMemoryRepositoryStore()) {
+    this.byUser = store.eventsByUser;
+  }
 
   append(userId: string, inputs: readonly StoredEventInput[]): Promise<AppendResult[]> {
+    if (this.store.deletingUsers.has(userId)) {
+      return Promise.reject(new Error("user deletion is in progress"));
+    }
     let events = this.byUser.get(userId);
     if (events === undefined) {
       events = new Map();
@@ -53,6 +76,10 @@ export class InMemoryLearningEventRepository implements LearningEventRepository 
   countByUser(userId: string): Promise<number> {
     return Promise.resolve(this.byUser.get(userId)?.size ?? 0);
   }
+
+  deleteUser(userId: string): void {
+    this.byUser.delete(userId);
+  }
 }
 
 /**
@@ -62,7 +89,7 @@ export class InMemoryLearningEventRepository implements LearningEventRepository 
  * テストで確かめられるよう、登録済みの組を記録しておく。
  */
 export class InMemoryIdentityRepository implements IdentityRepository {
-  readonly users = new Map<string, { createdAtMs: number }>();
+  readonly users: Map<string, { createdAtMs: number }>;
 
   /**
    * userId -> (clientId -> 端末)。
@@ -73,10 +100,19 @@ export class InMemoryIdentityRepository implements IdentityRepository {
    * この衝突が起きないため、連結したままだとテスト実装だけが実際と違う
    * ふるまいをして、DB 制約の問題を見逃す。
    */
-  private readonly devicesByUser = new Map<string, Map<string, { lastSeenAtMs: number }>>();
+  private readonly devicesByUser: Map<string, Map<string, { lastSeenAtMs: number }>>;
+
+  constructor(private readonly store = createInMemoryRepositoryStore()) {
+    this.users = store.users;
+    this.devicesByUser = store.devicesByUser;
+  }
 
   ensureUserAndDevice(params: { userId: string; clientId: string; nowMs: number }): Promise<void> {
     const { userId, clientId, nowMs } = params;
+
+    if (this.store.deletingUsers.has(userId)) {
+      return Promise.reject(new Error("user deletion is in progress"));
+    }
 
     if (!this.users.has(userId)) {
       this.users.set(userId, { createdAtMs: nowMs });
@@ -98,6 +134,12 @@ export class InMemoryIdentityRepository implements IdentityRepository {
     return Promise.resolve();
   }
 
+  startUserDeletion(userId: string, startedAtMs: number): Promise<void> {
+    void startedAtMs;
+    this.store.deletingUsers.add(userId);
+    return Promise.resolve();
+  }
+
   /**
    * ユーザーと端末を消す。D1 側の `ON DELETE CASCADE` に対応する。
    *
@@ -108,6 +150,7 @@ export class InMemoryIdentityRepository implements IdentityRepository {
   deleteUser(userId: string): Promise<void> {
     this.users.delete(userId);
     this.devicesByUser.delete(userId);
+    this.store.eventsByUser.delete(userId);
     return Promise.resolve();
   }
 

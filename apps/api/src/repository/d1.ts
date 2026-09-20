@@ -64,11 +64,21 @@ export class D1LearningEventRepository implements LearningEventRepository {
       return [];
     }
 
+    const deleting = await this.db
+      .prepare(`SELECT 1 AS active FROM account_deletions WHERE user_id = ?`)
+      .bind(userId)
+      .first<{ active: number }>();
+    if (deleting) throw new Error("user deletion is in progress");
+
     const statement = this.db.prepare(
       `INSERT INTO learning_events (
          id, user_id, occurred_at, occurred_at_ms, type, origin, concept_ids,
          language, diagnostic_code, session_id, client_id, received_at_ms
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       )
+       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+       WHERE NOT EXISTS (
+         SELECT 1 FROM account_deletions WHERE user_id = ?
+       )
        ON CONFLICT (user_id, id) DO NOTHING`,
     );
 
@@ -87,6 +97,7 @@ export class D1LearningEventRepository implements LearningEventRepository {
         event.sessionId ?? null,
         clientId,
         receivedAtMs,
+        userId,
       ),
     );
 
@@ -97,6 +108,12 @@ export class D1LearningEventRepository implements LearningEventRepository {
     // 実装の誤りだけになる。部分的に書けた状態を作らないため、その場合は
     // バッチ全体を失敗させたままにする。
     const results = await this.db.batch(bound);
+
+    const deletingAfter = await this.db
+      .prepare(`SELECT 1 AS active FROM account_deletions WHERE user_id = ?`)
+      .bind(userId)
+      .first<{ active: number }>();
+    if (deletingAfter) throw new Error("user deletion is in progress");
 
     return inputs.map((input, index) => {
       const changes = results[index]?.meta?.changes;
@@ -152,20 +169,43 @@ export class D1IdentityRepository implements IdentityRepository {
   }): Promise<void> {
     const { userId, clientId, nowMs } = params;
 
+    const deleting = await this.db
+      .prepare(`SELECT 1 AS active FROM account_deletions WHERE user_id = ?`)
+      .bind(userId)
+      .first<{ active: number }>();
+    if (deleting) throw new Error("user deletion is in progress");
+
     // users を先に入れる。devices と learning_events の両方が users(id) を
     // 参照しているため、順序を逆にすると外部キー制約で落ちる。
     await this.db.batch([
       this.db
-        .prepare(`INSERT INTO users (id, created_at_ms) VALUES (?, ?) ON CONFLICT (id) DO NOTHING`)
-        .bind(userId, nowMs),
+        .prepare(
+          `INSERT INTO users (id, created_at_ms)
+           SELECT ?, ?
+           WHERE NOT EXISTS (SELECT 1 FROM account_deletions WHERE user_id = ?)
+           ON CONFLICT (id) DO NOTHING`,
+        )
+        .bind(userId, nowMs, userId),
       this.db
         .prepare(
           `INSERT INTO devices (user_id, client_id, created_at_ms, last_seen_at_ms)
-           VALUES (?, ?, ?, ?)
+           SELECT ?, ?, ?, ?
+           WHERE NOT EXISTS (SELECT 1 FROM account_deletions WHERE user_id = ?)
            ON CONFLICT (user_id, client_id) DO UPDATE SET last_seen_at_ms = excluded.last_seen_at_ms`,
         )
-        .bind(userId, clientId, nowMs, nowMs),
+        .bind(userId, clientId, nowMs, nowMs, userId),
     ]);
+  }
+
+  async startUserDeletion(userId: string, startedAtMs: number): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT INTO account_deletions (user_id, started_at_ms)
+         VALUES (?, ?)
+         ON CONFLICT (user_id) DO NOTHING`,
+      )
+      .bind(userId, startedAtMs)
+      .run();
   }
 
   async deleteUser(userId: string): Promise<void> {

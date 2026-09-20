@@ -21,6 +21,11 @@ const VERIFIER: AuthVerifier = {
 function buildDeps(options: { d1Fails?: boolean; idpFails?: boolean } = {}) {
   const calls: string[] = [];
   const identity = new InMemoryIdentityRepository();
+  const originalStart = identity.startUserDeletion.bind(identity);
+  identity.startUserDeletion = (userId: string) => {
+    calls.push("mark");
+    return originalStart(userId, 0);
+  };
   const originalDelete = identity.deleteUser.bind(identity);
   identity.deleteUser = (userId: string) => {
     calls.push("d1");
@@ -69,7 +74,7 @@ describe("DELETE /v1/me", () => {
     const response = await request(buildApp(deps));
 
     expect(response.status).toBe(204);
-    expect(deps.calls).toEqual(["d1", "auth0"]);
+    expect(deps.calls).toEqual(["mark", "d1", "auth0"]);
     expect(deps.identity.users.has("auth0|user-a")).toBe(false);
   });
 
@@ -82,7 +87,7 @@ describe("DELETE /v1/me", () => {
     const response = await request(buildApp(deps));
 
     expect(response.status).toBe(500);
-    expect(deps.calls).toEqual(["d1"]);
+    expect(deps.calls).toEqual(["mark", "d1"]);
     expect(deps.calls).not.toContain("auth0");
   });
 
@@ -104,6 +109,22 @@ describe("DELETE /v1/me", () => {
     expect(consoleError).toHaveBeenCalled();
 
     consoleError.mockRestore();
+  });
+
+  it("退会中の同期がユーザーを再作成しない", async () => {
+    const deps = buildDeps();
+    deps.identity.users.set("auth0|user-a", { createdAtMs: 0 });
+
+    const response = await request(buildApp(deps));
+
+    expect(response.status).toBe(204);
+    await expect(
+      deps.identity.ensureUserAndDevice({
+        userId: "auth0|user-a",
+        clientId: "client-1",
+        nowMs: 100,
+      }),
+    ).rejects.toThrow("user deletion is in progress");
   });
 
   it("認証が無ければ何も消さない", async () => {

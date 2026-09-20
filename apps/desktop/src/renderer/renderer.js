@@ -108,7 +108,7 @@ const setAuthState = (hasRefreshToken) => {
 };
 
 login.onclick = async () => {
-  if (authView.loggingIn) return; // 入口で弾く。disabled は見た目でしかない。
+  if (authView.loggingIn || authView.loggingOut) return; // 入口で弾く。disabled は見た目でしかない。
   authView = { ...authView, loggingIn: true };
   login.disabled = true;
   renderAuthStatus();
@@ -131,6 +131,7 @@ logout.onclick = async () => {
   if (authView.loggingOut || authView.loggingIn) return;
   authView = { ...authView, loggingOut: true };
   logout.disabled = true;
+  login.disabled = true;
   renderAuthStatus();
   try {
     await window.desktop.logout();
@@ -142,6 +143,7 @@ logout.onclick = async () => {
     // 失敗しても必ず戻す。try の末尾に置くとボタンが固まったままになる。
     authView = { ...authView, loggingOut: false };
     logout.disabled = false;
+    login.disabled = false;
     renderAuthStatus();
   }
 };

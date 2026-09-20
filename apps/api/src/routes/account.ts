@@ -46,6 +46,9 @@ export function createAccountRoute(resolve: AccountDepsResolver) {
     // D1 → Auth0 の順序には反しない。
     const deps = resolve(c.env);
 
+    // 先に退会中マーカーを永続化する。同期が users 行を再作成できる窓を作らない。
+    await deps.identity.startUserDeletion(userId, Date.now());
+
     // D1 が先。`ON DELETE CASCADE` により learning_events / devices も消える。
     // ここが失敗したら Auth0 へは進まない（例外がそのまま上がる）。
     await deps.identity.deleteUser(userId);

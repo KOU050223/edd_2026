@@ -75,6 +75,28 @@ describe("performLogout", () => {
     expect(calls).not.toContain("revoke");
   });
 
+  it("clears the local token and notifies the renderer when reading fails", async () => {
+    const calls: string[] = [];
+    const errors: string[] = [];
+    const revoke = vi.fn(() => Promise.resolve());
+
+    await expect(
+      performLogout({
+        readRefreshToken: () => {
+          throw new Error("cannot decrypt refresh token");
+        },
+        clearRefreshToken: () => calls.push("clear"),
+        revoke,
+        notify: () => calls.push("notify"),
+        logError: (message) => errors.push(message),
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(calls).toEqual(["clear", "notify"]);
+    expect(revoke).not.toHaveBeenCalled();
+    expect(errors).toEqual(["failed to read the refresh token before local logout"]);
+  });
+
   it("revokes the token that was stored before it was cleared", async () => {
     // 破棄を先に行うので、撤回へ渡す値は読み出し済みのものでなければならない。
     // 破棄後に読み直す実装だと undefined を撤回しに行く。

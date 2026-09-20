@@ -35,7 +35,15 @@ export interface LogoutDeps {
  * に上限される。
  */
 export async function performLogout(deps: LogoutDeps): Promise<void> {
-  const refreshToken = deps.readRefreshToken();
+  let refreshToken: string | undefined;
+  try {
+    refreshToken = deps.readRefreshToken();
+  } catch (error) {
+    deps.logError("failed to read the refresh token before local logout", {
+      message: error instanceof Error ? error.message : String(error),
+      cause: error instanceof Error ? error.cause : undefined,
+    });
+  }
 
   // ローカルの破棄が先。撤回より前に、確実に終わらせる。
   deps.clearRefreshToken();

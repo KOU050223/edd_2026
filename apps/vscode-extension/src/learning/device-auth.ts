@@ -234,9 +234,14 @@ export class DeviceAuth {
    */
   async logout(): Promise<void> {
     // 破棄の前に読む。破棄してから読むと、撤回する対象が取れない。
-    const refreshToken = await this.enqueueStorageOperation(() =>
-      this.secrets.get(REFRESH_TOKEN_KEY),
-    );
+    let refreshToken: string | undefined;
+    try {
+      refreshToken = await this.enqueueStorageOperation(() => this.secrets.get(REFRESH_TOKEN_KEY));
+    } catch (error) {
+      console.error("failed to read the refresh token before local logout", {
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
 
     await this.clear();
 

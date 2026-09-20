@@ -52,6 +52,12 @@ export interface IdentityRepository {
   ensureUserAndDevice(params: { userId: string; clientId: string; nowMs: number }): Promise<void>;
 
   /**
+   * 退会中であることを永続化する。以後の書き込み経路はこの状態を見て拒否する。
+   * マーカーは Auth0 側の削除が失敗しても再実行できるよう残す。
+   */
+  startUserDeletion(userId: string, startedAtMs: number): Promise<void>;
+
+  /**
    * ユーザーと、それにぶら下がる全データを消す（退会）。
    *
    * `learning_events` と `devices` は `users(id)` を `ON DELETE CASCADE` で

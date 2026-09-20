@@ -402,3 +402,21 @@ test("保存された Refresh Token が無ければ撤回を空撃ちしない",
 
   expect(fetchMock).not.toHaveBeenCalled();
 });
+
+test("Refresh Token の読み取りに失敗してもローカル削除を試みる", async () => {
+  const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+  const storage = secrets({ "gakushuSochi.auth.refreshToken": "refresh-1" });
+  storage.get.mockRejectedValueOnce(new Error("cannot read secret"));
+  const fetchMock = vi.fn();
+  vi.stubGlobal("fetch", fetchMock);
+
+  await expect(new DeviceAuth(storage).logout()).resolves.toBeUndefined();
+
+  expect(storage.delete).toHaveBeenCalledWith("gakushuSochi.auth.refreshToken");
+  expect(fetchMock).not.toHaveBeenCalled();
+  expect(consoleError).toHaveBeenCalledWith(
+    "failed to read the refresh token before local logout",
+    expect.objectContaining({ message: "cannot read secret" }),
+  );
+  consoleError.mockRestore();
+});
