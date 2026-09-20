@@ -10,15 +10,18 @@ type ChatHandler = (
 
 const {
   activeTextEditor,
+  confirmSend,
   collectFromEditor,
   executeCommand,
   getConfiguration,
   getOrCreateClientId,
   loadProfile,
   participantHandlers,
+  readClipboard,
   recordEvent,
   registeredCommands,
   syncEvent,
+  outputChannel,
 } = vi.hoisted(() => ({
   activeTextEditor: {
     selection: {
@@ -28,25 +31,28 @@ const {
     },
     document: { uri: { toString: () => "file:///example.ts" } },
   },
+  confirmSend: vi.fn(),
   collectFromEditor: vi.fn(),
   executeCommand: vi.fn(),
   getConfiguration: vi.fn(),
   getOrCreateClientId: vi.fn(),
   loadProfile: vi.fn(),
   participantHandlers: [] as ChatHandler[],
+  readClipboard: vi.fn(),
   recordEvent: vi.fn(),
   registeredCommands: new Map<string, () => Promise<void>>(),
   syncEvent: vi.fn(),
+  outputChannel: {
+    appendLine: vi.fn(),
+    show: vi.fn(),
+    dispose: vi.fn(),
+  },
 }));
 
 vi.mock("vscode", () => ({
   window: {
     activeTextEditor,
-    createOutputChannel: vi.fn(() => ({
-      appendLine: vi.fn(),
-      show: vi.fn(),
-      dispose: vi.fn(),
-    })),
+    createOutputChannel: vi.fn(() => outputChannel),
     showErrorMessage: vi.fn(),
     showInformationMessage: vi.fn(),
   },
@@ -96,9 +102,11 @@ vi.mock("../context/collector", () => ({
 }));
 
 vi.mock("../context/clipboard", () => ({
-  readClipboard: vi.fn(),
+  readClipboard,
   readTerminalSelection: vi.fn(),
 }));
+
+vi.mock("../ui/confirm", () => ({ confirmSend }));
 
 vi.mock("../learning/store", () => ({
   getOrCreateClientId,
@@ -126,6 +134,23 @@ afterEach(() => {
   vi.clearAllMocks();
   registeredCommands.clear();
   participantHandlers.length = 0;
+});
+
+test("クリップボード本文を送信前に出力パネルへ表示しない", async () => {
+  readClipboard.mockResolvedValueOnce({ ok: true, text: "秘密のクリップボード本文" });
+  confirmSend.mockResolvedValueOnce(true);
+  executeCommand.mockResolvedValueOnce(undefined);
+  loadProfile.mockReturnValueOnce({ events: [], mastery: {} });
+
+  const context = { subscriptions: [] as unknown[] };
+  activate(context as never);
+
+  await registeredCommands.get("gakushuSochi.askClipboard")?.();
+
+  expect(outputChannel.appendLine).not.toHaveBeenCalledWith(
+    expect.stringContaining("秘密のクリップボード本文"),
+  );
+  expect(outputChannel.show).not.toHaveBeenCalled();
 });
 
 test("選択したコードの文脈をChatの質問から回答記録まで引き継ぐ", async () => {
