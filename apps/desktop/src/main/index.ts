@@ -13,6 +13,8 @@ import {
   Tray,
 } from "electron";
 import { execFile } from "node:child_process";
+import { createServer } from "node:http";
+import { randomBytes } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -33,11 +35,32 @@ import { normalizeQuestion } from "./question.js";
 import { shouldShowStartupWindow } from "./startup.js";
 import { activatePopup } from "./activation.js";
 import { isSafeExternalUrl } from "./external-link.js";
+import {
+  buildAuthorizationUrl,
+  createPkcePair,
+  exchangeAuthorizationCode,
+  parseCallbackUrl,
+  refreshAccessToken,
+  OAuthTokenError,
+  type OAuthConfig,
+} from "./oauth.js";
+import { describeApiFailure } from "./api-error.js";
 import { CONCEPTS } from "@gakushu-sochi/domain";
 
 const execFileAsync = promisify(execFile);
 const SERVICE_NAME = "Gakushu Sochi";
 const MAX_SELECTION_LENGTH = 20_000;
+const OAUTH_CONFIG: OAuthConfig = {
+  issuer: "https://gakushu-sochi.jp.auth0.com",
+  clientId: "r9zPMIsOS9qezfcLkDQq6HC423e0ui0x",
+  audience: "https://api.gakushu-sochi.dev",
+};
+const OAUTH_CALLBACK_TIMEOUT_MS = 5 * 60 * 1_000;
+// Auth0 の Allowed Callback URLs はポートにワイルドカードを使えない。ポート 0（OS 任せ）
+// にすると起動ごとに redirect_uri が変わり、毎回 "Callback URL mismatch" で弾かれる。
+// そのため固定する。この値を変えるときは Auth0 側の登録も同時に変えること。
+const OAUTH_CALLBACK_PORT = 53682;
+export const OAUTH_REDIRECT_URI = `http://127.0.0.1:${OAUTH_CALLBACK_PORT}/callback`;
 const ACCESSIBILITY_SETTINGS_URL =
   "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
 let popup: BrowserWindow | undefined;
@@ -95,8 +118,88 @@ function credentialStore(fileName: string) {
   );
 }
 
-function apiTokenStore() {
-  return credentialStore("api-token.enc");
+function refreshTokenStore() {
+  return credentialStore("refresh-token.enc");
+}
+
+async function loginWithBrowser(): Promise<void> {
+  const pkce = createPkcePair();
+  const state = randomState();
+  const callback = await waitForOAuthCallback(state);
+  try {
+    const redirectUri = callback.redirectUri;
+    const authorizationUrl = buildAuthorizationUrl(
+      OAUTH_CONFIG,
+      redirectUri,
+      state,
+      pkce.challenge,
+    );
+
+    await shell.openExternal(authorizationUrl);
+    const code = await callback.code;
+    const tokens = await exchangeAuthorizationCode(OAUTH_CONFIG, code, redirectUri, pkce.verifier);
+    refreshTokenStore().set(tokens.refreshToken);
+  } finally {
+    callback.close();
+  }
+}
+
+function randomState(): string {
+  return randomBytes(32).toString("base64url");
+}
+
+async function waitForOAuthCallback(
+  expectedState: string,
+): Promise<{ redirectUri: string; code: Promise<string>; close: () => void }> {
+  const server = createServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", (error: NodeJS.ErrnoException) => {
+      // 握りつぶして別ポートへ逃げない。逃げた先は Auth0 に登録されておらず、
+      // どのみち "Callback URL mismatch" になる（.agents/rules/rules.md RULE-004）。
+      reject(
+        error.code === "EADDRINUSE"
+          ? new Error(
+              `OAuth のコールバック待受ポート ${OAUTH_CALLBACK_PORT} が使用中です。` +
+                "このポートを使っているアプリを終了してから、もう一度ログインしてください。",
+              { cause: error },
+            )
+          : error,
+      );
+    });
+    server.listen(OAUTH_CALLBACK_PORT, "127.0.0.1", () => resolve());
+  });
+  const redirectUri = OAUTH_REDIRECT_URI;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const close = () => {
+    if (timer) clearTimeout(timer);
+    server.close();
+  };
+  const code = new Promise<string>((resolve, reject) => {
+    timer = setTimeout(() => {
+      close();
+      reject(new Error("OAuth ログインがタイムアウトしました。"));
+    }, OAUTH_CALLBACK_TIMEOUT_MS);
+    server.on("request", (request, response) => {
+      if (request.url?.split("?", 1)[0] !== "/callback") {
+        response.writeHead(404).end();
+        return;
+      }
+      const callbackUrl = `http://127.0.0.1:${OAUTH_CALLBACK_PORT}${request.url}`;
+      try {
+        const authorizationCode = parseCallbackUrl(callbackUrl, expectedState);
+        response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        response.end("<h1>ログインが完了しました</h1><p>この画面を閉じてください。</p>");
+        close();
+        resolve(authorizationCode);
+      } catch (error) {
+        response.writeHead(400, { "content-type": "text/plain; charset=utf-8" });
+        response.end(error instanceof Error ? error.message : "OAuth コールバックが不正です。");
+        close();
+        reject(error);
+      }
+    });
+  });
+  return { redirectUri, code, close };
 }
 
 async function readClipboardSnapshot(): Promise<ClipboardSnapshot> {
@@ -324,13 +427,39 @@ function createTray(): void {
   });
 }
 
+/**
+ * 保存済みの refresh token でアクセストークンを取り直す。
+ *
+ * 取り消し・期限切れの refresh token（RFC 6749 の `invalid_grant`）のときだけ
+ * 保存済みトークンを消す。ネットワーク障害やその他の OAuth エラーでは残す
+ * （消すと、復旧すれば使えたはずのトークンを捨てて再ログインを強いることになる）。
+ */
+async function refreshAccessTokenOrClearOnInvalidGrant(refreshToken: string) {
+  try {
+    return await refreshAccessToken(OAUTH_CONFIG, refreshToken);
+  } catch (error) {
+    if (error instanceof OAuthTokenError && error.code === "invalid_grant") {
+      refreshTokenStore().clear();
+      // 消したことを画面へ伝える。伝えないと設定を開き直すまで「ログイン済み」のままになる。
+      popup?.webContents.send("auth:state", { hasRefreshToken: false });
+      throw new Error("ログインの有効期限が切れました。設定から再ログインしてください。", {
+        cause: error,
+      });
+    }
+    throw error;
+  }
+}
+
 async function askManagedAI(
   selection: string,
   question: string,
   onDelta: (text: string) => void,
 ): Promise<void> {
-  const apiToken = apiTokenStore().get();
-  if (!apiToken) throw new Error("API トークンが未設定です。設定で入力してください。");
+  const refreshToken = refreshTokenStore().get();
+  if (!refreshToken) throw new Error("ログインが必要です。設定からログインしてください。");
+  const refreshed = await refreshAccessTokenOrClearOnInvalidGrant(refreshToken);
+  if (refreshed.refreshToken) refreshTokenStore().set(refreshed.refreshToken);
+  const apiToken = refreshed.accessToken;
   const response = await fetch(`${settings.apiBaseUrl.replace(/\/$/, "")}/v1/ai/responses`, {
     method: "POST",
     headers: { Authorization: `Bearer ${apiToken}`, "Content-Type": "application/json" },
@@ -345,10 +474,18 @@ async function askManagedAI(
       maxTokens: settings.maxTokens,
     }),
   });
-  if (!response.ok || !response.body)
-    throw new Error(
-      `API サービスへの接続に失敗しました (${response.status})。API URL・トークンとネットワークを確認してください。`,
-    );
+  if (!response.ok || !response.body) {
+    // サーバーが返した error を捨てない。捨てると鍵の未設定もネットワーク不通も
+    // 同じ文面になり、URL やトークンを疑わせる誤った誘導になる（RULE-004）。
+    let body: unknown;
+    try {
+      body = JSON.parse(await response.text());
+    } catch {
+      // 本文が JSON でないのは想定内。状態コードだけの文言へ落とす。
+      body = undefined;
+    }
+    throw new Error(describeApiFailure(response.status, body));
+  }
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let pending = "";
@@ -381,28 +518,25 @@ app
     registerShortcut(settings.shortcut);
     ipcMain.handle("settings:get", async () => ({
       ...settings,
-      hasApiToken: Boolean(apiTokenStore().get()),
+      hasRefreshToken: Boolean(refreshTokenStore().get()),
     }));
-    ipcMain.handle(
-      "settings:save",
-      async (_event, next: DesktopSettings & { apiToken?: string }) => {
-        const { apiToken, ...candidate } = next;
-        const valid = normalizeSettings(candidate);
-        if (
-          JSON.stringify(valid) === JSON.stringify(DEFAULT_SETTINGS) &&
-          JSON.stringify(candidate) !== JSON.stringify(DEFAULT_SETTINGS)
-        )
-          throw new Error("設定値が不正です。");
-        try {
-          registerShortcut(valid.shortcut);
-        } catch (error) {
-          registerShortcut(settings.shortcut);
-          throw error;
-        }
-        await saveSettings(valid);
-        if (apiToken) apiTokenStore().set(apiToken);
-      },
-    );
+    ipcMain.handle("settings:save", async (_event, next: DesktopSettings) => {
+      const candidate = next;
+      const valid = normalizeSettings(candidate);
+      if (
+        JSON.stringify(valid) === JSON.stringify(DEFAULT_SETTINGS) &&
+        JSON.stringify(candidate) !== JSON.stringify(DEFAULT_SETTINGS)
+      )
+        throw new Error("設定値が不正です。");
+      try {
+        registerShortcut(valid.shortcut);
+      } catch (error) {
+        registerShortcut(settings.shortcut);
+        throw error;
+      }
+      await saveSettings(valid);
+    });
+    ipcMain.handle("auth:login", loginWithBrowser);
     ipcMain.handle("selection:retry", openForSelection);
     ipcMain.handle("answer:ask", async (event, selection: string, question: string) => {
       if (!selection.trim()) throw new Error("選択テキストを取得できませんでした。");

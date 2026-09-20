@@ -270,7 +270,12 @@ public client + PKCE / Device Flow にする。Web の secret は `wrangler secr
 
 ブラウザは既定ブラウザを外部起動する。**埋め込み webview を使わない**
 （RFC 8252 が禁じている。アプリがユーザーの資格情報入力画面を覗ける）。
-リダイレクトは `http://127.0.0.1:<ランダムポート>/callback`。
+リダイレクトは `http://127.0.0.1:53682/callback`（固定）。
+**ポートを固定するのは Auth0 の Allowed Callback URLs がポートにワイルドカードを
+使えないため。** ランダムポートにすると起動ごとに redirect_uri が変わり、
+何を登録しても `Callback URL mismatch` で弾かれる。ポートを変えるときは
+Auth0 の Application 設定（Gakushu Sochi (Desktop)）の登録も同時に変えること。
+待受ポートが使用中のときは別ポートへ逃げず失敗させる（逃げた先は未登録で、どのみち弾かれる）。
 `state` を検証し、PKCE の `code_verifier` はメモリに持つ。
 **認可要求の `scope` に `offline_access` を含める**（含めないと Refresh Token が返らず、
 次行の保存対象が存在しなくなる）。`audience` に §5 の API identifier を指定する。

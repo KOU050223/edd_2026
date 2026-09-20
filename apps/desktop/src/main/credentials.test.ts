@@ -28,6 +28,28 @@ describe("credential store", () => {
     expect(credentials.get()).toBe("secret-key");
   });
 
+  it("clears the stored credential even when encryption is unavailable", () => {
+    let stored = "encrypted:secret-key";
+    const credentials = createCredentialStore(
+      {
+        isAvailable: () => false,
+        encrypt: (value) => `encrypted:${value}`,
+        decrypt: (value) => value.replace("encrypted:", ""),
+      },
+      {
+        read: () => stored,
+        write: (value) => {
+          stored = value;
+        },
+      },
+    );
+
+    credentials.clear();
+
+    expect(stored).toBe("");
+    expect(credentials.get()).toBeUndefined();
+  });
+
   it("fails clearly when secure storage is unavailable", () => {
     const credentials = createCredentialStore(
       { isAvailable: () => false, encrypt: () => "", decrypt: () => "" },

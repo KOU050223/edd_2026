@@ -3,6 +3,7 @@ import { contextBridge, ipcRenderer } from "electron";
 contextBridge.exposeInMainWorld("desktop", {
   getSettings: () => ipcRenderer.invoke("settings:get"),
   saveSettings: (settings: unknown) => ipcRenderer.invoke("settings:save", settings),
+  login: () => ipcRenderer.invoke("auth:login"),
   retrySelection: () => ipcRenderer.invoke("selection:retry"),
   ask: (selection: string, question: string) =>
     ipcRenderer.invoke("answer:ask", selection, question),
@@ -15,4 +16,6 @@ contextBridge.exposeInMainWorld("desktop", {
     ipcRenderer.on("selection", (_event, payload) => listener(payload)),
   onDelta: (listener: (delta: string) => void) =>
     ipcRenderer.on("answer:delta", (_event, delta) => listener(delta)),
+  onAuthState: (listener: (payload: { hasRefreshToken: boolean }) => void) =>
+    ipcRenderer.on("auth:state", (_event, payload) => listener(payload)),
 });
