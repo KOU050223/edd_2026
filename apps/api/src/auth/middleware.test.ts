@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import { Hono } from "hono";
-import { createAuth, devAuth, type AuthVariables } from "./middleware.js";
+import { createAuth, devAuth, requireAuth, type AuthVariables } from "./middleware.js";
 import { AuthVerificationError, type AuthFailureKind, type VerifiedToken } from "./verifier.js";
 
 /** テスト用に、認証を通したら userId をそのまま返すだけのアプリを組む。 */
@@ -176,6 +176,28 @@ test("検証器の組み立てで落ちても種別を保って500にする", as
       );
     }),
   );
+  app.get("/protected", (c) => c.json({ ok: true }));
+
+  const res = await app.request(
+    "/protected",
+    { headers: { Authorization: "Bearer any-token" } },
+    {} as CloudflareBindings,
+  );
+
+  expect(res.status).toBe(500);
+  expect(await res.text()).toContain("authentication is not configured");
+});
+
+test("AUTH_ISSUERとAUTH_AUDIENCEが未設定なら素通りさせず500にする", async () => {
+  // docs/auth.md §4 は「未設定なら 500 で落とす」と定めている。
+  // 「設定が無いから全員通す」は、設定漏れがそのまま認証の無効化になる。
+  //
+  // ここだけは `requireAuth`（本番の組み立て）を直接叩く。設定の欠落を見るのは
+  // `resolveVerifier` であり、注入した検証器では通らない経路だからである。
+  // 欠落の判定は検証器をモジュール水準のキャッシュへ入れる前に落ちるので、
+  // 他のテストへ影響しない。
+  const app = new Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>();
+  app.use("/protected", requireAuth);
   app.get("/protected", (c) => c.json({ ok: true }));
 
   const res = await app.request(

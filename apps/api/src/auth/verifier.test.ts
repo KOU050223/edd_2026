@@ -25,10 +25,9 @@
  * | 起動時: `jwks_uri` が許可ホスト   | 「jwks_uriが許可外のホスト…500」                 |
  * |                                   | 「jwks_uriがissuerと別のホスト…500」             |
  *
- * `AUTH_ISSUER` / `AUTH_AUDIENCE` 自体の欠落（→500）は `middleware.ts` の
- * `resolveVerifier` が判定する。そこはモジュール内部で、モジュール水準の検証器
- * キャッシュを経由しないと触れない。契約としては `middleware.test.ts` の
- * 「設定の欠落は500にする」（`configuration` → 500）が固定している。
+ * `AUTH_ISSUER` / `AUTH_AUDIENCE` 自体の欠落（§4「未設定なら 500 で落とす」）は
+ * `middleware.ts` の `resolveVerifier` が判定するため、`middleware.test.ts` の
+ * 「AUTH_ISSUERとAUTH_AUDIENCEが未設定なら素通りさせず500にする」が固定している。
  */
 
 import { expect, test } from "vitest";
@@ -442,18 +441,28 @@ test("取り込んだ鍵は使い回し、2回目はJWKSを取りに行かない
   expect(requested.length).toBe(afterFirst);
 });
 
-test("未知のkidを投げ続けても取得は繰り返さない", async () => {
+test("未知のkidを投げ続けても外向き通信は回数に比例して増えない", async () => {
   // 未知の `kid` を持つトークンを投げるだけで外向き通信を1リクエストずつ
   // 増やせてはならない（§4）。レート制限は認証の後段なのでここには効かない。
-  const { requested, verifier } = buildVerifier();
+  //
+  // 上限を定数で書くと、回数が減る側の退行（予算を使い切る前に諦める）を
+  // 見逃す。「試行を5倍にしても通信は増えない」という性質で押さえる。
+  const fetchCountFor = async (attempts: number) => {
+    const { requested, verifier } = buildVerifier();
+    for (let i = 0; i < attempts; i += 1) {
+      await expectRejection(
+        verifier.verify(await signJwt({ header: { kid: `unknown-${i}` } })),
+        "invalid_token",
+      );
+    }
+    return requested.length;
+  };
 
-  for (let i = 0; i < 20; i += 1) {
-    await expectRejection(
-      verifier.verify(await signJwt({ header: { kid: `unknown-${i}` } })),
-      "invalid_token",
-    );
-  }
+  const few = await fetchCountFor(4);
+  const many = await fetchCountFor(20);
 
-  // 窓あたりの予算（3回）と Discovery の取得だけで頭打ちになる。
-  expect(requested.length).toBeLessThanOrEqual(8);
+  expect(many).toBe(few);
+  // 内訳は Discovery の取得1回と、窓あたりの予算ぶんの JWKS 取得3回
+  // （JWKS_REFRESH_BUDGET_PER_WINDOW = 3）。予算を使い切った後は取りに行かない。
+  expect(few).toBe(4);
 });
