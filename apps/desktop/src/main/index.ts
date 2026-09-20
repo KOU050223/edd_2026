@@ -44,6 +44,7 @@ import {
   OAuthTokenError,
   type OAuthConfig,
 } from "./oauth.js";
+import { describeApiFailure } from "./api-error.js";
 import { CONCEPTS } from "@gakushu-sochi/domain";
 
 const execFileAsync = promisify(execFile);
@@ -473,10 +474,18 @@ async function askManagedAI(
       maxTokens: settings.maxTokens,
     }),
   });
-  if (!response.ok || !response.body)
-    throw new Error(
-      `API サービスへの接続に失敗しました (${response.status})。API URL・トークンとネットワークを確認してください。`,
-    );
+  if (!response.ok || !response.body) {
+    // サーバーが返した error を捨てない。捨てると鍵の未設定もネットワーク不通も
+    // 同じ文面になり、URL やトークンを疑わせる誤った誘導になる（RULE-004）。
+    let body: unknown;
+    try {
+      body = JSON.parse(await response.text());
+    } catch {
+      // 本文が JSON でないのは想定内。状態コードだけの文言へ落とす。
+      body = undefined;
+    }
+    throw new Error(describeApiFailure(response.status, body));
+  }
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let pending = "";
