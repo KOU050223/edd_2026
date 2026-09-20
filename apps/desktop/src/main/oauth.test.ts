@@ -6,6 +6,7 @@ import {
   exchangeAuthorizationCode,
   parseCallbackUrl,
   refreshAccessToken,
+  OAuthTokenError,
   type OAuthConfig,
 } from "./oauth.js";
 
@@ -111,5 +112,62 @@ describe("OAuth authorization code flow", () => {
       accessToken: "new-access",
       refreshToken: "rotated-refresh",
     });
+  });
+
+  it("exposes invalid_grant as a machine-readable code", async () => {
+    const fetchMock = vi.fn<typeof fetch>(
+      async () =>
+        new Response(
+          JSON.stringify({
+            error: "invalid_grant",
+            error_description: "Unknown or invalid refresh token.",
+          }),
+          { status: 403 },
+        ),
+    );
+
+    const error = await refreshAccessToken(config, "revoked-refresh", fetchMock).catch(
+      (thrown: unknown) => thrown,
+    );
+
+    expect(error).toBeInstanceOf(OAuthTokenError);
+    expect((error as OAuthTokenError).code).toBe("invalid_grant");
+    expect((error as OAuthTokenError).status).toBe(403);
+    expect((error as OAuthTokenError).message).toContain("Unknown or invalid refresh token.");
+  });
+
+  it("keeps a transient server error distinguishable from invalid_grant", async () => {
+    const fetchMock = vi.fn<typeof fetch>(
+      async () => new Response(JSON.stringify({ error: "server_error" }), { status: 500 }),
+    );
+
+    const error = await refreshAccessToken(config, "stored-refresh", fetchMock).catch(
+      (thrown: unknown) => thrown,
+    );
+
+    expect(error).toBeInstanceOf(OAuthTokenError);
+    expect((error as OAuthTokenError).code).toBe("server_error");
+  });
+
+  it("does not report a parse failure as an OAuth error code", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response("not-json", { status: 200 }));
+
+    const error = await refreshAccessToken(config, "stored-refresh", fetchMock).catch(
+      (thrown: unknown) => thrown,
+    );
+
+    expect(error).not.toBeInstanceOf(OAuthTokenError);
+  });
+
+  it("does not report a network failure as an OAuth error code", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => {
+      throw new Error("network down");
+    });
+
+    const error = await refreshAccessToken(config, "stored-refresh", fetchMock).catch(
+      (thrown: unknown) => thrown,
+    );
+
+    expect(error).not.toBeInstanceOf(OAuthTokenError);
   });
 });

@@ -41,6 +41,7 @@ import {
   exchangeAuthorizationCode,
   parseCallbackUrl,
   refreshAccessToken,
+  OAuthTokenError,
   type OAuthConfig,
 } from "./oauth.js";
 import { CONCEPTS } from "@gakushu-sochi/domain";
@@ -413,6 +414,27 @@ function createTray(): void {
   });
 }
 
+/**
+ * 保存済みの refresh token でアクセストークンを取り直す。
+ *
+ * 取り消し・期限切れの refresh token（RFC 6749 の `invalid_grant`）のときだけ
+ * 保存済みトークンを消す。ネットワーク障害やその他の OAuth エラーでは残す
+ * （消すと、復旧すれば使えたはずのトークンを捨てて再ログインを強いることになる）。
+ */
+async function refreshAccessTokenOrClearOnInvalidGrant(refreshToken: string) {
+  try {
+    return await refreshAccessToken(OAUTH_CONFIG, refreshToken);
+  } catch (error) {
+    if (error instanceof OAuthTokenError && error.code === "invalid_grant") {
+      refreshTokenStore().clear();
+      throw new Error("ログインの有効期限が切れました。設定から再ログインしてください。", {
+        cause: error,
+      });
+    }
+    throw error;
+  }
+}
+
 async function askManagedAI(
   selection: string,
   question: string,
@@ -420,7 +442,7 @@ async function askManagedAI(
 ): Promise<void> {
   const refreshToken = refreshTokenStore().get();
   if (!refreshToken) throw new Error("ログインが必要です。設定からログインしてください。");
-  const refreshed = await refreshAccessToken(OAUTH_CONFIG, refreshToken);
+  const refreshed = await refreshAccessTokenOrClearOnInvalidGrant(refreshToken);
   if (refreshed.refreshToken) refreshTokenStore().set(refreshed.refreshToken);
   const apiToken = refreshed.accessToken;
   const response = await fetch(`${settings.apiBaseUrl.replace(/\/$/, "")}/v1/ai/responses`, {

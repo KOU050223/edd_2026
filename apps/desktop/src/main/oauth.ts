@@ -13,6 +13,24 @@ interface OAuthTokenResponse {
   refresh_token?: unknown;
 }
 
+/**
+ * OAuth トークンエンドポイントが返したエラー。
+ *
+ * RFC 6749 の `error` コードを保持する。呼び出し側はメッセージ文字列ではなく
+ * `code` で分類すること（無効・期限切れ・取り消し済みの refresh token は `invalid_grant`）。
+ */
+export class OAuthTokenError extends Error {
+  readonly code: string | undefined;
+  readonly status: number;
+
+  constructor(message: string, options: { code?: string; status: number; cause?: unknown }) {
+    super(message, options.cause === undefined ? undefined : { cause: options.cause });
+    this.name = "OAuthTokenError";
+    this.code = options.code;
+    this.status = options.status;
+  }
+}
+
 export interface PkcePair {
   verifier: string;
   challenge: string;
@@ -137,7 +155,10 @@ async function requestToken(
   }
   if (!response.ok) {
     const detail = getErrorDescription(body);
-    throw new Error(`OAuth トークン取得に失敗しました (${response.status}): ${detail}`);
+    throw new OAuthTokenError(`OAuth トークン取得に失敗しました (${response.status}): ${detail}`, {
+      code: getErrorCode(body),
+      status: response.status,
+    });
   }
   if (typeof body !== "object" || body === null) {
     throw new Error("OAuth トークン応答の形式が不正です。");
@@ -150,6 +171,12 @@ function readString(value: unknown, name: string): string {
     throw new Error(`OAuth トークン応答に ${name} がありません。`);
   }
   return value;
+}
+
+function getErrorCode(body: unknown): string | undefined {
+  if (typeof body !== "object" || body === null) return undefined;
+  const code = (body as { error?: unknown }).error;
+  return typeof code === "string" && code.length > 0 ? code : undefined;
 }
 
 function getErrorDescription(body: unknown): string {

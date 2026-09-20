@@ -22,5 +22,9 @@ export function createCredentialStore(crypto: CredentialCrypto, storage: Credent
         );
       storage.write(crypto.encrypt(value));
     },
+    clear(): void {
+      // 暗号化を経由しないので、safeStorage が使えない状況でも消せる。
+      storage.write("");
+    },
   };
 }
