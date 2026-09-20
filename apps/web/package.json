@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "npm run build && concurrently --kill-others-on-fail --names client,worker \"vite build --watch\" \"wrangler dev --port 8788\"",
     "build": "tsc -p tsconfig.json && vite build",
-    "deploy": "npm run build && wrangler deploy",
+    "deploy": "npm run compile --workspace=@gakushu-sochi/domain && npm run build && wrangler deploy",
     "compile": "tsc -p tsconfig.json",
     "lint": "eslint src",
     "test:unit": "vitest run src",

@@ -66,7 +66,10 @@ test("main の CI 成功後に API を同じコミットへ紐づけてデプロ
 });
 
 test("main の CI 成功後に Web を同じコミットへ紐づけてデプロイする", () => {
-  assert.equal(webPackageJson.scripts.deploy, "npm run build && wrangler deploy");
+  assert.equal(
+    webPackageJson.scripts.deploy,
+    "npm run compile --workspace=@gakushu-sochi/domain && npm run build && wrangler deploy",
+  );
   assert.match(ci, /deploy-web:\n\s+name: Deploy Web Worker/);
   assert.match(ci, /deploy-web:[\s\S]*needs: verify/);
   assert.match(ci, /deploy-web:[\s\S]*github\.event_name == 'push'/);
