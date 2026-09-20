@@ -37,20 +37,54 @@ function presetInstruction(request: AIRequest): string[] {
 }
 
 /**
+ * 利用者が実際に書いた質問を取り出す。空白だけのものは質問と見なさない。
+ *
+ * `extension.ts` は `[context:...]` を取り除いた残り全部を `question` に渡すため、
+ * 利用者が文脈だけを送った場合でも改行や空白が残る。これを質問として扱うと、
+ * 中身の無い「質問」が preset より優先されてしまう。
+ */
+function userQuestionOf(request: AIRequest): string | undefined {
+  const question = request.question?.trim();
+  return question ? question : undefined;
+}
+
+/**
  * AIRequest を、VS Code Language Model に送る単一のユーザープロンプトへ変換する。
  *
  * Prompt はプロダクトの学習方針そのものなので、このディレクトリだけを編集すれば
  * 方針・preset・文脈の渡し方をレビューできるようにする。
  */
 export function buildPrompt(request: AIRequest): string {
-  const lines = [
-    SYSTEM_PROMPT,
-    "",
-    ...presetInstruction(request),
-    "",
-    "--- 選択箇所 ---",
-    request.context.code,
-  ];
+  const question = userQuestionOf(request);
+
+  // 利用者が質問を書いたなら、それを preset の前に置く。preset を先頭に置くと
+  // 「コードを解説せよ」という強い指示が先に立ち、質問が他の付加情報と同列に
+  // 埋もれて無視されることがある（#50）。質問が無いときの並びは変えない。
+  const lines = question
+    ? [
+        SYSTEM_PROMPT,
+        "",
+        "--- 質問 ---",
+        question,
+        "",
+        "--- 最優先の指示 ---",
+        "上の「質問」が利用者の本当の要求です。まずこの質問に答えてください。",
+        "以下の指示と文脈は、その回答を組み立てるための補足です。質問より優先しないでください。",
+        "質問が選択コードの解説を求めていないなら、解説を返さず、質問されたことに答えてください。",
+        "",
+        ...presetInstruction(request),
+        "",
+        "--- 選択箇所 ---",
+        request.context.code,
+      ]
+    : [
+        SYSTEM_PROMPT,
+        "",
+        ...presetInstruction(request),
+        "",
+        "--- 選択箇所 ---",
+        request.context.code,
+      ];
 
   if (request.context.contextLevel === 1) {
     lines.push(
@@ -75,10 +109,6 @@ export function buildPrompt(request: AIRequest): string {
 
   if (request.diagnostics && request.diagnostics.length > 0) {
     lines.push("", "--- 関連するエラー ---", ...request.diagnostics);
-  }
-
-  if (request.question) {
-    lines.push("", "--- 質問 ---", request.question);
   }
 
   const knownConcepts = request.context.languageId

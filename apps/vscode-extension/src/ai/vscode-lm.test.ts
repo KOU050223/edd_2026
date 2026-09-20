@@ -136,3 +136,69 @@ test("languageIdが無ければConcept一覧を含めない", async () => {
   // フォールバック文言自体に同じ語が含まれるため、見出し（--- 付き）で区別する。
   expect(prompt).not.toContain("--- 既知の概念一覧");
 });
+
+/** family 指定に一致するモデルを1つだけ返す selectChatModels を仕込む。 */
+function mockSingleModel() {
+  const sendRequest = vi.fn().mockResolvedValue(responseOf("回答"));
+  selectChatModels.mockResolvedValueOnce([
+    { id: "gpt-4o-mini", family: "gpt-4o-mini", sendRequest },
+  ]);
+  return sendRequest;
+}
+
+test("利用者の質問は、固定の解説指示より前に置かれる", async () => {
+  const sendRequest = mockSingleModel();
+
+  await new VSCodeLMProvider().ask({
+    mode: "explain",
+    question: "これを読み込んでいた場合テストと言って",
+    context: {
+      code: "const total = items.reduce((sum, item) => sum + item.price, 0);",
+      source: "editor",
+      contextLevel: 2,
+      surroundingCode: "const items = cart.items;",
+      languageId: "typescript",
+    },
+  });
+
+  const messages = sendRequest.mock.calls[0]?.[0] as { text: string }[];
+  const prompt = messages.at(-1)?.text ?? "";
+
+  const questionIndex = prompt.indexOf("これを読み込んでいた場合テストと言って");
+  const presetIndex = prompt.indexOf("### Explain");
+
+  expect(questionIndex).toBeGreaterThanOrEqual(0);
+  expect(presetIndex).toBeGreaterThanOrEqual(0);
+  // 「質問が優先される」は位置でしか機械的に確かめられない。
+  // 固定の解説指示が先頭にあった頃（#50）は、この比較が逆になる。
+  expect(questionIndex).toBeLessThan(presetIndex);
+  expect(prompt).toContain("--- 最優先の指示 ---");
+
+  // 先頭へ移したぶん、質問が二重に現れていないこと。
+  expect(prompt.split("--- 質問 ---")).toHaveLength(2);
+});
+
+test("質問が空白だけなら、解説指示を押しのけない", async () => {
+  const sendRequest = mockSingleModel();
+
+  await new VSCodeLMProvider().ask({
+    mode: "explain",
+    // extension.ts は [context:...] を取り除いた残りをそのまま渡すため、
+    // 文脈だけを送ると空白や改行が question に残る。
+    question: " \n ",
+    context: {
+      code: "const answer = 42;",
+      source: "editor",
+      contextLevel: 2,
+      surroundingCode: "const answer = 42;",
+      languageId: "typescript",
+    },
+  });
+
+  const messages = sendRequest.mock.calls[0]?.[0] as { text: string }[];
+  const prompt = messages.at(-1)?.text ?? "";
+
+  expect(prompt).not.toContain("--- 質問 ---");
+  expect(prompt).not.toContain("--- 最優先の指示 ---");
+  expect(prompt).toContain("### Explain");
+});
