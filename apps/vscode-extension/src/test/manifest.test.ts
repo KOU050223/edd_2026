@@ -48,3 +48,21 @@ test("APIの送信先設定をワークスペースから上書きできない",
     "machine",
   );
 });
+
+test("同意の確認と取り消しを利用者がコマンドから行える", () => {
+  expect(manifest.contributes.commands).toEqual(
+    expect.arrayContaining([
+      { command: "gakushuSochi.reviewConsent", title: "Gakushu Sochi: 送信内容の同意を確認する" },
+      { command: "gakushuSochi.revokeConsent", title: "Gakushu Sochi: 送信内容の同意を取り消す" },
+    ]),
+  );
+});
+
+test("同意の状態をワークスペース設定から書き換えられない", () => {
+  // 同意は globalState にしか置かない。設定項目として生やすと、開いたリポジトリの
+  // .vscode/settings.json が同意を偽装できてしまう（RULE-006）。
+  const consentSettings = Object.keys(manifest.contributes.configuration.properties).filter((key) =>
+    key.toLowerCase().includes("consent"),
+  );
+  expect(consentSettings).toEqual([]);
+});

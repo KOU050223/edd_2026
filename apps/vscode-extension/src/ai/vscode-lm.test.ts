@@ -61,7 +61,7 @@ test("モデル選択に失敗したときは例外ではなく失敗応答を�
 test("languageIdに一致するConceptの一覧をプロンプトに含める", async () => {
   const sendRequest = vi.fn().mockResolvedValue(responseOf("説明文"));
   selectChatModels.mockResolvedValueOnce([
-    { id: "gpt-4o-mini", family: "gpt-4o-mini", sendRequest },
+    { id: "gpt-4o-mini", family: "gpt-4o-mini", vendor: "copilot", sendRequest },
   ]);
 
   await new VSCodeLMProvider().ask({
@@ -91,7 +91,7 @@ test.each(["typescript", "javascript"])(
   async (languageId) => {
     const sendRequest = vi.fn().mockResolvedValue(responseOf("説明文"));
     selectChatModels.mockResolvedValueOnce([
-      { id: "gpt-4o-mini", family: "gpt-4o-mini", sendRequest },
+      { id: "gpt-4o-mini", family: "gpt-4o-mini", vendor: "copilot", sendRequest },
     ]);
 
     await new VSCodeLMProvider().ask({
@@ -116,7 +116,7 @@ test.each(["typescript", "javascript"])(
 test("languageIdが無ければConcept一覧を含めない", async () => {
   const sendRequest = vi.fn().mockResolvedValue(responseOf("説明文"));
   selectChatModels.mockResolvedValueOnce([
-    { id: "gpt-4o-mini", family: "gpt-4o-mini", sendRequest },
+    { id: "gpt-4o-mini", family: "gpt-4o-mini", vendor: "copilot", sendRequest },
   ]);
 
   await new VSCodeLMProvider().ask({
@@ -141,7 +141,7 @@ test("languageIdが無ければConcept一覧を含めない", async () => {
 function mockSingleModel() {
   const sendRequest = vi.fn().mockResolvedValue(responseOf("回答"));
   selectChatModels.mockResolvedValueOnce([
-    { id: "gpt-4o-mini", family: "gpt-4o-mini", sendRequest },
+    { id: "gpt-4o-mini", family: "gpt-4o-mini", vendor: "copilot", sendRequest },
   ]);
   return sendRequest;
 }
@@ -201,4 +201,46 @@ test("質問が空白だけなら、解説指示を押しのけない", async ()
   expect(prompt).not.toContain("--- 質問 ---");
   expect(prompt).not.toContain("--- 最優先の指示 ---");
   expect(prompt).toContain("### Explain");
+});
+
+test("モデル選択をCopilotに限定する", async () => {
+  const sendRequest = mockSingleModel();
+
+  await new VSCodeLMProvider().ask({
+    mode: "hint",
+    context: {
+      code: "const answer = 42;",
+      source: "editor",
+      contextLevel: 2,
+      surroundingCode: "const answer = 42;",
+    },
+  });
+
+  expect(selectChatModels).toHaveBeenLastCalledWith({ vendor: "copilot" });
+  expect(sendRequest).toHaveBeenCalled();
+});
+
+test("モデル選択後に同意が取り消されたらsendRequestしない", async () => {
+  const sendRequest = vi.fn().mockResolvedValue(responseOf("回答"));
+  let canSend = true;
+  selectChatModels.mockImplementationOnce(async () => {
+    canSend = false;
+    return [{ id: "gpt-4o-mini", family: "gpt-4o-mini", vendor: "copilot", sendRequest }];
+  });
+
+  const response = await new VSCodeLMProvider(undefined, () => canSend).ask({
+    mode: "hint",
+    context: {
+      code: "const answer = 42;",
+      source: "editor",
+      contextLevel: 2,
+      surroundingCode: "const answer = 42;",
+    },
+  });
+  // 実際の競合は selectChatModels の解決後、sendRequest 前に起こる。
+  expect(response).toEqual({
+    ok: false,
+    error: { reason: "consent-denied", detail: "送信の同意が取り消されました。" },
+  });
+  expect(sendRequest).not.toHaveBeenCalled();
 });
