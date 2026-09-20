@@ -167,6 +167,7 @@ export function createWebApp(
       method: c.req.method,
       headers,
       body: c.req.raw.body,
+      redirect: "error",
     });
     const responseHeaders = new Headers(upstream.headers);
     responseHeaders.set("cache-control", "no-store");
