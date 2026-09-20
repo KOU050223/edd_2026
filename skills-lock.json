@@ -15,7 +15,7 @@
     "task-manager": {
       "source": "./.agents/skills/task-manager",
       "sourceType": "local",
-      "computedHash": "aaea202ca381b8b23e4dcd784bb7732bb47a6cb7109ad32e45a4b720ff336f4c"
+      "computedHash": "200e01fe1ada429203a2023760a8e1eb507384d1771e77e459476dc07b54462a"
     }
   }
 }
