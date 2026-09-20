@@ -106,8 +106,7 @@ test("同時に要求されたトークン更新は1回だけ実行する", asyn
   const auth = new DeviceAuth(storage);
   const first = auth.getAccessToken();
   const second = auth.getAccessToken();
-  await Promise.resolve();
-  expect(fetchMock).toHaveBeenCalledTimes(1);
+  await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
 
   resolveFetch?.(
     new Response(
@@ -115,6 +114,217 @@ test("同時に要求されたトークン更新は1回だけ実行する", asyn
     ),
   );
   await expect(Promise.all([first, second])).resolves.toEqual(["access-shared", "access-shared"]);
+});
+
+test("新しいログインは進行中の古いトークン更新に上書きされない", async () => {
+  const storage = secrets({ "gakushuSochi.auth.refreshToken": "refresh-old" });
+  let resolveRefresh: ((response: Response) => void) | undefined;
+  const refreshResponse = new Promise<Response>((resolve) => {
+    resolveRefresh = resolve;
+  });
+  const fetchMock = vi
+    .fn()
+    .mockReturnValueOnce(refreshResponse)
+    .mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          device_code: "device-1",
+          user_code: "ABCD-EFGH",
+          verification_uri: "https://example.com/activate",
+          expires_in: 600,
+          interval: 1,
+        }),
+      ),
+    )
+    .mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          access_token: "access-login",
+          token_type: "Bearer",
+          expires_in: 900,
+          refresh_token: "refresh-login",
+        }),
+      ),
+    );
+  vi.stubGlobal("fetch", fetchMock);
+
+  const auth = new DeviceAuth(storage, { sleep: async () => undefined });
+  const refreshing = auth.getAccessToken();
+  await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+  const loggingIn = auth.login();
+  await loggingIn;
+
+  resolveRefresh?.(
+    new Response(
+      JSON.stringify({
+        access_token: "access-old-refresh",
+        token_type: "Bearer",
+        expires_in: 900,
+        refresh_token: "refresh-old-refresh",
+      }),
+    ),
+  );
+
+  await expect(refreshing).rejects.toThrow("再ログインが必要です");
+  await expect(storage.get("gakushuSochi.auth.refreshToken")).resolves.toBe("refresh-login");
+});
+
+test("ログアウト中に完了したトークン更新は認証状態を書き戻さない", async () => {
+  const storage = secrets({ "gakushuSochi.auth.refreshToken": "refresh-old" });
+  let resolveRefresh: ((response: Response) => void) | undefined;
+  const refreshPromise = new Promise<Response>((resolve) => {
+    resolveRefresh = resolve;
+  });
+  const fetchMock = vi
+    .fn()
+    .mockReturnValueOnce(refreshPromise)
+    .mockResolvedValueOnce(new Response(null, { status: 200 }));
+  vi.stubGlobal("fetch", fetchMock);
+
+  const auth = new DeviceAuth(storage);
+  const refreshing = auth.getAccessToken();
+  await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+  await auth.logout();
+  resolveRefresh?.(
+    new Response(
+      JSON.stringify({
+        access_token: "access-after-logout",
+        token_type: "Bearer",
+        expires_in: 900,
+        refresh_token: "refresh-after-logout",
+      }),
+    ),
+  );
+
+  await expect(refreshing).rejects.toThrow("再ログインが必要です");
+  await expect(storage.get("gakushuSochi.auth.refreshToken")).resolves.toBeUndefined();
+  await expect(auth.getAccessToken()).rejects.toThrow("再ログインが必要です");
+});
+
+test("Refresh Token の保存中にログアウトしたら削除を保存完了後に行う", async () => {
+  let stored: string | undefined = "refresh-old";
+  let resolveStore: (() => void) | undefined;
+  const storeStarted = new Promise<void>((resolve) => {
+    resolveStore = resolve;
+  });
+  let resolveStoreCompletion: (() => void) | undefined;
+  const storeCompletion = new Promise<void>((resolve) => {
+    resolveStoreCompletion = resolve;
+  });
+  const storage = {
+    get: vi.fn(async () => stored),
+    store: vi.fn(async (_key: string, value: string) => {
+      resolveStore?.();
+      await storeCompletion;
+      stored = value;
+    }),
+    delete: vi.fn(async () => {
+      stored = undefined;
+    }),
+  };
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            access_token: "access-2",
+            token_type: "Bearer",
+            expires_in: 900,
+            refresh_token: "refresh-new",
+          }),
+        ),
+    ),
+  );
+
+  const auth = new DeviceAuth(storage);
+  const refreshing = auth.getAccessToken();
+  await storeStarted;
+  const clearing = auth.clear();
+  resolveStoreCompletion?.();
+
+  await expect(refreshing).rejects.toThrow("再ログインが必要です");
+  await clearing;
+  expect(stored).toBeUndefined();
+});
+
+test("ログアウトによる削除中に始まった更新は削除完了後に保存先を読む", async () => {
+  let stored: string | undefined = "refresh-old";
+  let resolveDelete: (() => void) | undefined;
+  const deleteCompletion = new Promise<void>((resolve) => {
+    resolveDelete = resolve;
+  });
+  const storage = {
+    get: vi.fn(async () => stored),
+    store: vi.fn(async (_key: string, value: string) => {
+      stored = value;
+    }),
+    delete: vi.fn(async () => {
+      await deleteCompletion;
+      stored = undefined;
+    }),
+  };
+  const fetchMock = vi.fn(
+    async () =>
+      new Response(
+        JSON.stringify({ access_token: "access-2", token_type: "Bearer", expires_in: 900 }),
+      ),
+  );
+  vi.stubGlobal("fetch", fetchMock);
+
+  const auth = new DeviceAuth(storage);
+  const clearing = auth.clear();
+  const refreshing = auth.getAccessToken();
+  await Promise.resolve();
+
+  expect(storage.get).not.toHaveBeenCalled();
+  resolveDelete?.();
+  await clearing;
+  await expect(refreshing).rejects.toThrow("再ログインが必要です");
+  expect(fetchMock).not.toHaveBeenCalled();
+});
+
+test("ログアウト中に完了したログインは認証状態を書き戻さない", async () => {
+  const storage = secrets();
+  let resolveToken: ((response: Response) => void) | undefined;
+  const tokenResponse = new Promise<Response>((resolve) => {
+    resolveToken = resolve;
+  });
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          device_code: "device-1",
+          user_code: "ABCD-EFGH",
+          verification_uri: "https://example.com/activate",
+          expires_in: 600,
+          interval: 1,
+        }),
+      ),
+    )
+    .mockReturnValueOnce(tokenResponse);
+  vi.stubGlobal("fetch", fetchMock);
+
+  const auth = new DeviceAuth(storage, { sleep: async () => undefined });
+  const loggingIn = auth.login();
+  await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+
+  await auth.logout();
+  resolveToken?.(
+    new Response(
+      JSON.stringify({
+        access_token: "access-after-logout",
+        token_type: "Bearer",
+        expires_in: 900,
+        refresh_token: "refresh-after-logout",
+      }),
+    ),
+  );
+
+  await expect(loggingIn).rejects.toThrow("再ログインが必要です");
+  await expect(storage.get("gakushuSochi.auth.refreshToken")).resolves.toBeUndefined();
 });
 
 test("intervalが正の有限値でなければDevice Flowを開始しない", async () => {

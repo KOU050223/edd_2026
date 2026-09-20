@@ -107,6 +107,8 @@ export interface DeviceAuthOptions {
 export class DeviceAuth {
   private accessToken: { value: string; expiresAt: number } | undefined;
   private refreshPromise: Promise<string> | undefined;
+  private authGeneration = 0;
+  private storageOperation: Promise<void> = Promise.resolve();
   private readonly sleep: (milliseconds: number) => Promise<void>;
 
   constructor(
@@ -117,6 +119,9 @@ export class DeviceAuth {
   }
 
   async login(): Promise<void> {
+    this.authGeneration += 1;
+    this.refreshPromise = undefined;
+    const generation = this.authGeneration;
     const device = await this.requestDeviceCode();
     const opened = await vscode.env.openExternal(
       vscode.Uri.parse(device.verification_uri_complete ?? device.verification_uri),
@@ -124,8 +129,13 @@ export class DeviceAuth {
     if (!opened) throw new DeviceAuthError("ブラウザで認証ページを開けませんでした");
     void vscode.window.showInformationMessage(`Gakushu Sochi の認証コード: ${device.user_code}`);
     const token = await this.pollToken(device);
-    this.saveToken(token);
-    await this.storeRefreshToken(token);
+    await this.enqueueStorageOperation(async () => {
+      this.assertAuthGeneration(generation);
+      this.saveToken(token);
+      this.assertAuthGeneration(generation);
+      await this.storeRefreshToken(token);
+      this.assertAuthGeneration(generation);
+    });
   }
 
   async getAccessToken(): Promise<string> {
@@ -144,8 +154,12 @@ export class DeviceAuth {
   }
 
   private async refreshAccessToken(): Promise<string> {
-    const refreshToken = await this.secrets.get(REFRESH_TOKEN_KEY);
+    const generation = this.authGeneration;
+    const refreshToken = await this.enqueueStorageOperation(() =>
+      this.secrets.get(REFRESH_TOKEN_KEY),
+    );
     if (!refreshToken) throw new DeviceAuthError("再ログインが必要です");
+    this.assertAuthGeneration(generation);
 
     let response: Response;
     try {
@@ -172,14 +186,36 @@ export class DeviceAuth {
       throw new DeviceAuthError(`トークン更新に失敗しました: ${this.oauthError(body)}`);
     }
     const token = parseToken(body);
-    this.saveToken(token);
-    await this.storeRefreshToken(token);
+    await this.enqueueStorageOperation(async () => {
+      this.assertAuthGeneration(generation);
+      this.saveToken(token);
+      this.assertAuthGeneration(generation);
+      await this.storeRefreshToken(token);
+      this.assertAuthGeneration(generation);
+    });
     return token.access_token;
   }
 
   async clear(): Promise<void> {
+    this.authGeneration += 1;
+    this.refreshPromise = undefined;
     this.accessToken = undefined;
-    await this.secrets.delete(REFRESH_TOKEN_KEY);
+    await this.enqueueStorageOperation(() => this.secrets.delete(REFRESH_TOKEN_KEY));
+  }
+
+  private assertAuthGeneration(generation: number): void {
+    if (generation !== this.authGeneration) {
+      throw new DeviceAuthError("再ログインが必要です");
+    }
+  }
+
+  private async enqueueStorageOperation<T>(operation: () => PromiseLike<T>): Promise<T> {
+    const queued = this.storageOperation.then(() => Promise.resolve(operation()));
+    this.storageOperation = queued.then(
+      () => undefined,
+      () => undefined,
+    );
+    return queued;
   }
 
   /**
@@ -198,7 +234,9 @@ export class DeviceAuth {
    */
   async logout(): Promise<void> {
     // 破棄の前に読む。破棄してから読むと、撤回する対象が取れない。
-    const refreshToken = await this.secrets.get(REFRESH_TOKEN_KEY);
+    const refreshToken = await this.enqueueStorageOperation(() =>
+      this.secrets.get(REFRESH_TOKEN_KEY),
+    );
 
     await this.clear();
 
