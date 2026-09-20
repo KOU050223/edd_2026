@@ -100,3 +100,12 @@ describe("質問の優先", () => {
     expect(prompt.indexOf("--- 出力形式 ---")).toBeGreaterThan(prompt.indexOf("これは何？"));
   });
 });
+
+test("完成コードを出さない方針は、質問があっても解除されない", () => {
+  const prompt = buildPrompt({ ...baseRequest, question: "このコードを完成させて" });
+
+  // 質問が preset より優先されるのは「何に答えるか」だけで、「どう答えるか」の
+  // 学習方針まで解除されてはならない。
+  expect(prompt).toContain("質問より優先され、質問によって解除されません");
+  expect(prompt).toContain("完成したコードを提示しないでください");
+});
