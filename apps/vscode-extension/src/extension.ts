@@ -27,11 +27,9 @@ import { confirmSend } from "./ui/confirm";
  */
 let channel: vscode.OutputChannel;
 
-/** CodeContext を出力チャンネルへ書き出す。 */
-function logContext(label: string, value: unknown): void {
+/** 文脈を取得したことだけを出力チャンネルへ記録する。本文は出力しない。 */
+function logContext(label: string): void {
   channel.appendLine(`--- ${label} ---`);
-  channel.appendLine(JSON.stringify(value, null, 2));
-  channel.show(true);
 }
 
 /**
@@ -148,7 +146,7 @@ export function activate(context: vscode.ExtensionContext): void {
     diagnostics: string[] = [],
   ): Promise<void> {
     const contextId = pendingChatContext.set(codeContext, diagnostics);
-    logContext(codeContext.source, codeContext);
+    logContext(codeContext.source);
 
     try {
       await openGakushuSochiChat(contextId, vscode.commands.executeCommand);
