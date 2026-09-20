@@ -8,6 +8,7 @@ import { openGakushuSochiChat } from "./chat/open";
 import { PendingChatContext } from "./chat/pending-context";
 import { createChatAIRequest } from "./chat/request";
 import { readClipboard, readTerminalSelection } from "./context/clipboard";
+import { ensureConsent, hasConsent, revokeConsent, reviewConsent } from "./consent/consent";
 import { collectFromEditor, collectFromText } from "./context/collector";
 import { rangesOverlap } from "./context/diagnostics";
 import { getOrCreateClientId, loadProfile, recordEvent } from "./learning/store";
@@ -111,6 +112,14 @@ export function activate(context: vscode.ExtensionContext): void {
     // Issue #56: ローカル保存（globalState）に加えて、サーバー側の正本（D1）へも
     // 送る。同期の失敗は、ローカル保存の失敗と同じくログに残すだけで質問フローは
     // 止めない。
+    // #119: 同意が取り消されていれば、ローカル保存だけにして外へは出さない。
+    // 起動時に読んだ値を使い回さず、送る直前に読み直す。そうしないと取り消しが
+    // 次回起動まで効かない。
+    if (!hasConsent(context)) {
+      channel.appendLine("同意が無いため、クラウド同期を行いませんでした。");
+      return;
+    }
+
     const config = vscode.workspace.getConfiguration("gakushuSochi");
     const apiBaseUrl = config.get<string>("api.baseUrl", "");
     if (!apiBaseUrl) {
@@ -183,6 +192,16 @@ export function activate(context: vscode.ExtensionContext): void {
       }
       const { context: codeContext, diagnostics } = pendingRequest;
 
+      // #119: 文脈を積んだ後に同意が取り消されることがある。ここで見ないと、
+      // 取り消し済みの状態で最後の1回だけ AI へ送ってしまう。
+      if (!hasConsent(context)) {
+        response.markdown(
+          "送信の同意が無いため、質問を送信しませんでした。" +
+            "`Gakushu Sochi: 送信内容の同意を確認する` から同意してください。",
+        );
+        return;
+      }
+
       response.progress("Gakushu Sochi が考えています...");
       const history = toConversationTurns(_chatContext.history);
       const aiResponse = await provider.ask(
@@ -243,6 +262,12 @@ export function activate(context: vscode.ExtensionContext): void {
       return;
     }
 
+    // #119: 何より先に同意を確かめる。収集より前に置くのは、収集そのものが
+    // 定義参照などで周辺コードを集める処理であり、送らないなら行う必要がないため。
+    if (!(await ensureConsent(context, (message) => channel.appendLine(message)))) {
+      return;
+    }
+
     const codeContext = await collectFromEditor(editor);
     const diagnostics = diagnosticsForSelection(editor.document.uri, selection);
 
@@ -262,6 +287,10 @@ export function activate(context: vscode.ExtensionContext): void {
             ? "ターミナルでテキストを選択してください"
             : "選択されたテキストが空です。内容のある範囲を選択してください。",
         );
+        return;
+      }
+
+      if (!(await ensureConsent(context, (message) => channel.appendLine(message)))) {
         return;
       }
 
@@ -293,6 +322,10 @@ export function activate(context: vscode.ExtensionContext): void {
       return;
     }
 
+    if (!(await ensureConsent(context, (message) => channel.appendLine(message)))) {
+      return;
+    }
+
     if (!(await confirmSend(result.text))) {
       return;
     }
@@ -302,7 +335,29 @@ export function activate(context: vscode.ExtensionContext): void {
     await openChatForContext(collectFromText(result.text, "clipboard"));
   });
 
-  context.subscriptions.push(askSelection, askTerminalSelection, askClipboard);
+  // #119: 同意の確認と取り消し。設定項目ではなくコマンドにする。設定は
+  // ワークスペースから上書きでき、開いたリポジトリが同意を偽装できてしまう（RULE-006）。
+  const reviewConsentCommand = vscode.commands.registerCommand(
+    "gakushuSochi.reviewConsent",
+    async () => {
+      await reviewConsent(context, (message) => channel.appendLine(message));
+    },
+  );
+
+  const revokeConsentCommand = vscode.commands.registerCommand(
+    "gakushuSochi.revokeConsent",
+    async () => {
+      await revokeConsent(context, (message) => channel.appendLine(message));
+    },
+  );
+
+  context.subscriptions.push(
+    askSelection,
+    askTerminalSelection,
+    askClipboard,
+    reviewConsentCommand,
+    revokeConsentCommand,
+  );
 }
 
 export function deactivate(): void {}
