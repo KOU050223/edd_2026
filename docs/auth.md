@@ -486,8 +486,9 @@ Gemini 3.5 Flash の単価（入力 $1.50 / 出力 $9.00）なら同じ上限で
 **上限値そのものは決定済みである。** Free / Pro の区分と、Managed AI の
 日次・月次のトークン上限、上限到達時の挙動は
 [`docs/architecture.md`](architecture.md)「Free / Pro の境界と Managed AI の利用上限」が正典である
-（**当面 Free のみ。1人あたり日 50,000 tokens / 月 500,000 tokens。上限到達時は Managed AI だけを
-429 で止め、Copilot / BYOK へ案内する**）。
+（**当面 Free のみ。1人あたり月 150 回 / 日 15 回、かつ1回あたり入力 6,000 + 出力 2,048 tokens。
+上限到達時は Managed AI だけを 429 で止め、Copilot / BYOK へ案内する**）。
+**月150回は仮置きで、利用実績が取れたら見直す前提の数字である。**
 この節は「上限が無いと何が起きるか」を示す側であり、**数字を変えるときは
 `architecture.md` を直す。** Auth/10 が実装する上限値はそこから読む。
 
