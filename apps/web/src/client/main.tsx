@@ -21,7 +21,10 @@ import { summarizeConcepts, type Concept } from "./profile.js";
 import {
   ACTIVITY_PERIOD_DAYS,
   DISPLAY_NAME_MAX_LENGTH,
+  sameSettings,
+  toDraft,
   toSettingsInput,
+  type SettingsDraft,
   type UserSettings,
 } from "../shared/settings.js";
 import "./style.css";
@@ -427,12 +430,16 @@ function LoginFailed() {
  * そのまま不具合の報告になる。項目が増えるのは、それを尊重する側が動いてからでよい。
  */
 function Settings() {
+  // 保存済みの値と編集中の値の2つだけを持つ。項目ごとに state を増やすと、
+  // 差分の判定と「読み込んだ値を入力欄へ戻す」処理が項目の数だけ散らばり、
+  // 設定が増えたときに直し忘れる場所が増える。
   const [saved, setSaved] = useState<UserSettings>();
-  const [displayName, setDisplayName] = useState("");
-  const [periodDays, setPeriodDays] = useState<number>(30);
+  const [draft, setDraft] = useState<SettingsDraft>();
   const [error, setError] = useState<ApiError>();
   const [saveError, setSaveError] = useState<string>();
-  const [savedAt, setSavedAt] = useState<string>();
+  // 「保存しました」を出すのはこの画面で保存したときだけ。`saved.updatedAt` は
+  // 過去の保存でも値を持つので、これを流用すると開いた直後に出てしまう。
+  const [justSaved, setJustSaved] = useState(false);
   const [saving, setSaving] = useState(false);
   const requestTracker = useRef(createRequestTracker());
   const submitGuard = useRef(createSubmitGuard());
@@ -449,8 +456,7 @@ function Settings() {
       .then((value) => {
         if (!isLatest()) return;
         setSaved(value);
-        setDisplayName(value.displayName ?? "");
-        setPeriodDays(value.activityPeriodDays);
+        setDraft(toDraft(value));
       })
       .catch((value: unknown) => {
         if (isLatest()) setError(value as ApiError);
@@ -458,20 +464,20 @@ function Settings() {
   };
   useEffect(load, []);
 
-  const save = () => {
+  const save = (current: SettingsDraft) => {
     // 入口で弾く（RULE-007）。`disabled` は見た目でしかなく、
     // キーボードからの submit は素通りする。
     if (submitGuard.current.isRunning("settings")) return;
     // 送る値は画面の状態そのものから作る。別に持った変数から組み立てると、
     // 直前の入力が送信内容へ反映されない。
-    const input = toSettingsInput({ displayName, activityPeriodDays: periodDays });
+    const input = toSettingsInput(current);
     if (!input.ok) {
       setSaveError(input.message);
       return;
     }
     const isLatestSave = requestTracker.current.start();
     setSaveError(undefined);
-    setSavedAt(undefined);
+    setJustSaved(false);
     setSaving(true);
     void submitGuard.current
       .run("settings", async () => {
@@ -483,9 +489,8 @@ function Settings() {
           );
           if (!isLatestSave()) return;
           setSaved(result);
-          setDisplayName(result.displayName ?? "");
-          setPeriodDays(result.activityPeriodDays);
-          setSavedAt(result.updatedAt ?? undefined);
+          setDraft(toDraft(result));
+          setJustSaved(true);
         } catch (value: unknown) {
           // 保存の失敗を黙って飲み込まない（RULE-004）。
           const failure = value as ApiError;
@@ -504,27 +509,32 @@ function Settings() {
   };
 
   if (error) return <ErrorPanel error={error} retry={load} />;
-  if (!saved) return <p className="message">読み込み中…</p>;
-  const dirty =
-    (saved.displayName ?? "") !== displayName || saved.activityPeriodDays !== periodDays;
+  if (!saved || !draft) return <p className="message">読み込み中…</p>;
+  // 項目ごとの比較は `shared/settings.ts` に閉じ込めてある。ここで式を組み立てると、
+  // 設定が増えたときに直し忘れても型が通ってしまう。
+  const dirty = !sameSettings(saved, draft);
+  const update = (change: Partial<SettingsDraft>) => {
+    setDraft({ ...draft, ...change });
+    setJustSaved(false);
+  };
   return (
     <section className="settings">
       <h1>設定</h1>
       <form
         onSubmit={(event) => {
           event.preventDefault();
-          save();
+          save(draft);
         }}
       >
         <label className="field">
           <span>表示名</span>
           <input
             type="text"
-            value={displayName}
+            value={draft.displayName}
             maxLength={DISPLAY_NAME_MAX_LENGTH}
             placeholder="未設定"
             disabled={saving}
-            onChange={(event) => setDisplayName(event.target.value)}
+            onChange={(event) => update({ displayName: event.target.value })}
           />
           <small>
             画面に表示される名前。空にすると未設定へ戻ります（{DISPLAY_NAME_MAX_LENGTH} 文字まで）。
@@ -540,9 +550,9 @@ function Settings() {
                   type="radio"
                   name="activityPeriodDays"
                   value={value}
-                  checked={periodDays === value}
+                  checked={draft.activityPeriodDays === value}
                   disabled={saving}
-                  onChange={() => setPeriodDays(value)}
+                  onChange={() => update({ activityPeriodDays: value })}
                 />
                 {value} 日
               </label>
@@ -556,9 +566,9 @@ function Settings() {
             設定を保存できませんでした：{saveError}
           </p>
         )}
-        {savedAt && !dirty && (
+        {justSaved && !dirty && saved.updatedAt && (
           <p className="message saved" role="status">
-            保存しました（{new Date(savedAt).toLocaleString("ja-JP")}）
+            保存しました（{new Date(saved.updatedAt).toLocaleString("ja-JP")}）
           </p>
         )}
 
