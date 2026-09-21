@@ -52,6 +52,10 @@
       {
         "command": "gakushuSochi.revokeConsent",
         "title": "Gakushu Sochi: 送信内容の同意を取り消す"
+      },
+      {
+        "command": "gakushuSochi.openKeybindings",
+        "title": "Gakushu Sochi: キーボードショートカットを変更する"
       }
     ],
     "keybindings": [

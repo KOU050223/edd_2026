@@ -8,6 +8,7 @@ import { openGakushuSochiChat } from "./chat/open";
 import { PendingChatContext } from "./chat/pending-context";
 import { createChatAIRequest } from "./chat/request";
 import { readClipboard, readTerminalSelection } from "./context/clipboard";
+import { openGakushuSochiKeybindings } from "./keybindings/open";
 import { ensureConsent, hasConsent, revokeConsent, reviewConsent } from "./consent/consent";
 import { collectFromEditor, collectFromText } from "./context/collector";
 import { rangesOverlap } from "./context/diagnostics";
@@ -374,12 +375,22 @@ export function activate(context: vscode.ExtensionContext): void {
     },
   );
 
+  // #34: 既定のキーバインドは利用者が上書きできるが、その設定画面への導線が
+  // 拡張から辿れなかった。独自の設定画面は作らず、標準の画面へ案内する。
+  const openKeybindingsCommand = vscode.commands.registerCommand(
+    "gakushuSochi.openKeybindings",
+    async () => {
+      await openGakushuSochiKeybindings(vscode.commands.executeCommand);
+    },
+  );
+
   context.subscriptions.push(
     askSelection,
     askTerminalSelection,
     askClipboard,
     reviewConsentCommand,
     revokeConsentCommand,
+    openKeybindingsCommand,
   );
 }
 
