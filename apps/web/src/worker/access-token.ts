@@ -59,7 +59,7 @@ import {
   type OAuthConfig,
   type RefreshedAccessToken,
 } from "./oauth.js";
-import { deleteSession, writeSession, type SessionRecord } from "./session.js";
+import { deleteSession, readSession, writeSession, type SessionRecord } from "./session.js";
 
 /**
  * 期限のどれだけ手前で取り直すか。
@@ -137,13 +137,45 @@ export function createAccessTokenProvider(deps: AccessTokenProviderDeps): Access
     session: SessionRecord,
     config: OAuthConfig,
   ): Promise<AccessTokenResult> {
-    let refreshed: RefreshedAccessToken;
+    let refreshed: RefreshedAccessToken | undefined;
+    let refreshError: unknown;
     try {
       refreshed = await refreshAccessToken(config, session.refreshToken, deps.fetch);
       // 外向きの応答を待っている間にログアウトされていないか、**書き戻す前に**見る。
       // ここを通さないと、消したセッションが下の writeSession で蘇る。
       if (wasRevoked(sessionToken, session.sub)) return { ok: false, kind: "session_expired" };
     } catch (error) {
+      refreshError = error;
+      // 別のWorker実行が先にRotationした場合、この実行が保持する古いRTだけが
+      // invalid_grantになる。KVを再読込してRTが変わっていれば、セッションを消さず
+      // 新しいRTで一度だけ再試行する。KVを読まずに消すと、ログイン直後の並列API取得が
+      // 利用者をランダムにログアウトさせる（同一isolate内のsingle-flightでは防げない）。
+      if (error instanceof OAuthTokenError && error.isInvalidGrant) {
+        const current = await readSession(sessions, sessionToken);
+        if (
+          current &&
+          current.sub === session.sub &&
+          current.refreshToken !== session.refreshToken
+        ) {
+          try {
+            refreshed = await refreshAccessToken(config, current.refreshToken, deps.fetch);
+            session.refreshToken = current.refreshToken;
+            refreshError = undefined;
+            console.warn(
+              "refresh token was rotated by another Worker; retried with current token",
+              {
+                sub: session.sub,
+              },
+            );
+          } catch (retryError) {
+            refreshError = retryError;
+          }
+        }
+      }
+    }
+
+    if (refreshError !== undefined) {
+      const error = refreshError;
       // 失敗を一律に扱わない（docs/auth.md §5.3）。どちらの枝でも握りつぶさず記録する。
       if (error instanceof OAuthTokenError && error.isInvalidGrant) {
         // RT が二度と使えないことが確定した。ここでだけセッションを消す。
@@ -162,6 +194,12 @@ export function createAccessTokenProvider(deps: AccessTokenProviderDeps): Access
       });
       return { ok: false, kind: "auth_unavailable" };
     }
+
+    if (refreshed === undefined) {
+      throw new Error("access token refresh completed without a result");
+    }
+    // 再試行の外向き要求を待っている間にもログアウトされうる。
+    if (wasRevoked(sessionToken, session.sub)) return { ok: false, kind: "session_expired" };
 
     if (refreshed.refreshToken) {
       // rotation で RT が回った。**新しい方の保存は、この refresh の成立条件である。**

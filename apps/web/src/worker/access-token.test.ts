@@ -125,6 +125,37 @@ test("invalid_grant のときだけセッションを消す", async () => {
   await expect(readSession(kvOf(kv), token)).resolves.toBeUndefined();
 });
 
+test("別WorkerがRotationした後の古いRTのinvalid_grantは新しいRTで再試行する", async () => {
+  const kv = new MemoryKv();
+  const { token, record } = await seed(kv);
+  let attempts = 0;
+  const stub = stubFetch([
+    async () => {
+      attempts += 1;
+      // 別のWorker実行が先にRotationを完了した状態を再現する。
+      await kvOf(kv).put(
+        `session:${token}`,
+        JSON.stringify({ refreshToken: "rt-2", sub: record.sub }),
+      );
+      return Response.json({ error: "invalid_grant" }, { status: 403 });
+    },
+    async () => {
+      attempts += 1;
+      return tokenResponse({ access_token: "at-2", expires_in: 900 });
+    },
+  ]);
+  const provider = createAccessTokenProvider({ fetch: stub.fetch });
+
+  const result = await provider.get(kvOf(kv), token, record, config);
+
+  expect(result).toEqual({ ok: true, accessToken: "at-2" });
+  expect(attempts).toBe(2);
+  await expect(readSession(kvOf(kv), token)).resolves.toEqual({
+    refreshToken: "rt-2",
+    sub: record.sub,
+  });
+});
+
 test("Auth0 の 5xx ではセッションを消さず、再試行できるエラーを返す", async () => {
   const kv = new MemoryKv();
   const { token, record } = await seed(kv);
