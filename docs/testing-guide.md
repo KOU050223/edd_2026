@@ -244,13 +244,17 @@ vi.mock("vscode", () => ({ lm: { selectChatModels } }));
 beforeEach(() => {
   events = new InMemoryLearningEventRepository();
   app = new Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>();
-  app.use("/v1/*", devAuth);
+  app.use("/v1/*", stubAuth("user-a"));
   app.route(
     "/v1",
     createLearningEventsRoute(() => ({ identity, events, now: () => 1000 })),
   );
 });
 ```
+
+認証は `apps/api/src/auth/test-auth.ts` の `stubAuth` を挿す。これは本番と同じ
+`createAuth` に偽の検証器を渡すだけのもので、テストのために資格情報を置かない。
+リクエストには同ファイルの `AUTHORIZED_HEADERS` / `TEST_TOKEN` を使う。
 
 **実装から `Date.now()` や `Math.random()` を直接呼ばない。** 注入できないと固定できず、
 時刻や乱数に依存した Flaky Test になる。

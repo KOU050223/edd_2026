@@ -6,11 +6,12 @@
  * 「リクエストから認証済みの userId を決める」という一点だけを引き受け、
  * 学習ドメインのハンドラ（sync / profile）がトークンの形式に依存しないようにする。
  *
- * 検証方式は Auth0 のアクセストークン（JWT）である。`createAuth` が本番の経路で、
+ * 検証方式は Auth0 のアクセストークン（JWT）である。`createAuth` が唯一の経路で、
  * userId には IdP の `sub` をそのまま使う。可変なメールアドレスを主キーにしない。
  *
- * `devAuth` は開発用の共有トークンを検証する古い経路で、もう組み立てられていない。
- * 削除は全クライアントの疎通確認後（Auth/06）に行う。
+ * 開発用の共有トークン（`DEV_AUTH_TOKEN`）を検証する `devAuth` は、全クライアントの
+ * 疎通確認を終えて削除した（Auth/06、docs/auth.md §7）。全権限のバイパスを
+ * 新しい認証と並存させない。
  */
 
 import { createMiddleware } from "hono/factory";
@@ -44,67 +45,6 @@ function extractBearerToken(header: string | undefined): string | undefined {
   }
   const match = /^Bearer (.+)$/.exec(header);
   return match?.[1];
-}
-
-/**
- * 開発用トークンを検証するミドルウェア。**現在は組み立てられていない。**
- *
- * `app.ts` が使うのは `createAuth` である。これを残しているのは、古い共有トークンを
- * 送るクライアントの疎通確認が済むまで（Auth/06）参照を消さないためであって、
- * `createAuth` の代わりに使ってよいという意味ではない。
- *
- * `DEV_AUTH_TOKEN` が未設定なら、認証を素通りさせず 500 で落とす。
- * 「設定が無いから全員通す」は、本番で秘密の設定漏れがそのまま
- * 認証の無効化になる。設定漏れは機能の停止として現れるべきである。
- *
- * userId はトークンから決める。リクエストボディの `clientId` は
- * クライアントの自己申告であり、認可の入力にしてはならない。
- */
-export const devAuth = createMiddleware<{
-  Bindings: CloudflareBindings;
-  Variables: AuthVariables;
-}>(async (c, next) => {
-  const expected = c.env.DEV_AUTH_TOKEN;
-  if (!expected) {
-    throw new HTTPException(500, { message: "DEV_AUTH_TOKEN is not configured" });
-  }
-
-  const token = extractBearerToken(c.req.header("Authorization"));
-  if (token === undefined) {
-    throw new HTTPException(401, { message: "Authorization: Bearer <token> is required" });
-  }
-
-  if (!timingSafeEqual(token, expected)) {
-    throw new HTTPException(401, { message: "invalid token" });
-  }
-
-  // 開発用トークンは単一ユーザーを表す。実際の認証方式ではトークンから
-  // ユーザーを解決する。
-  c.set("user", { userId: c.env.DEV_AUTH_USER_ID || "dev-user" });
-
-  await next();
-});
-
-/**
- * 文字列を定数時間で比較する。
- *
- * 通常の `===` は先頭から違う位置で打ち切るため、比較にかかる時間から
- * トークンを1文字ずつ推測できる。認証に使う比較では長さの違いも含めて
- * 早期に返さない。
- */
-function timingSafeEqual(a: string, b: string): boolean {
-  const encoder = new TextEncoder();
-  const aBytes = encoder.encode(a);
-  const bBytes = encoder.encode(b);
-
-  // 長さが違えば不一致だが、その事実だけで早期に返すと長さが漏れる。
-  // 同じ長さのバッファ同士を必ず最後まで比較する。
-  const length = Math.max(aBytes.length, bBytes.length);
-  let diff = aBytes.length ^ bBytes.length;
-  for (let i = 0; i < length; i += 1) {
-    diff |= (aBytes[i] ?? 0) ^ (bBytes[i] ?? 0);
-  }
-  return diff === 0;
 }
 
 /**

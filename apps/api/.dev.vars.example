@@ -1,11 +1,15 @@
 # ローカル開発用の設定例。`cp .dev.vars.example .dev.vars` して使う。
-# .dev.vars は gitignore 済み。本番は `wrangler secret put DEV_AUTH_TOKEN` で設定し、
+# .dev.vars は gitignore 済み。本番は `wrangler secret put <名前>` で設定し、
 # リポジトリには置かない（apps/api/README.md）。
 #
+# 認証は Auth0 のアクセストークン検証である（docs/auth.md §4）。issuer と audience は
+# 秘密ではないので wrangler.jsonc の vars にあり、ここには書かない。
+# 開発用の共有トークン DEV_AUTH_TOKEN は Auth/06 で廃止した。
+# ローカルでも実際の Auth0 で取得したアクセストークンを使う。
+#
 # wrangler types はこのファイルではなく .dev.vars を読んで型を生成する。
-# CI は .dev.vars を持たないため、check:worker-types が通るよう
-# src/worker-configuration.d.ts に DEV_AUTH_TOKEN が含まれた状態でコミットする。
-DEV_AUTH_TOKEN=local-dev-token
+# CI は .dev.vars を持たないため、wrangler.jsonc の `secrets.required` から
+# 型を作らせ、src/worker-configuration.d.ts をコミットしておく。
 # Managed AI 用。本番は `wrangler secret put GEMINI_API_KEY` で設定する。
 GEMINI_API_KEY=
 GEMINI_MODEL=gemini-3.6-flash
