@@ -343,7 +343,10 @@ AIをAPI経由にしないことで、同期基盤の障害が質問体験を止
 - コード・質問本文を送信／保存する際の同意UI（VS Code は実装済み。「何が誰へ送られるか」を参照。
   Desktop / Web は未了）
 - APIの監視、監査ログ、レート制限、障害時の再送方針
-- `vscode.lm` の利用規約、Copilot未契約ユーザーに対する既定provider
+- Marketplace 公開の条件: 生成 AI と対話していることの明示と、フィードバック手段
+  （GitHub Copilot Extension Developer Policy の要求。詳細は [`docs/lm-api.md`](lm-api.md)）
+- 他拡張・VS Code 本体が登録した BYOK モデルを `selectChatModels()` から選べるかの実機確認
+  （選べない場合、既定 provider の第3候補が機能せず #55 の BYOK provider 実装が必要になる）
 
 ## 現実装への示唆
 
@@ -353,6 +356,25 @@ AIをAPI経由にしないことで、同期基盤の障害が質問体験を止
 `VSCodeLMProvider.ask()` は `selectChatModels()` を含む失敗を `AIResponse` として返す。
 呼び出し側は `AIErrorReason` でユーザー通知を分岐し、詳細はログへ残す。これにより
 `AIProvider.ask()` の契約と、プロジェクトの「エラーを握りつぶさない」方針を両立する。
+
+### 既定 provider（調査/03 #121）
+
+`vscode.lm` の利用規約と、Copilot 未契約ユーザーに対する既定 provider は確定した
+（確認日・一次情報 URL・却下した案は [`docs/lm-api.md`](lm-api.md)）。
+
+`selectChatModels()` を vendor で絞らず、次の優先順位で 1 つ選ぶ。
+
+1. Copilot の `gpt-4o-mini`
+2. Copilot のその他のモデル
+3. Copilot 以外の vendor のモデル（利用者が VS Code へ登録した BYOK・ローカルモデル）
+
+Copilot を最優先にするのは、運営が AI 利用料を負担しない構成の要だから。
+3 があることで、**Copilot 未契約でも BYOK が登録されていれば拡張が使える。**
+新たな Provider 実装は足していない。BYOK 経路を拡張自身が持つかどうかは #55 の判断に残る。
+
+1 件も無いときは `model-unavailable` を返し、`detail` に Copilot へのサインインと
+BYOK 登録の手順を載せる。失敗は失敗のまま返しつつ、利用者を行き止まりに置かない。
+選択方針の実装は `apps/vscode-extension/src/ai/model-selection.ts`。
 
 ## 関連文書
 

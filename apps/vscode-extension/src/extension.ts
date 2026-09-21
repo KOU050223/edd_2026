@@ -221,7 +221,18 @@ export function activate(context: vscode.ExtensionContext): void {
       );
 
       if (!aiResponse.ok) {
-        response.markdown(`回答を生成できませんでした（${aiResponse.error.reason}）。`);
+        // 理由コードだけでは利用者は次に何をすればよいか分からない。
+        // Provider が案内（Copilot へのサインイン、BYOK の登録など）を
+        // detail に載せてくるので、あれば一緒に見せる（#121）。
+        // ログには理由コードを残し、失敗を出力チャンネルからも追えるようにする。
+        channel.appendLine(
+          `回答を生成できませんでした: ${aiResponse.error.reason}` +
+            `${aiResponse.error.detail ? `\n${aiResponse.error.detail}` : ""}`,
+        );
+        response.markdown(
+          `回答を生成できませんでした（${aiResponse.error.reason}）。` +
+            `${aiResponse.error.detail ? `\n\n${aiResponse.error.detail}` : ""}`,
+        );
         return;
       }
 

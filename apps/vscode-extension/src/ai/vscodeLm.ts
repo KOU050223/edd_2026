@@ -13,6 +13,7 @@
 import * as vscode from "vscode";
 import type { AIProvider } from "./provider";
 import { buildPrompt, META_MARKER } from "./prompt";
+import { NO_MODEL_GUIDANCE, selectModel } from "./model-selection";
 import {
   CONCEPTS,
   type AIError,
@@ -21,15 +22,6 @@ import {
   type AIResponse,
   type ConceptId,
 } from "@gakushu-sochi/domain";
-
-/**
- * 既定で使う family。
- *
- * docs/lm-api.md の実機検証で、selectChatModels() の一覧には copilot-utility や
- * copilotcli/auto のようなチャット用途ではないモデルが混ざることが分かっている。
- * 何も指定せず先頭を使うと、そうしたモデルに送って応答が空になることがある。
- */
-const DEFAULT_FAMILY = "gpt-4o-mini";
 
 /**
  * プロンプトに含める過去の会話ターン数の上限。
@@ -177,22 +169,20 @@ export class VSCodeLMProvider implements AIProvider {
 
   async ask(request: AIRequest): Promise<AIResponse> {
     try {
-      const models = await vscode.lm.selectChatModels({ vendor: "copilot" });
+      // selector を渡さず全 vendor を取る（調査/03 #121）。`vendor: "copilot"` で
+      // 絞ると、Copilot 未契約の利用者はここで必ず空になり、BYOK で登録済みの
+      // モデルがあっても拡張が使えないままになる。優先順位は selectModel() が持つ。
+      const models = await vscode.lm.selectChatModels();
+      const model = selectModel(models);
 
-      if (models.length === 0) {
+      if (!model) {
+        // 失敗は失敗のまま型で返し（RULE-004）、そのうえで次の一手を添える。
+        // 呼び出し側はこの detail をそのまま利用者へ見せてよい。
         return {
           ok: false,
-          error: {
-            reason: "model-unavailable",
-            detail:
-              "selectChatModels() が空配列を返した。Copilot未契約・未サインインの可能性がある。",
-          },
+          error: { reason: "model-unavailable", detail: NO_MODEL_GUIDANCE },
         };
       }
-
-      // 用途外のモデルを避けるため family を指定して選ぶ。selector で Copilot に
-      // 限定しているため、family が無ければ Copilot の一覧から選ぶ。
-      const model = models.find((m) => m.family === DEFAULT_FAMILY) ?? models[0];
 
       // 同意の取り消しはモデル選択の待機中にも起こりうる。実際にコードを外へ出す
       // sendRequest の直前で再確認し、取り消し後の送信を防ぐ。

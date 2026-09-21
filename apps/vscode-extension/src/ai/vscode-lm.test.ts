@@ -25,6 +25,7 @@ vi.mock("vscode", () => ({
 }));
 
 import { VSCodeLMProvider } from "./vscodeLm";
+import { NO_MODEL_GUIDANCE } from "./model-selection";
 import * as vscode from "vscode";
 
 /** for-await できる最小限の LanguageModelChatResponse を組む。 */
@@ -203,7 +204,7 @@ test("質問が空白だけなら、解説指示を押しのけない", async ()
   expect(prompt).toContain("### Explain");
 });
 
-test("モデル選択をCopilotに限定する", async () => {
+test("モデル選択を vendor で絞り込まない", async () => {
   const sendRequest = mockSingleModel();
 
   await new VSCodeLMProvider().ask({
@@ -216,8 +217,52 @@ test("モデル選択をCopilotに限定する", async () => {
     },
   });
 
-  expect(selectChatModels).toHaveBeenLastCalledWith({ vendor: "copilot" });
+  // #121: vendor: "copilot" で絞ると Copilot 未契約の利用者は必ず空になり、
+  // BYOK で登録済みのモデルがあっても届かない。優先順位は selectModel() が持つ。
+  expect(selectChatModels).toHaveBeenLastCalledWith();
   expect(sendRequest).toHaveBeenCalled();
+});
+
+test("Copilot が無くても BYOK のモデルがあれば質問できる", async () => {
+  const sendRequest = vi.fn().mockResolvedValue(responseOf("回答"));
+  selectChatModels.mockResolvedValueOnce([
+    { id: "claude-fable-5.1", family: "claude-fable-5.1", vendor: "anthropic", sendRequest },
+  ]);
+
+  const response = await new VSCodeLMProvider().ask({
+    mode: "hint",
+    context: {
+      code: "const answer = 42;",
+      source: "editor",
+      contextLevel: 2,
+      surroundingCode: "const answer = 42;",
+    },
+  });
+
+  expect(response.ok).toBe(true);
+  expect(sendRequest).toHaveBeenCalled();
+});
+
+test("モデルが1つも無ければ、使える経路への案内を添えて失敗を返す", async () => {
+  selectChatModels.mockResolvedValueOnce([]);
+
+  const response = await new VSCodeLMProvider().ask({
+    mode: "hint",
+    context: {
+      code: "const answer = 42;",
+      source: "editor",
+      contextLevel: 2,
+      surroundingCode: "const answer = 42;",
+    },
+  });
+
+  // 失敗を成功に化けさせない（RULE-004）。そのうえで次の一手を渡す。
+  expect(response.ok).toBe(false);
+  if (response.ok) {
+    throw new Error("expected a failure response");
+  }
+  expect(response.error.reason).toBe("model-unavailable");
+  expect(response.error.detail).toBe(NO_MODEL_GUIDANCE);
 });
 
 test("モデル選択後に同意が取り消されたらsendRequestしない", async () => {
