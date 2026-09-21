@@ -74,12 +74,44 @@ Concept一覧そのものは `packages/domain/concepts.md` を正典とし、生
 
 ## 開発
 
+### 環境を用意する
+
+Node は `.node-version` の 24.20.0 を使う。Nix があれば devShell が同じ版を配る。
+
+```bash
+nix develop      # Node / task / lefthook が揃った shell に入る
+task setup       # 依存のインストール・.dev.vars の生成・git hook の導入
+task dev         # API Server / Desktop / Web App をまとめて起動する
+```
+
+`direnv allow` しておけば、ディレクトリに入るだけで `nix develop` 相当になる。
+
+Nix を使わない場合は、Node 24.20.0 と [Task](https://taskfile.dev) を各自で入れれば
+`task` 以降は同じ。Task も使わないなら、下の npm コマンドが従来どおり動く。
+
 ```bash
 npm install
 npm run compile
 npm run check:concepts   # Concept一覧と生成物が一致しているか検査する
 npm run dev              # API Server / Desktop / Web App をまとめて起動する
 ```
+
+### タスク
+
+`task --list` が一覧を出す。Taskfile は入口だけを定義し、中身は npm scripts を呼ぶ。
+**ロジックを Taskfile 側へ移さないこと** — CI と lefthook は npm scripts を直接叩くので、
+Taskfile にしか無い処理は CI を素通りする。
+
+| コマンド         | 中身                                                 |
+| ---------------- | ---------------------------------------------------- |
+| `task setup`     | `install` → `env` → `hooks`。clone 直後の一発目      |
+| `task env`       | `.dev.vars.example` から `.dev.vars` を作る          |
+| `task check:env` | `.dev.vars` に雛形のままの値が残っていないか検査する |
+| `task check`     | CI と同じ検査を手元で通す                            |
+
+`task env` は**既存の `.dev.vars` を上書きしない**。手元に入れた本物の値は残る。
+雛形のままの鍵（`GEMINI_API_KEY` / `AUTH_CLIENT_SECRET`）は警告として出る。
+取得先は [`docs/auth.md`](docs/auth.md) と `apps/api/README.md` にある。
 
 `npm run dev` は API Server / Desktop / Web App を並列で起動し、どれかが失敗すると残りも停止する。
 VS Code Extension は、VS Codeでリポジトリルートを開いて `F5` でExtension Development Hostを起動します。

@@ -244,3 +244,73 @@ test("正典の旧パスへの参照が残っていない", () => {
   }
   assert.equal(tracked, "", `旧パス docs/rules/ への参照が残っている:\n${tracked}`);
 });
+
+test("Nix の devShell が .node-version と同じ Node を配る", async () => {
+  // 手元（devShell）と CI（setup-node）で Node が違うと、手元で通ったものが
+  // CI で落ちる。.node-version を正典にして、両方がそこを向いているか検査する。
+  const nodeVersion = (await readFile(new URL("../.node-version", import.meta.url), "utf8")).trim();
+  const flake = await readFile(new URL("../flake.nix", import.meta.url), "utf8");
+
+  // flake は .node-version をハードコードせず読み込む。二重管理にしない。
+  assert.match(flake, /builtins\.readFile \.\/\.node-version/);
+  assert.match(flake, /nodejs_24/);
+  assert.match(ci, new RegExp(`node-version: ${nodeVersion.replace(/\./g, "\\.")}`));
+
+  // lock が無いと nixpkgs が流れて Node が勝手に上がる。
+  const lock = JSON.parse(await readFile(new URL("../flake.lock", import.meta.url), "utf8"));
+  assert.ok(lock.nodes.nixpkgs?.locked?.rev, "flake.lock が nixpkgs を固定していない");
+});
+
+test("Taskfile はロジックを持たず npm scripts を呼ぶ", async () => {
+  // Taskfile にロジックを移すと、CI と lefthook（npm scripts を直接叩く）を
+  // 素通りする経路ができる。入口だけに留めているか検査する。
+  const taskfile = await readFile(new URL("../Taskfile.yml", import.meta.url), "utf8");
+
+  // Issue #133 が求めた入口。名前が消えると README の手順が嘘になる。
+  for (const name of ["setup:", "dev:", "test:", "lint:", "check:env:"]) {
+    assert.ok(taskfile.includes(`\n  ${name}`), `Taskfile に ${name} が無い`);
+  }
+
+  // setup は「依存 → env → hook」まで面倒を見る。どれが欠けても clone 直後に動かない。
+  const setup = taskfile.match(/\n {2}setup:\n([\s\S]*?)(?=\n {2}\w)/)?.[1];
+  assert.ok(setup, "setup タスクを読み取れない");
+  for (const dependency of ["install", "env", "hooks"]) {
+    assert.match(setup, new RegExp(`task: ${dependency}`), `setup が ${dependency} を呼んでいない`);
+  }
+
+  // Taskfile が呼ぶ npm script は実在していること。消えた script を呼ぶと
+  // task だけが壊れ、CI は緑のままになる。
+  const workspaceScripts = {
+    "@gakushu-sochi/api": apiPackageJson.scripts,
+    "@gakushu-sochi/web": webPackageJson.scripts,
+  };
+  for (const [, script, workspace] of taskfile.matchAll(
+    /^ +- npm run ([\w:-]+)(?: --workspace=(\S+))?/gm,
+  )) {
+    const scripts = workspace ? workspaceScripts[workspace] : packageJson.scripts;
+    assert.ok(scripts, `Taskfile が未知のワークスペースを指す: ${workspace}`);
+    assert.ok(
+      scripts[script],
+      `Taskfile が存在しない npm script を呼ぶ: ${script}${workspace ? ` (${workspace})` : ""}`,
+    );
+  }
+});
+
+test("setup は .dev.vars を雛形から作り、既存を上書きしない", async () => {
+  // 上書きすると、手元に入れた本物の秘密値が空の雛形で消える。
+  // 原因が見えにくい 401 になるので、挙動そのものを検査する。
+  const setupEnv = await readFile(new URL("../scripts/setup-env.mjs", import.meta.url), "utf8");
+  assert.match(setupEnv, /--check/);
+
+  // 雛形が追跡されていないと、clone した人の setup が失敗する。
+  const tracked = execFileSync("git", ["ls-files"], { cwd: repoRoot, encoding: "utf8" });
+  for (const example of ["apps/api/.dev.vars.example", "apps/web/.dev.vars.example"]) {
+    assert.match(tracked, new RegExp(`^${example}$`, "m"), `${example} が追跡されていない`);
+    // 生成先そのものが追跡されていたら、秘密値がコミットされる経路がある。
+    assert.doesNotMatch(
+      tracked,
+      new RegExp(`^${example.replace(/\.example$/, "")}$`, "m"),
+      `${example.replace(/\.example$/, "")} が追跡されている`,
+    );
+  }
+});
