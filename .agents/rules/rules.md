@@ -50,7 +50,9 @@
   PR#70 `apps/web/src/worker/index.ts` Security & Privacy (Major)
 
 リダイレクトが自動追跡されると、転送先へ `Authorization` ヘッダごと送られ、
-トークンが意図しない相手に渡る。資格情報を送る `fetch` には `redirect: "error"` を指定すること。
+トークンが意図しない相手に渡る。資格情報を送る `fetch` はリダイレクトを自動追跡しないこと。
+Cloudflare Workersでは `redirect: "error"` が未実装なので `redirect: "manual"` を指定し、
+3xxを明示的に失敗として扱う。
 
 **検出の限界**: テストは AST で `fetch(...)` の第 2 引数に直接書かれたヘッダを見る。
 `Headers` オブジェクトを別の場所で組み立ててから渡す書き方（`apps/web/src/worker/index.ts` の

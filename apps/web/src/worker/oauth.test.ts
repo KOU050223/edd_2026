@@ -76,7 +76,7 @@ test("トークンの取得は資格情報を載せるのでリダイレクト�
   );
 
   // RULE-002 / RULE-001。
-  expect(init?.redirect).toBe("error");
+  expect(init?.redirect).toBe("manual");
   expect(init?.signal).toBeInstanceOf(AbortSignal);
 });
 
@@ -181,7 +181,7 @@ test("撤回は client_secret を添えてリダイレクトを追跡しない",
   });
 
   expect(url).toBe("https://idp.example.test/oauth/revoke");
-  expect(init?.redirect).toBe("error");
+  expect(init?.redirect).toBe("manual");
   expect(JSON.parse(String(init?.body))).toEqual({
     client_id: "web-client",
     client_secret: "web-secret",

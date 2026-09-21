@@ -170,8 +170,9 @@ export async function revokeRefreshToken(
   const response = await fetchImpl(`${trimSlash(config.issuer)}/oauth/revoke`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    // 資格情報を載せるのでリダイレクトを追跡しない（RULE-002）。
-    redirect: "error",
+    // Workers は redirect: "error" を実装していないため manual にする。
+    // revoke は3xxを ok 扱いしないので、自動追跡は行われない（RULE-002）。
+    redirect: "manual",
     signal: AbortSignal.timeout(TOKEN_TIMEOUT_MS),
     body: JSON.stringify({
       client_id: config.clientId,
@@ -205,7 +206,9 @@ async function requestToken(
     response = await fetchImpl(`${trimSlash(config.issuer)}/oauth/token`, {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
-      redirect: "error",
+      // Workers は redirect: "error" を実装していないため manual にする。
+      // 3xx は下で明示的に失敗させ、自動追跡は決して行わない。
+      redirect: "manual",
       signal: AbortSignal.timeout(TOKEN_TIMEOUT_MS),
       body: new URLSearchParams(values),
     });
@@ -215,6 +218,11 @@ async function requestToken(
     throw new OAuthTokenError("OAuth トークンエンドポイントへ到達できません", {
       status: 0,
       cause: error,
+    });
+  }
+  if (response.status >= 300 && response.status < 400) {
+    throw new OAuthTokenError("OAuth トークンエンドポイントがリダイレクトしました", {
+      status: response.status,
     });
   }
   const rawBody = await response.text();

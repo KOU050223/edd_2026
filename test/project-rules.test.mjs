@@ -194,14 +194,14 @@ function carriesCredential(call) {
   });
 }
 
-/** `redirect: "error"` が指定されているか。 */
-function hasRedirectError(call) {
+/** リダイレクトを自動追跡しない指定があるか。Workers では `manual` を使う。 */
+function hasNoFollowRedirect(call) {
   const redirect = optionProperty(call, "redirect");
   return Boolean(
     redirect &&
     ts.isPropertyAssignment(redirect) &&
     ts.isStringLiteral(redirect.initializer) &&
-    redirect.initializer.text === "error",
+    ["error", "manual"].includes(redirect.initializer.text),
   );
 }
 
@@ -230,12 +230,12 @@ test("RULE-001: 単発の外向き fetch には signal を渡す", () => {
 
 // RULE-002: 資格情報を載せた fetch はリダイレクトを追跡しない。
 // 転送先へ Authorization ヘッダごと送られると、トークンが意図しない相手に渡る。
-test('RULE-002: 資格情報を送る fetch は redirect: "error" を指定する', () => {
+test("RULE-002: 資格情報を送る fetch は redirect を自動追跡しない", () => {
   const violations = [];
   for (const [file, text] of sources) {
     for (const call of findFetchCalls(text, file)) {
       if (!carriesCredential(call)) continue;
-      if (hasRedirectError(call)) continue;
+      if (hasNoFollowRedirect(call)) continue;
       violations.push(`${file}:${call.line}`);
     }
   }

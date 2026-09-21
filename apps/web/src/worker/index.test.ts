@@ -298,7 +298,7 @@ test("/api は共有トークンではなく、そのセッションのアクセ
   expect(received[0]?.headers.get("authorization")).toBe("Bearer at-alice");
   expect(received[0]?.headers.get("host")).toBe("api.example.test");
   expect(received[0]?.headers.get("cookie")).toBeNull();
-  expect(receivedInit[0]?.redirect).toBe("error");
+  expect(receivedInit[0]?.redirect).toBe("manual");
   expect(response.headers.get("cache-control")).toBe("no-store");
 });
 

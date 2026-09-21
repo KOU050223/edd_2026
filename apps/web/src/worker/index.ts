@@ -339,9 +339,13 @@ export function createWebApp(
       method: c.req.method,
       headers,
       body: c.req.raw.body,
-      // 資格情報を載せるのでリダイレクトを追跡しない（RULE-002）。
-      redirect: "error",
+      // Workers は redirect: "error" を実装していないため manual にする。
+      // API の3xxは下流へ返さず、資格情報付きの自動追跡を防ぐ（RULE-002）。
+      redirect: "manual",
     });
+    if (upstream.status >= 300 && upstream.status < 400) {
+      return c.json({ error: "upstream_redirect" }, 502, { "cache-control": "no-store" });
+    }
     const responseHeaders = new Headers(upstream.headers);
     responseHeaders.set("cache-control", "no-store");
     if (upstream.status === 401) {
