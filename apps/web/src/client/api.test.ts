@@ -58,6 +58,24 @@ test("ログイン直後だけ、セッション未伝播の 401 を一度だけ
   expect(calls).toBe(2);
 });
 
+test("ログイン直後のセッション未伝播が続いても、数回の再試行で回復する", async () => {
+  let calls = 0;
+  const response = await requestJson<{ ok: boolean }>(
+    "/api/v1/learning-profile",
+    async () => {
+      calls += 1;
+      return calls < 4
+        ? Response.json({ error: "session_expired" }, { status: 401 })
+        : Response.json({ ok: true });
+    },
+    3,
+    async () => undefined,
+  );
+
+  expect(response).toEqual({ ok: true });
+  expect(calls).toBe(4);
+});
+
 test("推移グラフ用に欠測日を 0 件で補完する", () => {
   expect(
     fillActivityDays({

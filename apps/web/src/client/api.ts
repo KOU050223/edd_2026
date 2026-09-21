@@ -24,7 +24,7 @@ export function createRequestTracker() {
 export async function requestJson<T>(
   path: string,
   fetcher: typeof fetch = fetch,
-  retrySessionOnce = false,
+  sessionRetries: boolean | number = false,
   wait: () => Promise<void> = () => new Promise((resolve) => window.setTimeout(resolve, 1_000)),
 ): Promise<T> {
   let response: Response;
@@ -33,11 +33,13 @@ export async function requestJson<T>(
   } catch {
     throw new ApiError("unavailable");
   }
-  if (retrySessionOnce && response.status === 401) {
+  const remainingRetries =
+    typeof sessionRetries === "boolean" ? (sessionRetries ? 1 : 0) : sessionRetries;
+  if (remainingRetries > 0 && response.status === 401) {
     const body = (await response.json().catch(() => ({}))) as { error?: string };
     if (body.error === "session_expired") {
       await wait();
-      return requestJson(path, fetcher, false, wait);
+      return requestJson(path, fetcher, remainingRetries - 1, wait);
     }
   }
   if (response.ok) {
