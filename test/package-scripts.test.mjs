@@ -75,11 +75,13 @@ test("main の CI 成功後に Web を同じコミットへ紐づけてデプロ
   assert.match(ci, /deploy-web:[\s\S]*github\.event_name == 'push'/);
   assert.match(ci, /deploy-web:[\s\S]*github\.ref == 'refs\/heads\/main'/);
   assert.match(ci, /deploy-web:[\s\S]*ref: \$\{\{ github\.sha \}\}/);
-  assert.match(ci, /deploy-web:[\s\S]*WEB_API_TOKEN: \$\{\{ secrets\.WEB_API_TOKEN \}\}/);
+  // 共有の API_TOKEN / WEB_ACCESS_PASSPHRASE は Auth/05 で消えた。
+  // Web に要る secret は Auth0 の client secret だけになった（docs/auth.md §5.3）。
   assert.match(
     ci,
-    /deploy-web:[\s\S]*WEB_ACCESS_PASSPHRASE: \$\{\{ secrets\.WEB_ACCESS_PASSPHRASE \}\}/,
+    /deploy-web:[\s\S]*WEB_AUTH_CLIENT_SECRET: \$\{\{ secrets\.WEB_AUTH_CLIENT_SECRET \}\}/,
   );
+  assert.doesNotMatch(ci, /WEB_ACCESS_PASSPHRASE/);
   assert.match(ci, /deploy-web:[\s\S]*name: Require Web Worker secrets/);
   assert.match(ci, /deploy-web:[\s\S]*--secrets-file "\$secrets_file"/);
 });

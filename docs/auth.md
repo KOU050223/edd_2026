@@ -328,6 +328,27 @@ Refresh Token は既存の `createCredentialStore` にそのまま載る。
   `leeway` 30 秒は競合を緩和するが、解消はしない。並行 refresh が leeway を
   超えてずれた場合は依然として RT ファミリが失効するため、直列化を省略できない。
 
+  **決定（Auth/05）: Durable Object ではなく、Worker isolate 内のメモリで直列化する。**
+
+  まず **KV の楽観的更新は選択肢として成立しない**。Workers KV に条件付き書き込み
+  （CAS）が無いためである。`put` は無条件の上書きしか持たず、読んだ値に基づいて
+  「変わっていなければ書く」を表現できない。残るのは DO かメモリの二択になる。
+
+  メモリを採る理由は次の 3 つ。
+
+  1. この競合が起きるのは**1 人のブラウザが同時に投げる数本の要求**である
+     （画面は `Promise.all` で習熟度と手動上書きを並べて取る）。
+     同時に飛ぶ数本は同じ isolate へ入るのが通常で、メモリの single-flight が効く。
+  2. isolate をまたいで残る競合は `leeway` 30 秒が吸収する。
+     leeway は競合を**解消しない**が、この幅の同時実行は救う。
+  3. DO を 1 つ入れると、この Worker に永続オブジェクトの運用とデプロイ手順が付く。
+     利用者がまだ居ない段階で、効果の差が「leeway を超えるずれ」だけの機構を先に抱えない。
+
+  **この決定が破れる条件を先に書いておく。** isolate をまたぐ並行 refresh が
+  leeway 30 秒を超えてずれ、利用者がランダムにログアウトする事象が観測されたら
+  DO へ移す。そのとき変わるのは `apps/web/src/worker/access-token.ts` の中だけで、
+  呼び出し側（`index.ts`）の形は変えずに済むようにしてある。
+
 これに伴う波及:
 
 - **`wrangler.jsonc` の `run_worker_first` に `/callback` を追加する。**
@@ -337,7 +358,10 @@ Refresh Token は既存の `createCredentialStore` にそのまま載る。
   `/login` は IdP へのリダイレクト開始点として残るので、配列から外さない。
 - `wrangler.jsonc` から secret `API_TOKEN` と `WEB_ACCESS_PASSPHRASE` が消える
 - `apps/web/src/client/api.ts` の `ApiErrorKind` から `api_token_invalid` が消える
-  （共有トークンが無くなるので、この状態自体が存在しなくなる）
+  （共有トークンが無くなるので、この状態自体が存在しなくなる）。
+  代わりに `auth_unavailable` が入る。**これは「セッションは生きているが IdP が
+  一時的に応答しない」状態**で、上の「refresh の失敗を一律に扱わない」を
+  画面まで通すために要る。利用者への指示が「再ログイン」ではなく「再試行」になる
 - `LOGIN_RATE_LIMITER`（IP 単位）は**残す。用途を変える**。
   パスワード試行の制限は IdP の責務へ移るが、`/login` と `/callback` は認証前の
   エンドポイントであり、叩かれれば Auth0 への外向き通信が発生する。

@@ -36,12 +36,27 @@ const AUTH_REQUEST_TIMEOUT_MS = 10_000;
 
 const errorText: Record<ApiError["kind"], string> = {
   session_expired: "ログインの有効期限が切れました",
-  api_token_invalid: "サーバー側の API トークンが無効です。再ログインでは直りません。",
+  auth_unavailable: "認証サーバーへ一時的に接続できません。少し待って再試行してください。",
   rate_limited: "短時間に要求が多すぎます。しばらく待って再読み込みしてください。",
   unavailable: "学習データの取得に失敗しました",
 };
 
+/**
+ * ログイン直後の最初の 401 を 1 回だけ再試行してよいかを返す。
+ *
+ * Workers KV は結果整合で、`/callback` が張ったセッションが別のエッジへ伝わるまで
+ * 遅れうる（docs/web-viewer.md）。Worker は `/?login=1` へ戻してこれを伝える。
+ * 印は sessionStorage へ移して URL から消し、**再読み込みで再試行が復活しない**
+ * ようにする。無限に再試行しないための一度きりの印である。
+ */
 function takeLoginRetry(): boolean {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get("login") === "1") {
+    sessionStorage.setItem("web-login-retry", "1");
+    params.delete("login");
+    const query = params.toString();
+    window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
+  }
   if (sessionStorage.getItem("web-login-retry") !== "1") return false;
   sessionStorage.removeItem("web-login-retry");
   return true;
@@ -85,61 +100,6 @@ function Header() {
         </button>
       </nav>
     </header>
-  );
-}
-
-function Login() {
-  const [passphrase, setPassphrase] = useState("");
-  const [error, setError] = useState<string>();
-  const [pending, setPending] = useState(false);
-  async function submit(event: React.FormEvent) {
-    event.preventDefault();
-    setPending(true);
-    setError(undefined);
-    try {
-      const response = await fetch("/login", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ passphrase }),
-        signal: AbortSignal.timeout(AUTH_REQUEST_TIMEOUT_MS),
-      });
-      if (!response.ok) {
-        setError(
-          response.status === 429
-            ? "ログインの試行が多すぎます。1分ほど待ってからやり直してください。"
-            : "パスフレーズを確認してください。",
-        );
-        return;
-      }
-      sessionStorage.setItem("web-login-retry", "1");
-      window.location.href = "/";
-    } catch {
-      setError("ログインに失敗しました。通信状態を確認してください。");
-    } finally {
-      setPending(false);
-    }
-  }
-  return (
-    <main className="login">
-      <section className="card">
-        <h1>学習装置</h1>
-        <p>現在は開発用の単一ユーザーモードです。</p>
-        <form onSubmit={submit}>
-          <label>
-            パスフレーズ
-            <input
-              type="password"
-              value={passphrase}
-              onChange={(event) => setPassphrase(event.target.value)}
-              autoFocus
-              required
-            />
-          </label>
-          {error && <p className="error-text">{error}</p>}
-          <button disabled={pending}>{pending ? "確認中…" : "ログイン"}</button>
-        </form>
-      </section>
-    </main>
   );
 }
 
@@ -388,9 +348,43 @@ function Activity() {
   );
 }
 
+/**
+ * 認可に失敗して Worker から戻された画面。
+ *
+ * `/login` と `/callback` は Worker が処理するので、ここへ来るのは失敗した経路だけ。
+ * 理由をそのまま出さず、利用者がやり直せる導線に倒す（原因はサーバーのログにある）。
+ */
+function LoginFailed() {
+  const reason = new URLSearchParams(window.location.search).get("reason");
+  return (
+    <main className="login">
+      <section className="card">
+        <h1>学習装置</h1>
+        <p>ログインを完了できませんでした。</p>
+        {reason === "state_mismatch" && (
+          <p className="error-text">
+            ログインの途中で情報が食い違いました。最初からやり直してください。
+          </p>
+        )}
+        {reason === "login_state_missing" && (
+          <p className="error-text">ログインの有効期限が切れました。もう一度お試しください。</p>
+        )}
+        {reason === "token_exchange_failed" && (
+          <p className="error-text">
+            認証サーバーへ接続できませんでした。少し待ってからお試しください。
+          </p>
+        )}
+        <a className="button" href="/login">
+          ログインし直す
+        </a>
+      </section>
+    </main>
+  );
+}
+
 function App() {
   const path = window.location.pathname;
-  if (path === "/login") return <Login />;
+  if (path === "/login-failed") return <LoginFailed />;
   return (
     <>
       <Header />

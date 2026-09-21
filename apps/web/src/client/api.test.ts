@@ -17,9 +17,9 @@ test("API の 401 理由を利用者が取れるエラー種別へ写像する",
   ).rejects.toEqual(new ApiError("session_expired"));
   await expect(
     requestJson("/api/v1/learning-profile", async () =>
-      Response.json({ error: "api_token_invalid" }, { status: 401 }),
+      Response.json({ error: "auth_unavailable" }, { status: 503 }),
     ),
-  ).rejects.toEqual(new ApiError("api_token_invalid"));
+  ).rejects.toEqual(new ApiError("auth_unavailable"));
 });
 
 test("2xx でも JSON の解析に失敗したら利用不能エラーとして扱う", async () => {

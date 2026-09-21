@@ -21,8 +21,7 @@ jobs:
       cancel-in-progress: true
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      WEB_API_TOKEN: ${{ secrets.WEB_API_TOKEN }}
-      WEB_ACCESS_PASSPHRASE: ${{ secrets.WEB_ACCESS_PASSPHRASE }}
+      WEB_AUTH_CLIENT_SECRET: ${{ secrets.WEB_AUTH_CLIENT_SECRET }}
       PR_NUMBER: ${{ github.event.pull_request.number }}
     steps:
       - name: Check out pull request
@@ -40,8 +39,7 @@ jobs:
       - name: Require deployment credentials
         run: |
           test -n "$CLOUDFLARE_API_TOKEN"
-          test -n "$WEB_API_TOKEN"
-          test -n "$WEB_ACCESS_PASSPHRASE"
+          test -n "$WEB_AUTH_CLIENT_SECRET"
       - name: Build Web assets
         run: npm run build:web
       - name: Upload Web Preview version
@@ -53,7 +51,7 @@ jobs:
           output_file="$(mktemp)"
           trap 'rm -f "$secrets_file" "$output_file"' EXIT
           chmod 600 "$secrets_file"
-          node -e 'const { writeFileSync } = require("node:fs"); writeFileSync(process.argv[1], JSON.stringify({ API_TOKEN: process.env.WEB_API_TOKEN, WEB_ACCESS_PASSPHRASE: process.env.WEB_ACCESS_PASSPHRASE }));' "$secrets_file"
+          node -e 'const { writeFileSync } = require("node:fs"); writeFileSync(process.argv[1], JSON.stringify({ AUTH_CLIENT_SECRET: process.env.WEB_AUTH_CLIENT_SECRET }));' "$secrets_file"
           npx wrangler versions upload \
             --preview-alias "pr-${PR_NUMBER}" \
             --message "PR #${PR_NUMBER} Web Preview" \

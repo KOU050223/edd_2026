@@ -84,8 +84,7 @@ jobs:
       cancel-in-progress: false
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      WEB_API_TOKEN: ${{ secrets.WEB_API_TOKEN }}
-      WEB_ACCESS_PASSPHRASE: ${{ secrets.WEB_ACCESS_PASSPHRASE }}
+      WEB_AUTH_CLIENT_SECRET: ${{ secrets.WEB_AUTH_CLIENT_SECRET }}
     steps:
       - name: Check out tested source
         uses: actions/checkout@v4
@@ -102,13 +101,11 @@ jobs:
       - name: Require Cloudflare deployment credential
         run: test -n "$CLOUDFLARE_API_TOKEN"
       - name: Require Web Worker secrets
-        run: |
-          test -n "$WEB_API_TOKEN"
-          test -n "$WEB_ACCESS_PASSPHRASE"
+        run: test -n "$WEB_AUTH_CLIENT_SECRET"
       - name: Deploy Web Worker
         run: |
           secrets_file="$(mktemp)"
           chmod 600 "$secrets_file"
           trap 'rm -f "$secrets_file"' EXIT
-          node -e 'const { writeFileSync } = require("node:fs"); writeFileSync(process.argv[1], JSON.stringify({ API_TOKEN: process.env.WEB_API_TOKEN, WEB_ACCESS_PASSPHRASE: process.env.WEB_ACCESS_PASSPHRASE }));' "$secrets_file"
+          node -e 'const { writeFileSync } = require("node:fs"); writeFileSync(process.argv[1], JSON.stringify({ AUTH_CLIENT_SECRET: process.env.WEB_AUTH_CLIENT_SECRET }));' "$secrets_file"
           npm run deploy --workspace=@gakushu-sochi/web -- --secrets-file "$secrets_file"

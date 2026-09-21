@@ -248,18 +248,29 @@ test('RULE-002: 資格情報を送る fetch は redirect: "error" を指定す�
 });
 
 // RULE-003: 設定から来た送信先 origin は HTTPS かループバックに限定する。
-// 検査の本体は apps/web の単体テスト（apiOrigin の実挙動）。
+// 検査の本体は apps/web の単体テスト（origin 検証の実挙動）。
 // ここでは、その検査が消えていないことだけを確かめる。
+//
+// **設定由来の送信先が増えたら、ここへ足すこと。** Web Worker はトークンを
+// API へ送り（API_ORIGIN）、client secret を IdP へ送る（AUTH_ISSUER）。
+// どちらも設定から来るので、両方が検証されていなければ RULE-003 は守られていない。
+const ORIGIN_VALIDATION_TESTS = [
+  /loopback 以外の HTTP API_ORIGIN へトークンを送らない/,
+  /loopback 以外の HTTP AUTH_ISSUER へ client secret を送らない/,
+];
+
 test("RULE-003: origin 検証の単体テストが存在する", async () => {
   const workerTest = await readFile(
     path.join(repoRoot, "apps/web/src/worker/index.test.ts"),
     "utf8",
   );
-  assert.match(
-    workerTest,
-    /loopback 以外の HTTP API_ORIGIN へ API トークンを送らない/,
-    "loopback 以外の平文 HTTP を拒否するテストが消えている（.agents/rules/rules.md RULE-003）",
-  );
+  for (const pattern of ORIGIN_VALIDATION_TESTS) {
+    assert.match(
+      workerTest,
+      pattern,
+      `loopback 以外の平文 HTTP を拒否するテストが消えている（.agents/rules/rules.md RULE-003）: ${pattern}`,
+    );
+  }
 });
 
 // RULE-004: エラーを握りつぶすな。空の catch は eslint でも落ちるが、
