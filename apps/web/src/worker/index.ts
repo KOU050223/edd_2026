@@ -5,6 +5,7 @@ import {
   buildAuthorizationUrl,
   createPkcePair,
   exchangeAuthorizationCode,
+  OAuthTokenError,
   randomState,
   revokeRefreshToken,
   type OAuthConfig,
@@ -245,6 +246,16 @@ export function createWebApp(
       // 交換の失敗を握りつぶさない（RULE-004）。利用者はやり直せる。
       console.error("authorization code exchange failed", {
         message: error instanceof Error ? error.message : String(error),
+        ...(error instanceof OAuthTokenError
+          ? {
+              code: error.code,
+              status: error.status,
+              cause:
+                error.cause instanceof Error
+                  ? { name: error.cause.name, message: error.cause.message }
+                  : String(error.cause ?? "unknown"),
+            }
+          : {}),
       });
       return loginFailed(c, "token_exchange_failed");
     }
