@@ -350,3 +350,41 @@ test("rotation した RT を保存できなければ成功を返さない", asyn
   // 成功を返すと、AT の期限が切れた十数分後に突然ログアウトする形で壊れる。
   expect(result).toEqual({ ok: false, kind: "auth_unavailable" });
 });
+
+test("writeSession の最中に forget されたら、キャッシュを残さず KV も蘇らせない", async () => {
+  const kv = new MemoryKv();
+  const { token, record } = await seed(kv);
+  const stub = stubFetch([
+    async () => tokenResponse({ access_token: "at-1", refresh_token: "rt-2", expires_in: 900 }),
+  ]);
+  let releaseWrite: () => void = () => {};
+  const heldWrite = new Promise<void>((resolve) => {
+    releaseWrite = resolve;
+  });
+  let writeStarted: () => void = () => {};
+  const writeReached = new Promise<void>((resolve) => {
+    writeStarted = resolve;
+  });
+  // KV の書き込みだけを保留させ、その最中にログアウトを差し込む。
+  const slow = {
+    get: (key: string) => kvOf(kv).get(key),
+    put: async (key: string, value: string) => {
+      writeStarted();
+      await heldWrite;
+      await kvOf(kv).put(key, value);
+    },
+    delete: (key: string) => kvOf(kv).delete(key),
+  } as unknown as KVNamespace;
+  const provider = createAccessTokenProvider({ fetch: stub.fetch });
+
+  const pending = provider.get(slow, token, record, config);
+  await writeReached;
+  provider.forget(token);
+  await kvOf(kv).delete(`session:${token}`);
+  releaseWrite();
+  const result = await pending;
+
+  expect(result).toEqual({ ok: false, kind: "session_expired" });
+  // 書き込みが logout の削除を追い越してセッションを蘇らせていないこと。
+  await expect(readSession(kvOf(kv), token)).resolves.toBeUndefined();
+});

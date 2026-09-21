@@ -32,6 +32,26 @@
  * **この決定が破れる条件を書いておく。** isolate をまたぐ並行 refresh が leeway 30 秒を
  * 超えてずれ、利用者がランダムにログアウトする事象が観測されたら、DO へ移す。
  * そのときに変わるのはこのファイルの中だけで、`index.ts` の呼び出しは変わらない。
+ *
+ * ## ログアウトとの競合について、保証できる範囲と できない範囲
+ *
+ * 下の `revoked` は、**同じ isolate 内で**進行中の refresh がログアウト後に
+ * 結果を書き戻すのを止める。`await` のたびに確認し、KV へ書いた後に失効が判明したら
+ * 自分で消して後始末する。
+ *
+ * **これは順序の同期ではなく、事後の打ち消しである。** KV に条件付き書き込みが無いため、
+ * 「logout の削除より後に put しない」ことを原子的には保証できない。次の 2 つは残る。
+ *
+ * 1. **別 isolate の refresh** は、この isolate の `revoked` を見られない。
+ * 2. 打ち消しの `deleteSession` 自体も、KV の結果整合の中で伝播する。
+ *
+ * どちらの場合も露出は無限ではない。ログアウトは KV 削除の後に `/oauth/revoke` で
+ * RT を撤回するので、蘇った RT は次の refresh で `invalid_grant` になり、そこで消える。
+ * 残るのは発行済みアクセストークンの寿命（15分）までで、これは docs/auth.md §9 が
+ * 「アクセストークンの寿命が撤回の遅延になる」として明示的に受け入れている範囲である。
+ *
+ * **完全に閉じるには、セッション単位の強整合な保管（DO）が要る。**
+ * 上の移行条件に、この競合が実害として観測された場合も加える。
  */
 import {
   OAuthTokenError,
@@ -99,6 +119,18 @@ export function createAccessTokenProvider(deps: AccessTokenProviderDeps): Access
    */
   const revoked = new Set<string>();
 
+  /**
+   * この refresh の結果を捨てるべきか。
+   *
+   * **`await` のたびに呼ぶ。** 一度確認すれば済むものではない。外向きの要求も
+   * KV の書き込みもそれぞれ中断点であり、その間にログアウトが割り込みうる。
+   */
+  function wasRevoked(sessionToken: string, sub: string): boolean {
+    if (!revoked.has(sessionToken)) return false;
+    console.warn("session was revoked while refreshing; discarding result", { sub });
+    return true;
+  }
+
   async function refresh(
     sessions: KVNamespace,
     sessionToken: string,
@@ -110,12 +142,7 @@ export function createAccessTokenProvider(deps: AccessTokenProviderDeps): Access
       refreshed = await refreshAccessToken(config, session.refreshToken, deps.fetch);
       // 外向きの応答を待っている間にログアウトされていないか、**書き戻す前に**見る。
       // ここを通さないと、消したセッションが下の writeSession で蘇る。
-      if (revoked.has(sessionToken)) {
-        console.warn("session was revoked while refreshing; discarding result", {
-          sub: session.sub,
-        });
-        return { ok: false, kind: "session_expired" };
-      }
+      if (wasRevoked(sessionToken, session.sub)) return { ok: false, kind: "session_expired" };
     } catch (error) {
       // 失敗を一律に扱わない（docs/auth.md §5.3）。どちらの枝でも握りつぶさず記録する。
       if (error instanceof OAuthTokenError && error.isInvalidGrant) {
@@ -149,6 +176,13 @@ export function createAccessTokenProvider(deps: AccessTokenProviderDeps): Access
           sub: session.sub,
         });
         session.refreshToken = refreshed.refreshToken;
+        // **書き込みの最中にもログアウトされうる。** `await` はすべて中断点なので、
+        // 直前に見ただけでは足りない。ここで失効していたら、書いた値を自分で消して
+        // ログアウトの削除を追い越さないようにする。
+        if (wasRevoked(sessionToken, session.sub)) {
+          await deleteSession(sessions, sessionToken);
+          return { ok: false, kind: "session_expired" };
+        }
       } catch (error) {
         console.error("failed to persist rotated refresh token", {
           sub: session.sub,
@@ -160,6 +194,10 @@ export function createAccessTokenProvider(deps: AccessTokenProviderDeps): Access
         return { ok: false, kind: "auth_unavailable" };
       }
     }
+
+    // キャッシュへ入れる直前にも見る。ここを最後の関門にして、
+    // ログアウト済みのセッションへアクセストークンを配らない。
+    if (wasRevoked(sessionToken, session.sub)) return { ok: false, kind: "session_expired" };
 
     if (refreshed.expiresInSeconds > REFRESH_MARGIN_SECONDS) {
       cache.set(sessionToken, {
