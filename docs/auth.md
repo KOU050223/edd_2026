@@ -410,6 +410,15 @@ Refresh Token は既存の `createCredentialStore` にそのまま載る。
 3. `devAuth` を削除し、`DEV_AUTH_TOKEN` / `DEV_AUTH_USER_ID` を
    `wrangler.jsonc` と `wrangler secret delete` の両方から消す — Auth/06
 4. Web から `WEB_ACCESS_PASSPHRASE` / `API_TOKEN` を同様に消す — Auth/05 で実施済み
+
+   ただし**消えていたのはコードと設定だけで、secret は生きていた。** Auth/06 で
+   Cloudflare の `API_TOKEN` / `WEB_ACCESS_PASSPHRASE` と、GitHub Actions の
+   `WEB_ACCESS_PASSPHRASE` / `WEB_API_TOKEN`（production environment）を削除した。
+   **設定から参照が消えても、secret が残っていれば裏口は開いたままである。**
+   消す場所は「コード・設定・Cloudflare・GitHub」の4つあると数えること。
+   再発防止として `test/package-scripts.test.mjs` が、これらの名前が
+   workflow に現れたら落ちるようにしてある。
+
 5. `dev-user` を削除する（第6節）— Auth/07（#86、未完）
 
 テストが `devAuth` を「userId を決めるだけの都合のよいミドルウェア」として流用していた
