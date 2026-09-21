@@ -24,3 +24,9 @@ dist/
 .vitest/
 
 .DS_Store
+
+# Nix / direnv
+# flake.nix と flake.lock は追跡する。生成物と手元のキャッシュだけ無視する。
+.direnv/
+result
+result-*

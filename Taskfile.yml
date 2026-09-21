@@ -1,0 +1,107 @@
+# 開発コマンドの入口。中身は npm scripts を呼ぶだけに保つ。
+#
+# ロジックを Taskfile 側へ移さないこと。package.json が正典のまま二重管理を避ける。
+# CI と lefthook は npm scripts を直接叩くので、ここに書いたロジックは CI を素通りする。
+version: "3"
+
+vars:
+  # setup が生成する .dev.vars と、その雛形。
+  DEV_VARS: "apps/api/.dev.vars apps/web/.dev.vars"
+
+tasks:
+  default:
+    desc: タスク一覧を表示する
+    cmds:
+      - task --list
+    silent: true
+
+  setup:
+    desc: 依存をインストールし、ローカル用の .dev.vars と git hook を用意する
+    cmds:
+      - task: install
+      - task: env
+      - task: hooks
+      - cmd: |
+          echo ""
+          echo "setup 完了。次は 'task dev' で API / Desktop / Web が起動する。"
+        silent: true
+
+  install:
+    desc: npm ci で依存をインストールする（lockfile どおり）
+    cmds:
+      - npm ci
+
+  env:
+    desc: .dev.vars.example から .dev.vars を作る（既存ファイルは上書きしない）
+    cmds:
+      - node scripts/setup-env.mjs
+
+  check:env:
+    desc: .dev.vars に雛形のままの値が残っていないか検査する
+    cmds:
+      - node scripts/setup-env.mjs --check
+
+  hooks:
+    desc: lefthook の git hook を導入する
+    cmds:
+      - npx --no-install lefthook install
+
+  dev:
+    desc: API Server / Desktop / Web App をまとめて起動する
+    cmds:
+      # .dev.vars が無いまま起動すると wrangler が理由のわかりにくい失敗をする。
+      # 雛形のままの鍵は警告に留める（AI を呼ばない画面の開発は鍵が空でも進む）。
+      - node scripts/setup-env.mjs
+      - npm run dev
+
+  compile:
+    desc: 全ワークスペースを型検査・コンパイルする
+    cmds:
+      - npm run compile
+
+  test:
+    desc: 全テストを実行する
+    cmds:
+      - npm run test
+
+  lint:
+    desc: 全ワークスペースを lint する
+    cmds:
+      - npm run lint
+
+  format:
+    desc: prettier で整形する
+    cmds:
+      - npm run format
+
+  format:check:
+    desc: prettier の整形崩れを検査する
+    cmds:
+      - npm run format:check
+
+  check:
+    desc: CI と同じ検査を手元で通す
+    cmds:
+      - npm run format:check
+      - npm run lint
+      - npm run compile
+      - npm run check:concepts
+      - npm run check:worker-types
+      - npm run build:web
+      - npm run test
+
+  gen:concepts:
+    desc: Concept 一覧から生成物を作り直す
+    cmds:
+      - npm run gen:concepts
+
+  gen:worker-types:
+    desc: Worker の型定義を生成し直す
+    cmds:
+      - npm run gen:worker-types --workspace=@gakushu-sochi/api
+      - npm run gen:worker-types --workspace=@gakushu-sochi/web
+
+  harvest:rules:
+    desc: PR レビューから新しいルール候補を収穫する
+    cmds:
+      - npm run harvest:rules -- --new-only
