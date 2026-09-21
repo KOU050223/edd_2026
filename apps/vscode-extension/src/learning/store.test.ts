@@ -2,8 +2,8 @@ import { expect, test, vi } from "vitest";
 
 vi.mock("vscode", () => ({}));
 
-import { createEmptyProfile, type LearnerProfile } from "@gakushu-sochi/domain";
-import { getOrCreateClientId, loadProfile } from "./store";
+import { createEmptyProfile, type LearnerProfile, type LearningEvent } from "@gakushu-sochi/domain";
+import { getOrCreateClientId, loadProfile, recordEvent } from "./store";
 import type * as vscode from "vscode";
 
 const CURRENT_KEY = "gakushuSochi.learnerProfile";
@@ -202,4 +202,55 @@ test("2回呼んでも同じclientIdを返す", async () => {
   const second = await getOrCreateClientId(context);
 
   expect(second).toBe(first);
+});
+
+// --- recordEvent（MVP/02 #23 の完了条件） -----------------------------------
+
+function eventWith(conceptId: string): LearningEvent {
+  return {
+    id: "event-1",
+    occurredAt: "2026-09-21T00:00:00.000Z",
+    type: "hint_used",
+    origin: "vscode",
+    conceptIds: [conceptId],
+    language: "go",
+  };
+}
+
+test("記録したイベントは読み直しても残る", async () => {
+  // 「Extension を再起動しても記録が残る」の確認。プロセスの再起動そのものは
+  // 再現できないため、保存した globalState を loadProfile で読み直して代える。
+  const context = mutableContext();
+
+  const updated = await recordEvent(context, loadProfile(context), eventWith("go.defer"));
+
+  expect(updated.events).toHaveLength(1);
+  // 同じ globalState を読み直す = 次回起動時に loadProfile が見る値。
+  expect(loadProfile(context).events).toEqual(updated.events);
+});
+
+test("保存に失敗しても例外を外へ出さず、更新後のプロファイルを返す", async () => {
+  // 「保存失敗時も質問フローを止めない」の確認。update が reject しても
+  // 呼び出し側（extension.ts の persistEvent）へ例外を伝播させない。
+  const failure = new Error("globalState への書き込みに失敗しました");
+  const context = {
+    globalState: {
+      get: () => undefined,
+      update: async () => {
+        throw failure;
+      },
+    },
+  } as unknown as vscode.ExtensionContext;
+  const onError = vi.fn();
+
+  const updated = await recordEvent(
+    context,
+    createEmptyProfile("2026-09-21T00:00:00.000Z"),
+    eventWith("go.slice"),
+    onError,
+  );
+
+  // 失敗を握りつぶさず onError へ通知したうえで、今セッション分は反映された値を返す。
+  expect(onError).toHaveBeenCalledWith(failure);
+  expect(updated.events).toHaveLength(1);
 });
