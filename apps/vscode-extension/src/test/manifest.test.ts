@@ -77,3 +77,26 @@ test("同意の状態をワークスペース設定から書き換えられな�
   );
   expect(consentSettings).toEqual([]);
 });
+
+test("キーボードショートカット設定への導線をコマンドから辿れる", () => {
+  // #34: 既定のキーバインドは `keybindings.json` から上書きできるが、その設定画面へ
+  // 辿り着く導線が拡張側に無かった。独自の設定画面は作らない（VS Code の作法から
+  // 外れる）ため、標準の画面を開くコマンドが正解になる。
+  expect(manifest.contributes.commands).toEqual(
+    expect.arrayContaining([
+      {
+        command: "gakushuSochi.openKeybindings",
+        title: "Gakushu Sochi: キーボードショートカットを変更する",
+      },
+    ]),
+  );
+});
+
+test("導線そのものにキーバインドを割り当てない", () => {
+  // 設定画面を開くだけのコマンドに既定キーを配ると、衝突の種を増やすだけで
+  // 利用頻度に見合わない。
+  const assigned = manifest.contributes.keybindings.filter(
+    (keybinding) => keybinding.command === "gakushuSochi.openKeybindings",
+  );
+  expect(assigned).toEqual([]);
+});
