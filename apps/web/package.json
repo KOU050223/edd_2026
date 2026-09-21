@@ -10,8 +10,8 @@
     "deploy": "npm run compile --workspace=@gakushu-sochi/domain && npm run build && wrangler deploy",
     "compile": "tsc -p tsconfig.json",
     "lint": "eslint src",
-    "test:unit": "vitest run src",
-    "test:watch": "vitest src",
+    "test:unit": "npm run compile --workspace=@gakushu-sochi/domain && vitest run src",
+    "test:watch": "npm run compile --workspace=@gakushu-sochi/domain && vitest src",
     "gen:worker-types": "wrangler types src/worker/worker-configuration.d.ts --env-interface CloudflareBindings --include-runtime=false --strict-vars=false",
     "check:worker-types": "wrangler types src/worker/worker-configuration.d.ts --env-interface CloudflareBindings --include-runtime=false --strict-vars=false --check"
   },

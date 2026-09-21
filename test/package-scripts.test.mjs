@@ -314,3 +314,25 @@ test("setup は .dev.vars を雛形から作り、既存を上書きしない", 
     );
   }
 });
+
+test("domain を使うワークスペースのテストは dist を先に作る", () => {
+  // @gakushu-sochi/domain の main は dist/index.js を指すが、リポジトリは
+  // dist を追跡していない。clone 直後や dist を消した状態で各ワークスペースの
+  // test:unit を単体で叩くと "Failed to resolve entry" で落ちる（実測）。
+  // ルートの test:unit は compile を挟むので通り、CI も緑のままになる。
+  // 手元だけが詰まる状態を作らないよう、前置きの有無を検査する。
+  const prefix = "npm run compile --workspace=@gakushu-sochi/domain && ";
+  const dependents = {
+    "apps/api": apiPackageJson,
+    "apps/web": webPackageJson,
+    "apps/vscode-extension": extensionPackageJson,
+  };
+  for (const [path, json] of Object.entries(dependents)) {
+    for (const script of ["test:unit", "test:watch"]) {
+      assert.ok(
+        json.scripts[script]?.startsWith(prefix),
+        `${path} の ${script} が domain の compile を先に走らせていない`,
+      );
+    }
+  }
+});
