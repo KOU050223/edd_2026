@@ -19,13 +19,15 @@ vi.mock("vscode", () => ({
     Assistant: vi.fn((text: string) => ({ role: "assistant", text })),
   },
   LanguageModelError,
+  // buildNoModelGuidance() が案内を版で書き分けるため、モックにも version が要る。
+  version: "1.122.0",
   lm: {
     selectChatModels,
   },
 }));
 
 import { VSCodeLMProvider } from "./vscodeLm";
-import { NO_MODEL_GUIDANCE } from "./model-selection";
+import { buildNoModelGuidance } from "./model-selection";
 import * as vscode from "vscode";
 
 /** for-await できる最小限の LanguageModelChatResponse を組む。 */
@@ -262,7 +264,7 @@ test("モデルが1つも無ければ、使える経路への案内を添えて�
     throw new Error("expected a failure response");
   }
   expect(response.error.reason).toBe("model-unavailable");
-  expect(response.error.detail).toBe(NO_MODEL_GUIDANCE);
+  expect(response.error.detail).toBe(buildNoModelGuidance("1.122.0"));
 });
 
 test("モデル選択後に同意が取り消されたらsendRequestしない", async () => {

@@ -13,7 +13,7 @@
 import * as vscode from "vscode";
 import type { AIProvider } from "./provider";
 import { buildPrompt, META_MARKER } from "./prompt";
-import { NO_MODEL_GUIDANCE, selectModel } from "./model-selection";
+import { buildNoModelGuidance, selectModel } from "./model-selection";
 import {
   CONCEPTS,
   type AIError,
@@ -180,7 +180,11 @@ export class VSCodeLMProvider implements AIProvider {
         // 呼び出し側はこの detail をそのまま利用者へ見せてよい。
         return {
           ok: false,
-          error: { reason: "model-unavailable", detail: NO_MODEL_GUIDANCE },
+          error: {
+            reason: "model-unavailable",
+            // 案内は VS Code の版で変わる（古いホストでは BYOK にもサインインが要る）。
+            detail: buildNoModelGuidance(vscode.version),
+          },
         };
       }
 

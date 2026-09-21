@@ -32,6 +32,15 @@ test("壊れた記録を同意として読み替えない", () => {
   expect(isConsentGranted(true)).toBe(false);
 });
 
+test("AI の送信先が Copilot だけではないことを文面で示す", () => {
+  // #121 で Copilot 以外の vendor（BYOK）へも送るようになった。
+  // 文面が Copilot しか名指ししていないと、利用者は同意していない相手へ
+  // コードが出ていることに気付けない。
+  expect(CONSENT_NOTICE_DETAIL).toContain("API キー");
+  expect(CONSENT_NOTICE_DETAIL).toContain("Anthropic");
+  expect(CONSENT_NOTICE_DETAIL).toContain("ローカル");
+});
+
 test("送信先ごとに、送るものと保存されるものを文面で示す", () => {
   expect(CONSENT_NOTICE_DETAIL).toContain("選択したコード本文");
   expect(CONSENT_NOTICE_DETAIL).toContain("参照した他ファイルの定義コード");

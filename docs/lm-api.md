@@ -145,6 +145,30 @@ Copilot を先頭に置くのは、運営が AI 利用料を負担しない構�
   改めて必要になる。
 - ⑦（Copilot 未契約ユーザーの割合）は引き続き未着手。
 
+### 同意の取り直し（レビュー指摘 P1）
+
+送信先が Copilot だけでなくなるため、**同意の文面と版を変えないと、Copilot への送信にだけ
+同意した利用者のコードが、本人の知らないうちに Anthropic / OpenAI などへ出る。**
+
+`CONSENT_NOTICE_DETAIL` に「送信先は VS Code の設定で決まる」ことと具体的な提供元名を書き、
+`CONSENT_NOTICE_VERSION` を 2 → 3 へ上げた。既存の同意は無効になり、次回の質問時に
+新しい文面で取り直される（`isConsentGranted` が版の一致を見る）。
+
+### VS Code の版による案内の出し分け（レビュー指摘 P2）
+
+`engines.vscode` は `^1.90.0` であり、**案内を出す相手が 1.122 以降とは限らない。**
+1.122 より前のホストで「Copilot の契約は要りません」と案内すると、利用者はその経路を
+試して空振りする。`buildNoModelGuidance()` が `vscode.version` を見て書き分け、
+古いホストには「BYOK にもサインインが要る」ことと更新の案内を出す。
+読めない版は古い側に倒す（使えない経路を勧めるより安全なため）。
+
+### チャット用途でない family の除外（レビュー指摘 P2）
+
+`copilot-utility`（271790）や `copilot-dictation-cleanup-luna`（921793）は
+**`maxInputTokens` が十分にあるためトークン数では弾けない。** family の名前で除外する。
+弾かないと、Copilot にこれらしか無い利用者が BYOK へ落ちられず、用途外のモデルへ送って
+空の応答を受け取る。
+
 ### モデルが 1 つも無いときの案内
 
 `selectModel()` が `undefined` を返したとき、`AIResponse` は
@@ -189,3 +213,5 @@ Copilot を先頭に置くのは、運営が AI 利用料を負担しない構�
 | 2026-09-21 | ⑥利用規約: 一次情報を確認し、条件付きで許容されると判断。Marketplace 公開前に「AI 生成であることの明示」と「フィードバック手段」が要る（調査/03 #121）                       |
 | 2026-09-21 | ②既定 provider: 新 provider を作らず、`selectChatModels()` の selector を全 vendor へ広げて BYOK へ落ちられるようにする。Copilot は引き続き最優先（調査/03 #121）            |
 | 2026-09-21 | 他拡張・VS Code 本体が登録した BYOK モデルが `selectChatModels()` から見えるかは一次情報で確認できず、実機確認を残した。見えない場合は #55 の BYOK provider 実装が必要になる |
+| 2026-09-21 | 送信先が Copilot 以外へ広がるため、同意の文面へ提供元を明記し `CONSENT_NOTICE_VERSION` を 2 → 3 へ上げて取り直す（PR#137 レビュー P1）                                       |
+| 2026-09-21 | 案内は `vscode.version` で書き分ける。`engines.vscode` が `^1.90.0` のため、1.122 未満のホストへ「Copilot 不要」と案内すると空振りする（PR#137 レビュー P2）                 |
