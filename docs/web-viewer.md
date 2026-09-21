@@ -489,5 +489,7 @@ CI で型のずれが出るとしたらこの経路である。`test/package-scr
 - Identity（OAuth / OIDC）。これが入るまで単一ユーザーであることは上述の通り。
   入った時点で `apps/web` の `/login` と KV セッションは、
   OIDC のコールバックとトークン保管へ置き換わる。中継の形は変わらない。
-- ユーザー設定の編集。
+- ~~ユーザー設定の編集。~~ Web/06（#123）で `/settings` として実装した。
+  設定は D1 の `user_settings` に置く。1ユーザー1行の上書きで、退会の
+  `DELETE FROM users` が `ON DELETE CASCADE` で一緒に消す。
 - データのエクスポート / 削除（architecture.md「本番化前に明確化する事項」）。

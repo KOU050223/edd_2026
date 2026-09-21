@@ -12,6 +12,7 @@
 
 import type { LearningEvent } from "@gakushu-sochi/domain";
 import type { MasteryStatus } from "@gakushu-sochi/domain";
+import type { UserSettings, UserSettingsInput } from "../contract/user-settings.js";
 
 /** 退会済みの sub を、発行済みアクセストークンの寿命を超えて再利用可能にする期間。 */
 export const ACCOUNT_DELETION_TOMBSTONE_TTL_MS = 60 * 60 * 1_000;
@@ -115,4 +116,17 @@ export interface MasteryOverrideRepository {
     status: MasteryStatus | null,
     updatedAt: string,
   ): Promise<Record<string, MasteryOverride>>;
+}
+
+/**
+ * ユーザー設定の永続化。
+ *
+ * 1ユーザー1件の上書きなので、`append` ではなく `put` だけを持つ。
+ * 未保存のユーザーに対して `get` は `null` を返す。既定値へ丸めるのは
+ * ここではなく呼び出し側の責務にする。この境界で既定値を混ぜると、
+ * 「まだ保存していない」と「既定値と同じ値を保存した」の区別が消える。
+ */
+export interface UserSettingsRepository {
+  get(userId: string): Promise<UserSettings | null>;
+  put(userId: string, input: UserSettingsInput, updatedAt: string): Promise<UserSettings>;
 }

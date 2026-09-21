@@ -7,6 +7,7 @@ import {
   D1IdentityRepository,
   D1LearningEventRepository,
   D1MasteryOverrideRepository,
+  D1UserSettingsRepository,
 } from "./repository/d1.js";
 import { createLearningEventsRoute } from "./routes/learning-events.js";
 import { createLearningProfileRoute } from "./routes/learning-profile.js";
@@ -15,6 +16,7 @@ import { createAiRoute } from "./routes/ai.js";
 import { createAccountRoute } from "./routes/account.js";
 import { createManagementUsers } from "./auth/management.js";
 import { createMasteryOverridesRoute } from "./routes/mastery-overrides.js";
+import { createUserSettingsRoute } from "./routes/user-settings.js";
 
 /** Cloudflare Worker から提供する HTTP API。 */
 export const app = new Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>();
@@ -83,6 +85,12 @@ app.use(
 );
 app.use(
   "/v1/mastery-overrides",
+  rateLimit((env) => env.MASTERY_OVERRIDE_RATE_LIMITER),
+);
+// 設定の保存も利用者の操作ごとに1回書き込む。手動上書きと頻度の性質が同じなので
+// 同じ上限を使う。設定のためだけに新しい namespace を増やさない。
+app.use(
+  "/v1/user-settings",
   rateLimit((env) => env.MASTERY_OVERRIDE_RATE_LIMITER),
 );
 // AIは外部プロバイダのコストが発生するため、Profileと同じユーザー単位の
@@ -158,6 +166,16 @@ app.route(
   createMasteryOverridesRoute((env) => ({
     identity: new D1IdentityRepository(env.DB),
     repository: new D1MasteryOverrideRepository(env.DB),
+    nowIso: () => new Date().toISOString(),
+    nowMs: () => Date.now(),
+  })),
+);
+
+app.route(
+  "/v1",
+  createUserSettingsRoute((env) => ({
+    identity: new D1IdentityRepository(env.DB),
+    repository: new D1UserSettingsRepository(env.DB),
     nowIso: () => new Date().toISOString(),
     nowMs: () => Date.now(),
   })),

@@ -18,11 +18,18 @@ import {
   type OverlaidConcept,
 } from "./overrides.js";
 import { summarizeConcepts, type Concept } from "./profile.js";
+import {
+  ACTIVITY_PERIOD_DAYS,
+  DISPLAY_NAME_MAX_LENGTH,
+  toSettingsInput,
+  type UserSettings,
+} from "../shared/settings.js";
 import "./style.css";
 
 type Profile = { derivedAt: string; eventCount: number; concepts: Concept[] };
 
 const OVERRIDES_PATH = "/api/v1/mastery-overrides";
+const SETTINGS_PATH = "/api/v1/user-settings";
 const statusLabel: Record<MasteryStatus, string> = {
   confirmed: "確認済み",
   learning: "学習中",
@@ -86,6 +93,7 @@ function Header() {
       <nav>
         <a href="/">マップ</a>
         <a href="/activity">推移</a>
+        <a href="/settings">設定</a>
         <button
           onClick={() =>
             fetch("/logout", {
@@ -298,11 +306,35 @@ function Chart({ days }: { days: ActivityDay[] }) {
 }
 
 function Activity() {
-  const [period, setPeriod] = useState(30);
+  // 既定の期間は設定から来る。設定が読めるまで期間は決まらないので `undefined` で
+  // 始める。ここで 30 を仮置きすると、設定した期間が表示される前に
+  // 30 日分の要求が1回走り、利用者には一瞬だけ違う期間が見える。
+  const [period, setPeriod] = useState<number>();
   const [activity, setActivity] = useState<Activity>();
   const [error, setError] = useState<ApiError>();
   const requestTracker = useRef(createRequestTracker());
+
+  // 設定の読み込みは1回きり。失敗しても推移そのものは見せたいので、
+  // 既定値へ倒して先へ進む。**これは失敗を隠すフォールバックではない**：
+  // 設定は「どの期間を最初に出すか」でしかなく、取得できなくても
+  // 利用者は期間を選び直せる。握りつぶさないようログへは残す（RULE-004）。
+  useEffect(() => {
+    let current = true;
+    requestJson<UserSettings>(SETTINGS_PATH, fetch, takeLoginRetry())
+      .then((settings) => {
+        if (current) setPeriod(settings.activityPeriodDays);
+      })
+      .catch((value: unknown) => {
+        console.warn("failed to load the default activity period", value);
+        if (current) setPeriod(30);
+      });
+    return () => {
+      current = false;
+    };
+  }, []);
+
   const load = () => {
+    if (period === undefined) return;
     const isLatest = requestTracker.current.start();
     setError(undefined);
     requestJson<Activity>(`/api/v1/learning-activity?days=${period}`, fetch, takeLoginRetry())
@@ -315,12 +347,12 @@ function Activity() {
   };
   useEffect(load, [period]);
   if (error) return <ErrorPanel error={error} retry={load} />;
-  if (!activity) return <p className="message">読み込み中…</p>;
+  if (period === undefined || !activity) return <p className="message">読み込み中…</p>;
   const days = fillActivityDays(activity);
   return (
     <>
       <section className="periods">
-        {[7, 30, 90].map((value) => (
+        {ACTIVITY_PERIOD_DAYS.map((value) => (
           <button
             className={period === value ? "selected" : ""}
             onClick={() => setPeriod(value)}
@@ -387,13 +419,179 @@ function LoginFailed() {
   );
 }
 
+/**
+ * ユーザー設定の編集画面。
+ *
+ * **実装済みの設定だけを並べる。** 未実装の機能の欄を先に作らない（Issue #123）。
+ * 空の欄は利用者から見れば壊れているのと区別がつかず、保存しても何も起きないことが
+ * そのまま不具合の報告になる。項目が増えるのは、それを尊重する側が動いてからでよい。
+ */
+function Settings() {
+  const [saved, setSaved] = useState<UserSettings>();
+  const [displayName, setDisplayName] = useState("");
+  const [periodDays, setPeriodDays] = useState<number>(30);
+  const [error, setError] = useState<ApiError>();
+  const [saveError, setSaveError] = useState<string>();
+  const [savedAt, setSavedAt] = useState<string>();
+  const [saving, setSaving] = useState(false);
+  const requestTracker = useRef(createRequestTracker());
+  const submitGuard = useRef(createSubmitGuard());
+  const queue = useRef(createOperationQueue());
+
+  // 読み込みは再実行されうる（再試行ボタン）。古い応答で新しい表示を
+  // 上書きしないよう、最新の要求だけが state を更新する
+  // （.agents/rules/rules.md RULE-005）。
+  const load = () => {
+    const isLatest = requestTracker.current.start();
+    setError(undefined);
+    queue.current
+      .run(() => requestJson<UserSettings>(SETTINGS_PATH, fetch, takeLoginRetry()))
+      .then((value) => {
+        if (!isLatest()) return;
+        setSaved(value);
+        setDisplayName(value.displayName ?? "");
+        setPeriodDays(value.activityPeriodDays);
+      })
+      .catch((value: unknown) => {
+        if (isLatest()) setError(value as ApiError);
+      });
+  };
+  useEffect(load, []);
+
+  const save = () => {
+    // 入口で弾く（RULE-007）。`disabled` は見た目でしかなく、
+    // キーボードからの submit は素通りする。
+    if (submitGuard.current.isRunning("settings")) return;
+    // 送る値は画面の状態そのものから作る。別に持った変数から組み立てると、
+    // 直前の入力が送信内容へ反映されない。
+    const input = toSettingsInput({ displayName, activityPeriodDays: periodDays });
+    if (!input.ok) {
+      setSaveError(input.message);
+      return;
+    }
+    const isLatestSave = requestTracker.current.start();
+    setSaveError(undefined);
+    setSavedAt(undefined);
+    setSaving(true);
+    void submitGuard.current
+      .run("settings", async () => {
+        try {
+          // 応答は保存後の設定。これをそのまま採用するので、
+          // 画面の状態と保存された内容が食い違わない。
+          const result = await queue.current.run(() =>
+            putJson<UserSettings>(SETTINGS_PATH, input.value),
+          );
+          if (!isLatestSave()) return;
+          setSaved(result);
+          setDisplayName(result.displayName ?? "");
+          setPeriodDays(result.activityPeriodDays);
+          setSavedAt(result.updatedAt ?? undefined);
+        } catch (value: unknown) {
+          // 保存の失敗を黙って飲み込まない（RULE-004）。
+          const failure = value as ApiError;
+          if (failure.kind === "session_expired") {
+            window.location.href = "/login";
+            return;
+          }
+          if (isLatestSave()) setSaveError(errorText[failure.kind]);
+        }
+      })
+      .finally(() => {
+        // 解除は finally で行う。try の末尾に置くと、失敗したときに
+        // 入力が無効のまま固まる（RULE-007）。
+        setSaving(false);
+      });
+  };
+
+  if (error) return <ErrorPanel error={error} retry={load} />;
+  if (!saved) return <p className="message">読み込み中…</p>;
+  const dirty =
+    (saved.displayName ?? "") !== displayName || saved.activityPeriodDays !== periodDays;
+  return (
+    <section className="settings">
+      <h1>設定</h1>
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          save();
+        }}
+      >
+        <label className="field">
+          <span>表示名</span>
+          <input
+            type="text"
+            value={displayName}
+            maxLength={DISPLAY_NAME_MAX_LENGTH}
+            placeholder="未設定"
+            disabled={saving}
+            onChange={(event) => setDisplayName(event.target.value)}
+          />
+          <small>
+            画面に表示される名前。空にすると未設定へ戻ります（{DISPLAY_NAME_MAX_LENGTH} 文字まで）。
+          </small>
+        </label>
+
+        <fieldset className="field">
+          <legend>推移の既定の期間</legend>
+          <div className="choices">
+            {ACTIVITY_PERIOD_DAYS.map((value) => (
+              <label key={value}>
+                <input
+                  type="radio"
+                  name="activityPeriodDays"
+                  value={value}
+                  checked={periodDays === value}
+                  disabled={saving}
+                  onChange={() => setPeriodDays(value)}
+                />
+                {value} 日
+              </label>
+            ))}
+          </div>
+          <small>「推移」を開いたときに最初に選ばれる期間。</small>
+        </fieldset>
+
+        {saveError && (
+          <p className="message error" role="alert">
+            設定を保存できませんでした：{saveError}
+          </p>
+        )}
+        {savedAt && !dirty && (
+          <p className="message saved" role="status">
+            保存しました（{new Date(savedAt).toLocaleString("ja-JP")}）
+          </p>
+        )}
+
+        <div className="actions">
+          <button type="submit" disabled={saving || !dirty}>
+            {saving ? "保存中…" : "保存"}
+          </button>
+        </div>
+      </form>
+      <p className="note">
+        {saved.updatedAt
+          ? `最終更新 ${new Date(saved.updatedAt).toLocaleString("ja-JP")}`
+          : "まだ保存していません"}
+      </p>
+    </section>
+  );
+}
+
 function App() {
   const path = window.location.pathname;
   if (path === "/login-failed") return <LoginFailed />;
   return (
     <>
       <Header />
-      <main>{path === "/activity" ? <Activity /> : <LearningMap />}</main>
+      <main>
+        {path === "/activity" ? (
+          <Activity />
+        ) : path === "/settings" ? (
+          <Settings />
+        ) : (
+          <LearningMap />
+        )}
+      </main>
     </>
   );
 }
