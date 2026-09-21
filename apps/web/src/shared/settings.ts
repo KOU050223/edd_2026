@@ -25,6 +25,20 @@ export function isActivityPeriodDays(value: unknown): value is ActivityPeriodDay
   return typeof value === "number" && ACTIVITY_PERIOD_DAYS.includes(value as ActivityPeriodDays);
 }
 
+/** API から受け取った設定が、画面で安全に扱える形か検証する。 */
+export function isUserSettings(value: unknown): value is UserSettings {
+  if (typeof value !== "object" || value === null) return false;
+  const settings = value as Record<string, unknown>;
+  const displayName = settings.displayName;
+  return (
+    settings.version === 1 &&
+    (displayName === null ||
+      (typeof displayName === "string" && displayName.length <= DISPLAY_NAME_MAX_LENGTH)) &&
+    isActivityPeriodDays(settings.activityPeriodDays) &&
+    (settings.updatedAt === null || typeof settings.updatedAt === "string")
+  );
+}
+
 /** `PUT` へ送る本文。`updatedAt` はサーバーが決めるので送らない。 */
 export interface UserSettingsInput {
   displayName: string | null;

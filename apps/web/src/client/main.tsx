@@ -21,6 +21,7 @@ import { summarizeConcepts, type Concept } from "./profile.js";
 import {
   ACTIVITY_PERIOD_DAYS,
   DISPLAY_NAME_MAX_LENGTH,
+  isUserSettings,
   sameSettings,
   toDraft,
   toSettingsInput,
@@ -316,25 +317,23 @@ function Activity() {
   const [activity, setActivity] = useState<Activity>();
   const [error, setError] = useState<ApiError>();
   const requestTracker = useRef(createRequestTracker());
+  const settingsTracker = useRef(createRequestTracker());
 
-  // 設定の読み込みは1回きり。失敗しても推移そのものは見せたいので、
-  // 既定値へ倒して先へ進む。**これは失敗を隠すフォールバックではない**：
-  // 設定は「どの期間を最初に出すか」でしかなく、取得できなくても
-  // 利用者は期間を選び直せる。握りつぶさないようログへは残す（RULE-004）。
-  useEffect(() => {
-    let current = true;
+  // 設定が読めないまま30日に倒すと、利用者の保存した期間を無視した表示を
+  // 成功したように見せてしまう。失敗は画面へ出し、再試行できるようにする。
+  const loadSettings = () => {
+    const isLatest = settingsTracker.current.start();
+    setError(undefined);
     requestJson<UserSettings>(SETTINGS_PATH, fetch, takeLoginRetry())
       .then((settings) => {
-        if (current) setPeriod(settings.activityPeriodDays);
+        if (!isUserSettings(settings)) throw new ApiError("unavailable");
+        if (isLatest()) setPeriod(settings.activityPeriodDays);
       })
       .catch((value: unknown) => {
-        console.warn("failed to load the default activity period", value);
-        if (current) setPeriod(30);
+        if (isLatest()) setError(value as ApiError);
       });
-    return () => {
-      current = false;
-    };
-  }, []);
+  };
+  useEffect(loadSettings, []);
 
   const load = () => {
     if (period === undefined) return;
@@ -349,7 +348,7 @@ function Activity() {
       });
   };
   useEffect(load, [period]);
-  if (error) return <ErrorPanel error={error} retry={load} />;
+  if (error) return <ErrorPanel error={error} retry={period === undefined ? loadSettings : load} />;
   if (period === undefined || !activity) return <p className="message">読み込み中…</p>;
   const days = fillActivityDays(activity);
   return (
@@ -519,7 +518,7 @@ function Settings() {
   };
   return (
     <section className="settings">
-      <h1>設定</h1>
+      <h1>{draft.displayName ? `${draft.displayName}さんの設定` : "設定"}</h1>
       <form
         onSubmit={(event) => {
           event.preventDefault();

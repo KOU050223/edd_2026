@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import {
   ACTIVITY_PERIOD_DAYS,
   DISPLAY_NAME_MAX_LENGTH,
+  isUserSettings,
   isActivityPeriodDays,
   sameSettings,
   toDraft,
@@ -23,6 +24,21 @@ test("空の表示名は未設定として送る", () => {
     ok: true,
     value: { displayName: null, activityPeriodDays: 30 },
   });
+});
+
+test("設定レスポンスの形を検証し、不正な2xx本文を受け入れない", () => {
+  expect(
+    isUserSettings({
+      version: 1,
+      displayName: "こう",
+      activityPeriodDays: 30,
+      updatedAt: null,
+    }),
+  ).toBe(true);
+  expect(isUserSettings({})).toBe(false);
+  expect(
+    isUserSettings({ version: 1, displayName: null, activityPeriodDays: 31, updatedAt: null }),
+  ).toBe(false);
 });
 
 test("上限を超える表示名は切り詰めずに失敗として返す", () => {
