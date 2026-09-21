@@ -108,6 +108,7 @@ export class DeviceAuth {
   private accessToken: { value: string; expiresAt: number } | undefined;
   private refreshPromise: Promise<string> | undefined;
   private authGeneration = 0;
+  private loginInProgress = false;
   private storageOperation: Promise<void> = Promise.resolve();
   private readonly sleep: (milliseconds: number) => Promise<void>;
 
@@ -119,26 +120,33 @@ export class DeviceAuth {
   }
 
   async login(): Promise<void> {
+    if (this.loginInProgress) throw new DeviceAuthError("ログイン中です");
+    this.loginInProgress = true;
     this.authGeneration += 1;
     this.refreshPromise = undefined;
     const generation = this.authGeneration;
-    const device = await this.requestDeviceCode();
-    const opened = await vscode.env.openExternal(
-      vscode.Uri.parse(device.verification_uri_complete ?? device.verification_uri),
-    );
-    if (!opened) throw new DeviceAuthError("ブラウザで認証ページを開けませんでした");
-    void vscode.window.showInformationMessage(`Gakushu Sochi の認証コード: ${device.user_code}`);
-    const token = await this.pollToken(device);
-    await this.enqueueStorageOperation(async () => {
-      this.assertAuthGeneration(generation);
-      this.saveToken(token);
-      this.assertAuthGeneration(generation);
-      await this.storeRefreshToken(token);
-      this.assertAuthGeneration(generation);
-    });
+    try {
+      const device = await this.requestDeviceCode();
+      const opened = await vscode.env.openExternal(
+        vscode.Uri.parse(device.verification_uri_complete ?? device.verification_uri),
+      );
+      if (!opened) throw new DeviceAuthError("ブラウザで認証ページを開けませんでした");
+      void vscode.window.showInformationMessage(`Gakushu Sochi の認証コード: ${device.user_code}`);
+      const token = await this.pollToken(device);
+      await this.enqueueStorageOperation(async () => {
+        this.assertAuthGeneration(generation);
+        this.saveToken(token);
+        this.assertAuthGeneration(generation);
+        await this.storeRefreshToken(token);
+        this.assertAuthGeneration(generation);
+      });
+    } finally {
+      this.loginInProgress = false;
+    }
   }
 
   async getAccessToken(): Promise<string> {
+    if (this.loginInProgress) throw new DeviceAuthError("ログイン中です");
     if (this.accessToken && this.accessToken.expiresAt > Date.now() + 30_000) {
       return this.accessToken.value;
     }
@@ -178,6 +186,7 @@ export class DeviceAuth {
       throw new DeviceAuthError(`トークン更新に失敗しました: ${String(error)}`);
     }
     const body = await responseJson(response);
+    this.assertAuthGeneration(generation);
     if (!response.ok) {
       if (this.oauthErrorCode(body) === "invalid_grant") {
         await this.clear();

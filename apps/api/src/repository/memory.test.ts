@@ -5,6 +5,7 @@ import {
   InMemoryIdentityRepository,
   InMemoryLearningEventRepository,
 } from "./memory.js";
+import { ACCOUNT_DELETION_TOMBSTONE_TTL_MS } from "./types.js";
 import type { StoredEventInput } from "./types.js";
 
 let repo: InMemoryLearningEventRepository;
@@ -181,4 +182,14 @@ test("退会でユーザー、端末、学習イベントを削除し、同期�
   await expect(
     identity.ensureUserAndDevice({ userId: "user-a", clientId: "client-1", nowMs: 300 }),
   ).rejects.toThrow("user deletion is in progress");
+});
+
+test("退会マーカーはアクセストークンの有効期間を過ぎると期限切れになる", async () => {
+  const identity = new InMemoryIdentityRepository();
+  const nowMs = 10_000_000;
+
+  await identity.startUserDeletion("user-a", nowMs - ACCOUNT_DELETION_TOMBSTONE_TTL_MS - 1);
+  await expect(
+    identity.ensureUserAndDevice({ userId: "user-a", clientId: "client-1", nowMs }),
+  ).resolves.toBeUndefined();
 });

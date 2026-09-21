@@ -13,6 +13,9 @@
 import type { LearningEvent } from "@gakushu-sochi/domain";
 import type { MasteryStatus } from "@gakushu-sochi/domain";
 
+/** 退会済みの sub を、発行済みアクセストークンの寿命を超えて再利用可能にする期間。 */
+export const ACCOUNT_DELETION_TOMBSTONE_TTL_MS = 60 * 60 * 1_000;
+
 /** 保存するイベント。検証済みの `LearningEvent` に、サーバー側が付与する情報を足したもの。 */
 export interface StoredEventInput {
   event: LearningEvent;
@@ -57,7 +60,8 @@ export interface IdentityRepository {
 
   /**
    * 退会中であることを永続化する。以後の書き込み経路はこの状態を見て拒否する。
-   * マーカーは Auth0 側の削除が失敗しても再実行できるよう残す。
+   * マーカーは Auth0 側の削除が失敗しても再実行できるよう残し、
+   * 発行済みアクセストークンの寿命を超えたら再登録を許可する。
    */
   startUserDeletion(userId: string, startedAtMs: number): Promise<void>;
 

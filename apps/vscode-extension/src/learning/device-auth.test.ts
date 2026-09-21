@@ -116,6 +116,91 @@ test("同時に要求されたトークン更新は1回だけ実行する", asyn
   await expect(Promise.all([first, second])).resolves.toEqual(["access-shared", "access-shared"]);
 });
 
+test("ログイン中はバックグラウンドのトークン更新を開始しない", async () => {
+  const storage = secrets();
+  let resolveToken: ((response: Response) => void) | undefined;
+  const tokenResponse = new Promise<Response>((resolve) => {
+    resolveToken = resolve;
+  });
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          device_code: "device-1",
+          user_code: "ABCD-EFGH",
+          verification_uri: "https://example.com/activate",
+          expires_in: 600,
+          interval: 1,
+        }),
+      ),
+    )
+    .mockReturnValueOnce(tokenResponse);
+  vi.stubGlobal("fetch", fetchMock);
+
+  const auth = new DeviceAuth(storage, { sleep: async () => undefined });
+  const loggingIn = auth.login();
+  await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+
+  await expect(auth.getAccessToken()).rejects.toThrow("ログイン中です");
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+
+  resolveToken?.(
+    new Response(
+      JSON.stringify({
+        access_token: "access-login",
+        token_type: "Bearer",
+        expires_in: 900,
+        refresh_token: "refresh-login",
+      }),
+    ),
+  );
+  await loggingIn;
+});
+
+test("古い世代のinvalid_grantは新しいログインの資格情報を削除しない", async () => {
+  const storage = secrets({ "gakushuSochi.auth.refreshToken": "refresh-old" });
+  let resolveRefresh: ((response: Response) => void) | undefined;
+  const refreshResponse = new Promise<Response>((resolve) => {
+    resolveRefresh = resolve;
+  });
+  const fetchMock = vi
+    .fn()
+    .mockReturnValueOnce(refreshResponse)
+    .mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          device_code: "device-1",
+          user_code: "ABCD-EFGH",
+          verification_uri: "https://example.com/activate",
+          expires_in: 600,
+          interval: 1,
+        }),
+      ),
+    )
+    .mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          access_token: "access-login",
+          token_type: "Bearer",
+          expires_in: 900,
+          refresh_token: "refresh-login",
+        }),
+      ),
+    );
+  vi.stubGlobal("fetch", fetchMock);
+
+  const auth = new DeviceAuth(storage, { sleep: async () => undefined });
+  const refreshing = auth.getAccessToken();
+  await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+  await auth.login();
+
+  resolveRefresh?.(new Response(JSON.stringify({ error: "invalid_grant" }), { status: 400 }));
+
+  await expect(refreshing).rejects.toThrow("再ログインが必要です");
+  await expect(storage.get("gakushuSochi.auth.refreshToken")).resolves.toBe("refresh-login");
+});
+
 test("新しいログインは進行中の古いトークン更新に上書きされない", async () => {
   const storage = secrets({ "gakushuSochi.auth.refreshToken": "refresh-old" });
   let resolveRefresh: ((response: Response) => void) | undefined;

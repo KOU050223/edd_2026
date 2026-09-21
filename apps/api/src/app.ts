@@ -58,7 +58,10 @@ app.use("/v1/*", (c, next) => {
         .map((origin) => origin.trim())
         .filter((origin) => origin.length > 0)
     : [];
-  return cors({ origin: origins, allowMethods: ["GET", "POST", "PUT", "OPTIONS"] })(c, next);
+  return cors({ origin: origins, allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"] })(
+    c,
+    next,
+  );
 });
 
 app.use("/v1/*", requireAuth);

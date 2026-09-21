@@ -6,6 +6,7 @@
  */
 
 import type { LearningEvent, LearningEventType, EventOrigin } from "@gakushu-sochi/domain";
+import { ACCOUNT_DELETION_TOMBSTONE_TTL_MS } from "./types.js";
 import type {
   AppendResult,
   IdentityRepository,
@@ -25,6 +26,18 @@ interface EventRow {
   language: string | null;
   diagnostic_code: string | null;
   session_id: string | null;
+}
+
+async function hasActiveDeletion(db: D1Database, userId: string, nowMs: number): Promise<boolean> {
+  const row = await db
+    .prepare(
+      `SELECT 1 AS active
+       FROM account_deletions
+       WHERE user_id = ? AND started_at_ms > ?`,
+    )
+    .bind(userId, nowMs - ACCOUNT_DELETION_TOMBSTONE_TTL_MS)
+    .first<{ active: number }>();
+  return row !== null;
 }
 
 /**
@@ -66,11 +79,10 @@ export class D1LearningEventRepository implements LearningEventRepository {
       return [];
     }
 
-    const deleting = await this.db
-      .prepare(`SELECT 1 AS active FROM account_deletions WHERE user_id = ?`)
-      .bind(userId)
-      .first<{ active: number }>();
-    if (deleting) throw new Error("user deletion is in progress");
+    const nowMs = Date.now();
+    if (await hasActiveDeletion(this.db, userId, nowMs)) {
+      throw new Error("user deletion is in progress");
+    }
 
     const statement = this.db.prepare(
       `INSERT INTO learning_events (
@@ -79,7 +91,8 @@ export class D1LearningEventRepository implements LearningEventRepository {
        )
        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
        WHERE NOT EXISTS (
-         SELECT 1 FROM account_deletions WHERE user_id = ?
+         SELECT 1 FROM account_deletions
+         WHERE user_id = ? AND started_at_ms > ?
        )
        ON CONFLICT (user_id, id) DO NOTHING`,
     );
@@ -100,6 +113,7 @@ export class D1LearningEventRepository implements LearningEventRepository {
         clientId,
         receivedAtMs,
         userId,
+        nowMs - ACCOUNT_DELETION_TOMBSTONE_TTL_MS,
       ),
     );
 
@@ -111,11 +125,9 @@ export class D1LearningEventRepository implements LearningEventRepository {
     // バッチ全体を失敗させたままにする。
     const results = await this.db.batch(bound);
 
-    const deletingAfter = await this.db
-      .prepare(`SELECT 1 AS active FROM account_deletions WHERE user_id = ?`)
-      .bind(userId)
-      .first<{ active: number }>();
-    if (deletingAfter) throw new Error("user deletion is in progress");
+    if (await hasActiveDeletion(this.db, userId, nowMs)) {
+      throw new Error("user deletion is in progress");
+    }
 
     return inputs.map((input, index) => {
       const changes = results[index]?.meta?.changes;
@@ -165,10 +177,29 @@ export class D1IdentityRepository implements IdentityRepository {
   constructor(private readonly db: D1Database) {}
 
   async ensureUser(params: { userId: string; nowMs: number }): Promise<void> {
-    await this.db
-      .prepare("INSERT INTO users (id, created_at_ms) VALUES (?, ?) ON CONFLICT (id) DO NOTHING")
-      .bind(params.userId, params.nowMs)
+    const result = await this.db
+      .prepare(
+        `INSERT INTO users (id, created_at_ms)
+         SELECT ?, ?
+         WHERE NOT EXISTS (
+           SELECT 1 FROM account_deletions
+           WHERE user_id = ? AND started_at_ms > ?
+         )
+         ON CONFLICT (id) DO NOTHING`,
+      )
+      .bind(
+        params.userId,
+        params.nowMs,
+        params.userId,
+        params.nowMs - ACCOUNT_DELETION_TOMBSTONE_TTL_MS,
+      )
       .run();
+    if (
+      result.meta.changes === 0 &&
+      (await hasActiveDeletion(this.db, params.userId, params.nowMs))
+    ) {
+      throw new Error("user deletion is in progress");
+    }
   }
 
   async ensureUserAndDevice(params: {
@@ -178,11 +209,9 @@ export class D1IdentityRepository implements IdentityRepository {
   }): Promise<void> {
     const { userId, clientId, nowMs } = params;
 
-    const deleting = await this.db
-      .prepare(`SELECT 1 AS active FROM account_deletions WHERE user_id = ?`)
-      .bind(userId)
-      .first<{ active: number }>();
-    if (deleting) throw new Error("user deletion is in progress");
+    if (await hasActiveDeletion(this.db, userId, nowMs)) {
+      throw new Error("user deletion is in progress");
+    }
 
     // users を先に入れる。devices と learning_events の両方が users(id) を
     // 参照しているため、順序を逆にすると外部キー制約で落ちる。
@@ -191,19 +220,28 @@ export class D1IdentityRepository implements IdentityRepository {
         .prepare(
           `INSERT INTO users (id, created_at_ms)
            SELECT ?, ?
-           WHERE NOT EXISTS (SELECT 1 FROM account_deletions WHERE user_id = ?)
+           WHERE NOT EXISTS (
+             SELECT 1 FROM account_deletions
+             WHERE user_id = ? AND started_at_ms > ?
+           )
            ON CONFLICT (id) DO NOTHING`,
         )
-        .bind(userId, nowMs, userId),
+        .bind(userId, nowMs, userId, nowMs - ACCOUNT_DELETION_TOMBSTONE_TTL_MS),
       this.db
         .prepare(
           `INSERT INTO devices (user_id, client_id, created_at_ms, last_seen_at_ms)
            SELECT ?, ?, ?, ?
-           WHERE NOT EXISTS (SELECT 1 FROM account_deletions WHERE user_id = ?)
+           WHERE NOT EXISTS (
+             SELECT 1 FROM account_deletions
+             WHERE user_id = ? AND started_at_ms > ?
+           )
            ON CONFLICT (user_id, client_id) DO UPDATE SET last_seen_at_ms = excluded.last_seen_at_ms`,
         )
-        .bind(userId, clientId, nowMs, nowMs, userId),
+        .bind(userId, clientId, nowMs, nowMs, userId, nowMs - ACCOUNT_DELETION_TOMBSTONE_TTL_MS),
     ]);
+    if (await hasActiveDeletion(this.db, userId, nowMs)) {
+      throw new Error("user deletion is in progress");
+    }
   }
 
   async startUserDeletion(userId: string, startedAtMs: number): Promise<void> {
@@ -211,7 +249,7 @@ export class D1IdentityRepository implements IdentityRepository {
       .prepare(
         `INSERT INTO account_deletions (user_id, started_at_ms)
          VALUES (?, ?)
-         ON CONFLICT (user_id) DO NOTHING`,
+         ON CONFLICT (user_id) DO UPDATE SET started_at_ms = excluded.started_at_ms`,
       )
       .bind(userId, startedAtMs)
       .run();
@@ -262,16 +300,31 @@ export class D1MasteryOverrideRepository implements MasteryOverrideRepository {
         .bind(userId, conceptId)
         .run();
     } else {
-      await this.db
+      const nowMs = Date.now();
+      const result = await this.db
         .prepare(
           `INSERT INTO mastery_overrides (user_id, concept_id, status, updated_at)
-           VALUES (?, ?, ?, ?)
+           SELECT ?, ?, ?, ?
+           WHERE NOT EXISTS (
+             SELECT 1 FROM account_deletions
+             WHERE user_id = ? AND started_at_ms > ?
+           )
            ON CONFLICT (user_id, concept_id) DO UPDATE SET
              status = excluded.status,
              updated_at = excluded.updated_at`,
         )
-        .bind(userId, conceptId, status, updatedAt)
+        .bind(
+          userId,
+          conceptId,
+          status,
+          updatedAt,
+          userId,
+          nowMs - ACCOUNT_DELETION_TOMBSTONE_TTL_MS,
+        )
         .run();
+      if (result.meta.changes === 0 && (await hasActiveDeletion(this.db, userId, nowMs))) {
+        throw new Error("user deletion is in progress");
+      }
     }
     return this.listByUser(userId);
   }
