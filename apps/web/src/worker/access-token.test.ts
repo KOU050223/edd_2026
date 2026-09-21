@@ -273,3 +273,80 @@ test("expires_in が無ければキャッシュせず、毎回取り直す", asy
 
   expect(again).toEqual({ ok: true, accessToken: "at-2" });
 });
+
+test("進行中の refresh は、途中で forget されたら結果を書き戻さない", async () => {
+  const kv = new MemoryKv();
+  const { token, record } = await seed(kv);
+  let release: () => void = () => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const stub = stubFetch([
+    async () => {
+      await held;
+      return tokenResponse({ access_token: "at-1", refresh_token: "rt-2", expires_in: 900 });
+    },
+  ]);
+  const provider = createAccessTokenProvider({ fetch: stub.fetch });
+
+  // refresh を始めてから、応答が返る前にログアウトが走る。
+  const pending = provider.get(kvOf(kv), token, record, config);
+  provider.forget(token);
+  await kvOf(kv).delete(`session:${token}`);
+  release();
+  const result = await pending;
+
+  // 消したセッションが KV へ蘇っていないこと。ここが本題。
+  expect(result).toEqual({ ok: false, kind: "session_expired" });
+  await expect(readSession(kvOf(kv), token)).resolves.toBeUndefined();
+});
+
+test("forget 後のアクセストークンはキャッシュから配られない", async () => {
+  const kv = new MemoryKv();
+  const { token, record } = await seed(kv);
+  let release: () => void = () => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const stub = stubFetch([
+    async () => {
+      await held;
+      return tokenResponse({ access_token: "at-1", expires_in: 900 });
+    },
+  ]);
+  const provider = createAccessTokenProvider({ fetch: stub.fetch });
+
+  const pending = provider.get(kvOf(kv), token, record, config);
+  provider.forget(token);
+  release();
+  await pending;
+
+  // ログアウト後に Cookie を持っている者が来ても、キャッシュが残っていない。
+  const stale = await provider
+    .get(kvOf(kv), token, record, config)
+    .catch(() => ({ ok: false }) as const);
+  expect(stale).not.toEqual({ ok: true, accessToken: "at-1" });
+});
+
+test("rotation した RT を保存できなければ成功を返さない", async () => {
+  const kv = new MemoryKv();
+  const { token, record } = await seed(kv);
+  const stub = stubFetch([
+    async () => tokenResponse({ access_token: "at-1", refresh_token: "rt-2", expires_in: 900 }),
+  ]);
+  const provider = createAccessTokenProvider({ fetch: stub.fetch });
+  // KV の書き込みだけを失敗させる。
+  const failing = {
+    ...kvOf(kv),
+    get: (key: string) => kvOf(kv).get(key),
+    put: async () => {
+      throw new Error("kv write failed");
+    },
+    delete: (key: string) => kvOf(kv).delete(key),
+  } as unknown as KVNamespace;
+
+  const result = await provider.get(failing, token, record, config);
+
+  // 成功を返すと、AT の期限が切れた十数分後に突然ログアウトする形で壊れる。
+  expect(result).toEqual({ ok: false, kind: "auth_unavailable" });
+});

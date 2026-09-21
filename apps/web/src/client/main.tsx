@@ -369,6 +369,11 @@ function LoginFailed() {
         {reason === "login_state_missing" && (
           <p className="error-text">ログインの有効期限が切れました。もう一度お試しください。</p>
         )}
+        {reason === "unsolicited" && (
+          <p className="error-text">
+            このログイン要求には心当たりがありません。もう一度お試しください。
+          </p>
+        )}
         {reason === "token_exchange_failed" && (
           <p className="error-text">
             認証サーバーへ接続できませんでした。少し待ってからお試しください。

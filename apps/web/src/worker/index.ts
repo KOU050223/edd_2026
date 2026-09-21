@@ -14,6 +14,7 @@ import {
   createLogin,
   createSession,
   deleteSession,
+  peekLogin,
   expiredLoginCookie,
   expiredSessionCookie,
   loginCookie,
@@ -75,12 +76,19 @@ function oauthConfig(env: WebBindings): OAuthConfig {
   };
 }
 
-/** セッションが無いことを、利用者が再ログインへ倒せる理由付きで返す。 */
-function sessionExpired(c: Context<{ Bindings: WebBindings }>) {
-  return c.json({ error: "session_expired" }, 401, {
-    "cache-control": "no-store",
-    "set-cookie": expiredSessionCookie,
-  });
+/**
+ * セッションが無いことを、利用者が再ログインへ倒せる理由付きで返す。
+ *
+ * **Cookie を消すのは、そのセッションが無効だと確定したときだけにする。**
+ * KV は結果整合なので、ログイン直後の最初の要求は「まだ伝播していないだけ」で
+ * 空振りしうる（docs/web-viewer.md）。ここで一律に Cookie を消すと、
+ * 画面が 1 回だけ行う再試行が資格情報を失い、必ずもう一度 401 になる。
+ * 伝播待ちの回復経路が塞がるので、既定では消さない。
+ */
+function sessionExpired(c: Context<{ Bindings: WebBindings }>, options?: { clearCookie: boolean }) {
+  const headers: Record<string, string> = { "cache-control": "no-store" };
+  if (options?.clearCookie) headers["set-cookie"] = expiredSessionCookie;
+  return c.json({ error: "session_expired" }, 401, headers);
 }
 
 /**
@@ -117,6 +125,22 @@ function loginFailed(c: Context<{ Bindings: WebBindings }>, reason: string) {
       "cache-control": "no-store",
       "set-cookie": expiredLoginCookie,
     },
+  });
+}
+
+/**
+ * 自分が始めたログインへの応答ではない `/callback`。
+ *
+ * **進行中のログインを壊さないことが目的**なので、Cookie も KV も触らない。
+ * 利用者にはやり直しの導線だけを見せる。
+ */
+function unsolicitedCallback(c: Context<{ Bindings: WebBindings }>) {
+  console.warn("unsolicited callback ignored", {
+    ip: c.req.header("CF-Connecting-IP") ?? "unknown",
+  });
+  return new Response(null, {
+    status: 302,
+    headers: { location: "/login-failed?reason=unsolicited", "cache-control": "no-store" },
   });
 }
 
@@ -178,18 +202,30 @@ export function createWebApp(
     const config = oauthConfig(c.env);
     const url = new URL(c.req.url);
 
+    const loginToken = cookieValue(c.req.header("cookie"), "login");
+    const state = url.searchParams.get("state");
+
     // IdP が返した `error` は利用者が制御しうる文字列なので、そのまま次の URL へ
     // 載せない。既知の値だけを通し、それ以外は 1 つの分類に丸める。
+    //
+    // **この枝でも `state` を確かめる。** 確かめずに進むと、攻撃者が
+    // `/callback?error=access_denied` への遷移を誘導するだけで、進行中のログインを
+    // 中断させられる。ただし `takeLogin` は読むと同時に消すので、ここでは使えない
+    // （使うと、まさにその中断を自分で起こす）。**消さずに読んで**照合する。
     const authorizeError = url.searchParams.get("error");
     if (authorizeError) {
+      const pending = await peekLogin(c.env.SESSIONS, loginToken);
+      // 自分が始めたログインへの応答でなければ、何も壊さずに黙って追い返す。
+      // 進行中のログインの Cookie も KV も、そのまま残す。
+      if (!pending || !state || state !== pending.state) return unsolicitedCallback(c);
+      await takeLogin(c.env.SESSIONS, loginToken);
       const known = ["access_denied", "login_required", "consent_required"];
       return loginFailed(c, known.includes(authorizeError) ? authorizeError : "authorize_failed");
     }
 
     // state の検証は **Refresh Token を保存する前**に済ませる。
-    const login = await takeLogin(c.env.SESSIONS, cookieValue(c.req.header("cookie"), "login"));
+    const login = await takeLogin(c.env.SESSIONS, loginToken);
     if (!login) return loginFailed(c, "login_state_missing");
-    const state = url.searchParams.get("state");
     if (!state || state !== login.state) return loginFailed(c, "state_mismatch");
 
     const code = url.searchParams.get("code");
@@ -239,8 +275,11 @@ export function createWebApp(
     const token = cookieValue(c.req.header("cookie"), "session");
     const session = await readSession(c.env.SESSIONS, token);
     if (token) {
-      await deleteSession(c.env.SESSIONS, token);
+      // **`forget` を KV の削除より先に呼ぶ。** これが進行中の refresh へ
+      // 「結果を書き戻すな」という印を立てる。順序を逆にすると、削除を待つ間に
+      // refresh が完了し、消したはずのセッションが KV へ蘇りうる。
       accessTokens.forget(token);
+      await deleteSession(c.env.SESSIONS, token);
     }
     if (session) {
       try {
@@ -270,7 +309,8 @@ export function createWebApp(
     const origin = apiOrigin(c.env.API_ORIGIN);
     const token = await accessTokens.get(c.env.SESSIONS, sessionToken, session, oauthConfig(c.env));
     if (!token.ok) {
-      if (token.kind === "session_expired") return sessionExpired(c);
+      // RT が失効・撤回済みで確定した（KV は削除済み）。Cookie も消してよい。
+      if (token.kind === "session_expired") return sessionExpired(c, { clearCookie: true });
       // 一時的な失敗。**セッションは残っている**ので、そのまま再試行できる。
       return c.json({ error: "auth_unavailable" }, 503, {
         "cache-control": "no-store",
@@ -296,8 +336,15 @@ export function createWebApp(
     if (upstream.status === 401) {
       // API が個人のトークンを拒否した。共有トークンが無くなったので、
       // この 401 は「このセッションではもう通らない」という意味しか持たない。
+      //
+      // **ブラウザの Cookie を消すだけでは足りない。** KV のセッションを残すと、
+      // 同じ Cookie を持つ別の誰か（コピーされた Cookie）が refresh を回して
+      // 使い続けられる。利用者には「期限切れ」と伝えておきながら、
+      // サーバー側の資格情報が最大 7 日生き続ける状態になる。
+      // サーバー側を正本として先に消す。
       accessTokens.forget(sessionToken);
-      return sessionExpired(c);
+      await deleteSession(c.env.SESSIONS, sessionToken);
+      return sessionExpired(c, { clearCookie: true });
     }
     return new Response(upstream.body, { status: upstream.status, headers: responseHeaders });
   });

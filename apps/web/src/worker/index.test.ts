@@ -206,13 +206,45 @@ test("IdP が error を返した /callback は交換へ進まない", async () =
   const env = envWith(sessions);
 
   const login = await app.request("https://web.example.test/login", {}, env);
+  const state = new URL(login.headers.get("location") ?? "").searchParams.get("state");
   const response = await app.request(
-    "https://web.example.test/callback?error=access_denied",
+    `https://web.example.test/callback?error=access_denied&state=${state}`,
     { headers: { cookie: cookiesOf(login) } },
     env,
   );
 
   expect(response.headers.get("location")).toBe("/login-failed?reason=access_denied");
+});
+
+test("state の合わない error つき /callback は進行中のログインを壊さない", async () => {
+  const sessions = new MemoryKv();
+  const app = createWebApp({
+    fetch: async () => {
+      throw new Error("must not fetch");
+    },
+  });
+  const env = envWith(sessions);
+
+  const login = await app.request("https://web.example.test/login", {}, env);
+  const state = new URL(login.headers.get("location") ?? "").searchParams.get("state");
+  const cookie = cookiesOf(login);
+
+  // 攻撃者に誘導された、自分が始めたものではない error 応答。
+  const forged = await app.request(
+    "https://web.example.test/callback?error=access_denied&state=attacker",
+    { headers: { cookie } },
+    env,
+  );
+
+  expect(forged.headers.get("location")).toBe("/login-failed?reason=unsolicited");
+  // Cookie も KV も触っていないので、本来のログインはそのまま完了できる。
+  expect(forged.headers.get("set-cookie")).toBeNull();
+  const resumed = await app.request(
+    `https://web.example.test/callback?error=access_denied&state=${state}`,
+    { headers: { cookie } },
+    env,
+  );
+  expect(resumed.headers.get("location")).toBe("/login-failed?reason=access_denied");
 });
 
 test("IdP が返した未知の error は次の URL へそのまま載せない", async () => {
@@ -225,8 +257,9 @@ test("IdP が返した未知の error は次の URL へそのまま載せない"
   const env = envWith(sessions);
 
   const login = await app.request("https://web.example.test/login", {}, env);
+  const state = new URL(login.headers.get("location") ?? "").searchParams.get("state");
   const response = await app.request(
-    "https://web.example.test/callback?error=%3Cscript%3Ealert(1)%3C/script%3E",
+    `https://web.example.test/callback?error=%3Cscript%3Ealert(1)%3C/script%3E&state=${state}`,
     { headers: { cookie: cookiesOf(login) } },
     env,
   );
@@ -319,6 +352,93 @@ test("セッションが無い /api は API に中継せず理由を区別する
   await expect(response.json()).resolves.toEqual({ error: "session_expired" });
 });
 
+test("伝播待ちの 401 では Cookie を消さない（再試行が資格情報を失わない）", async () => {
+  const sessions = new MemoryKv();
+  const app = createWebApp({
+    fetch: async () => {
+      throw new Error("must not fetch");
+    },
+  });
+
+  // ログイン直後、KV がまだ伝播していない状態を模す（Cookie はあるが KV に無い）。
+  const response = await app.request(
+    "https://web.example.test/api/v1/learning-profile",
+    { headers: { cookie: "session=not-yet-propagated" } },
+    envWith(sessions),
+  );
+
+  expect(response.status).toBe(401);
+  // ここで Cookie を消すと、画面の 1 回だけの再試行が必ず 401 になり回復できない。
+  expect(response.headers.get("set-cookie")).toBeNull();
+});
+
+test("API の 401 ではサーバー側のセッションも消す", async () => {
+  const sessions = new MemoryKv();
+  const token = await createSession(kvOf(sessions), { refreshToken: "rt-1", sub: "auth0|a" });
+  const app = createWebApp({
+    fetch: async (input, init) => {
+      const request = new Request(input, init);
+      if (request.url.startsWith("https://idp.example.test"))
+        return Response.json({ access_token: "at-1", expires_in: 900 });
+      return Response.json({ error: "unauthorized" }, { status: 401 });
+    },
+  });
+
+  const response = await app.request(
+    "https://web.example.test/api/v1/learning-profile",
+    { headers: { cookie: `session=${token}` } },
+    envWith(sessions),
+  );
+
+  expect(response.status).toBe(401);
+  expect(response.headers.get("set-cookie")).toContain("Max-Age=0");
+  // Cookie を消すだけでは、同じ Cookie を持つ別の誰かが refresh を回して使い続けられる。
+  await expect(readSession(kvOf(sessions), token)).resolves.toBeUndefined();
+});
+
+test("ログアウトと並行する refresh は、消したセッションを蘇らせない", async () => {
+  const sessions = new MemoryKv();
+  const token = await createSession(kvOf(sessions), { refreshToken: "rt-1", sub: "auth0|a" });
+  let release: () => void = () => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const app = createWebApp({
+    fetch: async (input, init) => {
+      const request = new Request(input, init);
+      if (request.url.endsWith("/oauth/token")) {
+        await held;
+        return Response.json({
+          access_token: "at-1",
+          refresh_token: "rt-2",
+          expires_in: 900,
+        });
+      }
+      if (request.url.endsWith("/oauth/revoke")) return new Response(null, { status: 200 });
+      return Response.json({});
+    },
+  });
+  const env = envWith(sessions);
+
+  // refresh の途中でログアウトが割り込む。
+  const api = app.request(
+    "https://web.example.test/api/v1/learning-profile",
+    { headers: { cookie: `session=${token}` } },
+    env,
+  );
+  const logout = await app.request(
+    "https://web.example.test/logout",
+    { method: "POST", headers: { cookie: `session=${token}` } },
+    env,
+  );
+  release();
+  await api;
+
+  expect(logout.status).toBe(204);
+  // ログアウト後に KV へセッションが書き戻されていないこと。
+  await expect(readSession(kvOf(sessions), token)).resolves.toBeUndefined();
+});
+
 test("Auth0 の 5xx では 503 を返し、セッションを消さない", async () => {
   const sessions = new MemoryKv();
   const token = await createSession(kvOf(sessions), { refreshToken: "rt-1", sub: "auth0|a" });
@@ -408,28 +528,6 @@ test("並行リクエストは refresh を 1 回にまとめ、ランダムに�
     refreshToken: "rt-2",
     sub: "auth0|a",
   });
-});
-
-test("API が 401 を返したら再ログインへ倒す（共有トークンの状態はもう無い）", async () => {
-  const sessions = new MemoryKv();
-  const token = await createSession(kvOf(sessions), { refreshToken: "rt-1", sub: "auth0|a" });
-  const app = createWebApp({
-    fetch: async (input, init) => {
-      const request = new Request(input, init);
-      if (request.url.startsWith("https://idp.example.test"))
-        return Response.json({ access_token: "at-1", expires_in: 900 });
-      return Response.json({ error: "unauthorized" }, { status: 401 });
-    },
-  });
-
-  const response = await app.request(
-    "https://web.example.test/api/v1/learning-profile",
-    { headers: { cookie: `session=${token}` } },
-    envWith(sessions),
-  );
-
-  expect(response.status).toBe(401);
-  await expect(response.json()).resolves.toEqual({ error: "session_expired" });
 });
 
 test("ログアウトは先に KV を消し、その後 Refresh Token を撤回する", async () => {

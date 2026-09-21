@@ -124,7 +124,26 @@ export async function takeLogin(
   const key = `${LOGIN_PREFIX}${token}`;
   const raw = await sessions.get(key);
   await sessions.delete(key);
-  if (raw === null) return undefined;
+  return raw === null ? undefined : parseLoginRecord(raw);
+}
+
+/**
+ * ログイン中の状態を**消さずに**読む。
+ *
+ * IdP が `error` を返した `/callback` で、それが自分の始めたログインへの応答かを
+ * 確かめるために使う。`takeLogin` を使うと、確かめる行為そのものが
+ * 進行中のログインを壊してしまう（攻撃者に誘導されるだけで中断できてしまう）。
+ */
+export async function peekLogin(
+  sessions: KVNamespace,
+  token: string | undefined,
+): Promise<LoginRecord | undefined> {
+  if (!token) return undefined;
+  const raw = await sessions.get(`${LOGIN_PREFIX}${token}`);
+  return raw === null ? undefined : parseLoginRecord(raw);
+}
+
+function parseLoginRecord(raw: string): LoginRecord | undefined {
   let value: unknown;
   try {
     value = JSON.parse(raw);

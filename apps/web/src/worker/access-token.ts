@@ -87,6 +87,17 @@ export function createAccessTokenProvider(deps: AccessTokenProviderDeps): Access
   const cache = new Map<string, CacheEntry>();
   /** 進行中の refresh。同じセッションの 2 本目はこれに合流し、二重に回さない。 */
   const inFlight = new Map<string, Promise<AccessTokenResult>>();
+  /**
+   * `forget` されたセッション。**進行中の refresh が結果を書き戻すのを止めるためにある。**
+   *
+   * ログアウトは KV を消してから撤回する。その最中に別の要求が refresh を回していると、
+   * 撤回が終わった後に `writeSession` が走り、**消したはずのセッションが KV へ蘇る**。
+   * キャッシュも新しい AT で埋まるので、Cookie を持っている者はログアウト後も通る。
+   *
+   * 外向きの応答を待っている間に消されたかを、**書き戻す直前に**見る必要がある。
+   * 消えた印は `inFlight` が空になったときに落とす（進行中のものが全部見終わった後）。
+   */
+  const revoked = new Set<string>();
 
   async function refresh(
     sessions: KVNamespace,
@@ -97,6 +108,14 @@ export function createAccessTokenProvider(deps: AccessTokenProviderDeps): Access
     let refreshed: RefreshedAccessToken;
     try {
       refreshed = await refreshAccessToken(config, session.refreshToken, deps.fetch);
+      // 外向きの応答を待っている間にログアウトされていないか、**書き戻す前に**見る。
+      // ここを通さないと、消したセッションが下の writeSession で蘇る。
+      if (revoked.has(sessionToken)) {
+        console.warn("session was revoked while refreshing; discarding result", {
+          sub: session.sub,
+        });
+        return { ok: false, kind: "session_expired" };
+      }
     } catch (error) {
       // 失敗を一律に扱わない（docs/auth.md §5.3）。どちらの枝でも握りつぶさず記録する。
       if (error instanceof OAuthTokenError && error.isInvalidGrant) {
@@ -118,9 +137,12 @@ export function createAccessTokenProvider(deps: AccessTokenProviderDeps): Access
     }
 
     if (refreshed.refreshToken) {
-      // rotation で RT が回った。**新しい方を必ず書き戻す。**
-      // 書き戻しに失敗したら、手元の古い RT は既に無効なので、次の要求は
-      // `invalid_grant` になる。黙って進めず記録する（RULE-004）。
+      // rotation で RT が回った。**新しい方の保存は、この refresh の成立条件である。**
+      //
+      // 保存に失敗したまま成功を返すと、KV には既に無効な古い RT が残る。
+      // AT をキャッシュしてしまうと、期限が切れた後の refresh が `invalid_grant` になり、
+      // **何も操作していない利用者が十数分後に突然ログアウトする**。
+      // 原因から離れた場所で壊れるので、ここで失敗として扱う（RULE-004）。
       try {
         await writeSession(sessions, sessionToken, {
           refreshToken: refreshed.refreshToken,
@@ -132,6 +154,10 @@ export function createAccessTokenProvider(deps: AccessTokenProviderDeps): Access
           sub: session.sub,
           message: error instanceof Error ? error.message : String(error),
         });
+        // キャッシュしない。次の要求が同じ古い RT でやり直せる（rotation の leeway 30 秒
+        // の内側なら通る）。成功を返して先へ進ませるより、ここで再試行させる方が近い。
+        cache.delete(sessionToken);
+        return { ok: false, kind: "auth_unavailable" };
       }
     }
 
@@ -158,12 +184,20 @@ export function createAccessTokenProvider(deps: AccessTokenProviderDeps): Access
 
       const attempt = refresh(sessions, sessionToken, session, config).finally(() => {
         inFlight.delete(sessionToken);
+        // 進行中のものが見終わったので、失効の印は役目を終える。
+        // 残し続けると、同じ token を再取得できなくなる（現実には起きないが、
+        // Set が isolate の寿命だけ膨らみ続けるのも避ける）。
+        if (!inFlight.has(sessionToken)) revoked.delete(sessionToken);
       });
       inFlight.set(sessionToken, attempt);
       return attempt;
     },
     forget(sessionToken) {
       cache.delete(sessionToken);
+      // 進行中の refresh があるなら、その結果を書き戻させない。
+      // 無ければ印は不要だが、`get` と `forget` の間に始まる refresh も止めたいので
+      // 一律に立てる。印は進行中のものが片付いたときに落ちる。
+      if (inFlight.has(sessionToken)) revoked.add(sessionToken);
     },
   };
 }
