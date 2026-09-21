@@ -6,6 +6,12 @@
  */
 
 import type { LearningEvent, LearningEventType, EventOrigin } from "@gakushu-sochi/domain";
+import {
+  USER_SETTINGS_VERSION,
+  isActivityPeriodDays,
+  type UserSettings,
+  type UserSettingsInput,
+} from "../contract/user-settings.js";
 import { ACCOUNT_DELETION_TOMBSTONE_TTL_MS } from "./types.js";
 import type {
   AppendResult,
@@ -14,6 +20,7 @@ import type {
   MasteryOverride,
   MasteryOverrideRepository,
   StoredEventInput,
+  UserSettingsRepository,
 } from "./types.js";
 
 /** learning_events の1行。SELECT する列と対応させる。 */
@@ -327,5 +334,63 @@ export class D1MasteryOverrideRepository implements MasteryOverrideRepository {
       }
     }
     return this.listByUser(userId);
+  }
+}
+
+export class D1UserSettingsRepository implements UserSettingsRepository {
+  constructor(private readonly db: D1Database) {}
+
+  async get(userId: string): Promise<UserSettings | null> {
+    const row = await this.db
+      .prepare(
+        "SELECT display_name, activity_period_days, updated_at FROM user_settings WHERE user_id = ?",
+      )
+      .bind(userId)
+      .first<{ display_name: string | null; activity_period_days: number; updated_at: string }>();
+    if (row === null) return null;
+    // 読めない行を既定値へ丸めない。丸めると、利用者が保存した設定が
+    // 黙って別の値に化ける（.agents/rules/rules.md RULE-004）。
+    // 書き込み時に CHECK 制約を通しているので、ここが失敗したなら DB の破損である。
+    if (!isActivityPeriodDays(row.activity_period_days) || Number.isNaN(Date.parse(row.updated_at)))
+      throw new Error(`user_settings contains invalid data (user_id=${userId})`);
+    return {
+      version: USER_SETTINGS_VERSION,
+      displayName: row.display_name,
+      activityPeriodDays: row.activity_period_days,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  async put(userId: string, input: UserSettingsInput, updatedAt: string): Promise<UserSettings> {
+    // 退会中のユーザーの行を作らない。`mastery_overrides` と同じ守り方で、
+    // 削除の最中に users 行が復活する窓を塞ぐ（repository/types.ts の
+    // `startUserDeletion` の説明を参照）。
+    const nowMs = Date.now();
+    const result = await this.db
+      .prepare(
+        `INSERT INTO user_settings (user_id, display_name, activity_period_days, updated_at)
+         SELECT ?, ?, ?, ?
+         WHERE NOT EXISTS (
+           SELECT 1 FROM account_deletions
+           WHERE user_id = ? AND started_at_ms > ?
+         )
+         ON CONFLICT (user_id) DO UPDATE SET
+           display_name = excluded.display_name,
+           activity_period_days = excluded.activity_period_days,
+           updated_at = excluded.updated_at`,
+      )
+      .bind(
+        userId,
+        input.displayName,
+        input.activityPeriodDays,
+        updatedAt,
+        userId,
+        nowMs - ACCOUNT_DELETION_TOMBSTONE_TTL_MS,
+      )
+      .run();
+    if (result.meta.changes === 0 && (await hasActiveDeletion(this.db, userId, nowMs))) {
+      throw new Error("user deletion is in progress");
+    }
+    return { version: USER_SETTINGS_VERSION, ...input, updatedAt };
   }
 }
