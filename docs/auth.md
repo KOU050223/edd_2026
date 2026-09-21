@@ -10,6 +10,7 @@
 
 - `apps/api/src/auth/middleware.ts` の `devAuth` は単一の共有トークン
   `DEV_AUTH_TOKEN` を検証し、誰が来ても `DEV_AUTH_USER_ID`（既定 `dev-user`）を返す。
+  （§7 のとおり Auth/06 で削除済み。以下は着手時点の記述である。）
 - `apps/web/src/worker/index.ts` は `WEB_ACCESS_PASSPHRASE` を知っている全員に
   セッションを配り、`/api/*` の中継時に**共有の** `API_TOKEN` を注入する。
 - `apps/vscode-extension` は `gakushuSochi.api.token` 設定に人が手で貼った
@@ -396,18 +397,34 @@ Refresh Token は既存の `createCredentialStore` にそのまま載る。
 
 ## 7. 古い扉を閉じる
 
-`DEV_AUTH_TOKEN` と `WEB_ACCESS_PASSPHRASE` は、どちらも**全権限のバイパス**である。
+**この節は Auth/06（#85）で完了した。** 以下は決定と、実際に踏んだ手順の記録である。
+
+`DEV_AUTH_TOKEN` と `WEB_ACCESS_PASSPHRASE` は、どちらも**全権限のバイパス**であった。
 新しい認証と並存させたまま残すと、恒久的な裏口になる。
-「動いているから消し忘れる」が最も起こりやすい失敗なので、独立したタスクにする。
+「動いているから消し忘れる」が最も起こりやすい失敗なので、独立したタスクにした。
 
 カットオーバー手順:
 
-1. `requireAuth` を実装し、`AUTH_*` を設定する（この時点では未接続）
-2. 全クライアントが新フローで疎通することを staging で確認する
+1. `requireAuth` を実装し、`AUTH_*` を設定する（この時点では未接続）— Auth/02
+2. 全クライアントが新フローで疎通することを確認する — Auth/03〜05
 3. `devAuth` を削除し、`DEV_AUTH_TOKEN` / `DEV_AUTH_USER_ID` を
-   `wrangler.jsonc` と `wrangler secret delete` の両方から消す
-4. Web から `WEB_ACCESS_PASSPHRASE` / `API_TOKEN` を同様に消す
-5. `dev-user` を削除する（第6節）
+   `wrangler.jsonc` と `wrangler secret delete` の両方から消す — Auth/06
+4. Web から `WEB_ACCESS_PASSPHRASE` / `API_TOKEN` を同様に消す — Auth/05 で実施済み
+
+   ただし**消えていたのはコードと設定だけで、secret は生きていた。** Auth/06 で
+   Cloudflare の `API_TOKEN` / `WEB_ACCESS_PASSPHRASE` と、GitHub Actions の
+   `WEB_ACCESS_PASSPHRASE` / `WEB_API_TOKEN`（production environment）を削除した。
+   **設定から参照が消えても、secret が残っていれば裏口は開いたままである。**
+   消す場所は「コード・設定・Cloudflare・GitHub」の4つあると数えること。
+   再発防止として `test/package-scripts.test.mjs` が、これらの名前が
+   workflow に現れたら落ちるようにしてある。
+
+5. `dev-user` を削除する（第6節）— Auth/07（#86、未完）
+
+テストが `devAuth` を「userId を決めるだけの都合のよいミドルウェア」として流用していた
+ことが、共有トークンを消せない隠れた理由になっていた。`apps/api/src/auth/test-auth.ts` の
+`stubAuth` へ移し、本番と同じ `createAuth` に偽の検証器を挿す形へ揃えてある。
+**テストの都合で資格情報を残さない。**
 
 ## 8. 撤回・ログアウト・退会
 

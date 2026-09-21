@@ -1,18 +1,20 @@
 import { expect, test } from "vitest";
 import { Hono } from "hono";
-import { devAuth, type AuthVariables } from "../auth/middleware.js";
+import { type AuthVariables } from "../auth/middleware.js";
+import { TEST_TOKEN, stubAuth } from "../auth/test-auth.js";
 import { InMemoryIdentityRepository } from "../repository/memory.js";
 import { InMemoryMasteryOverrideRepository } from "../repository/mastery-overrides.js";
 import { createMasteryOverridesRoute } from "./mastery-overrides.js";
 
-const ENV = { DEV_AUTH_TOKEN: "secret", DEV_AUTH_USER_ID: "user-a" };
+/** 認証は `stubAuth` が担うので、env に資格情報は要らない。 */
+const ENV = {};
 
 function buildApp(
   repository = new InMemoryMasteryOverrideRepository(),
   identity = new InMemoryIdentityRepository(),
 ) {
   const app = new Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>();
-  app.use("/v1/*", devAuth);
+  app.use("/v1/*", stubAuth("user-a"));
   app.route(
     "/v1",
     createMasteryOverridesRoute(() => ({
@@ -32,14 +34,14 @@ test("手動上書きをユーザー単位で保存し、再読み込みでき�
     "/v1/mastery-overrides",
     {
       method: "PUT",
-      headers: { Authorization: "Bearer secret", "Content-Type": "application/json" },
+      headers: { Authorization: `Bearer ${TEST_TOKEN}`, "Content-Type": "application/json" },
       body: JSON.stringify({ conceptId: "go.pointer", status: "confirmed" }),
     },
     ENV as unknown as CloudflareBindings,
   );
   const loaded = await app.request(
     "/v1/mastery-overrides",
-    { headers: { Authorization: "Bearer secret" } },
+    { headers: { Authorization: `Bearer ${TEST_TOKEN}` } },
     ENV as unknown as CloudflareBindings,
   );
 
@@ -57,7 +59,7 @@ test("不正な上書きは保存せず400を返す", async () => {
     "/v1/mastery-overrides",
     {
       method: "PUT",
-      headers: { Authorization: "Bearer secret", "Content-Type": "application/json" },
+      headers: { Authorization: `Bearer ${TEST_TOKEN}`, "Content-Type": "application/json" },
       body: JSON.stringify({ conceptId: "go.pointer", status: "mastered" }),
     },
     ENV as unknown as CloudflareBindings,
@@ -74,7 +76,7 @@ test("形式が不正なConcept IDは保存せず400を返す", async () => {
     "/v1/mastery-overrides",
     {
       method: "PUT",
-      headers: { Authorization: "Bearer secret", "Content-Type": "application/json" },
+      headers: { Authorization: `Bearer ${TEST_TOKEN}`, "Content-Type": "application/json" },
       body: JSON.stringify({ conceptId: "__proto__", status: "confirmed" }),
     },
     ENV as unknown as CloudflareBindings,
@@ -98,7 +100,7 @@ test("nullで上書きを削除する", async () => {
       "/v1/mastery-overrides",
       {
         method: "PUT",
-        headers: { Authorization: "Bearer secret", "Content-Type": "application/json" },
+        headers: { Authorization: `Bearer ${TEST_TOKEN}`, "Content-Type": "application/json" },
         body: JSON.stringify({ conceptId: "go.pointer", status }),
       },
       ENV as unknown as CloudflareBindings,
@@ -118,7 +120,7 @@ test("退会マーカーがあるユーザーの上書きを再作成しない",
     "/v1/mastery-overrides",
     {
       method: "PUT",
-      headers: { Authorization: "Bearer secret", "Content-Type": "application/json" },
+      headers: { Authorization: `Bearer ${TEST_TOKEN}`, "Content-Type": "application/json" },
       body: JSON.stringify({ conceptId: "go.pointer", status: "confirmed" }),
     },
     ENV as unknown as CloudflareBindings,

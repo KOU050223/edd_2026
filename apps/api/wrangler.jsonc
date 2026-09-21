@@ -12,7 +12,6 @@
     "head_sampling_rate": 1,
   },
   "vars": {
-    "DEV_AUTH_USER_ID": "dev-user",
     // apps/web からの利用を許可する生成元をカンマ区切りで並べる。
     // 認証付きの API なので "*" にしない。空なら誰も許可しない。
     "CORS_ALLOWED_ORIGINS": "",
@@ -38,12 +37,7 @@
     // AUTH_MANAGEMENT_* は退会（DELETE /v1/me）で Auth0 のユーザーを消すための
     // M2M クライアント。`delete:users` だけを付けること。全ユーザーを消せる
     // 資格情報なので、余分な scope を持たせない（docs/auth.md §8）。
-    "required": [
-      "DEV_AUTH_TOKEN",
-      "GEMINI_API_KEY",
-      "AUTH_MANAGEMENT_CLIENT_ID",
-      "AUTH_MANAGEMENT_CLIENT_SECRET",
-    ],
+    "required": ["GEMINI_API_KEY", "AUTH_MANAGEMENT_CLIENT_ID", "AUTH_MANAGEMENT_CLIENT_SECRET"],
   },
   // レート制限。認証済みトークンであっても無制限に叩けないようにする。
   // period は 10 か 60 のみ。

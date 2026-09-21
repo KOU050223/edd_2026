@@ -81,7 +81,18 @@ test("main の CI 成功後に Web を同じコミットへ紐づけてデプロ
     ci,
     /deploy-web:[\s\S]*WEB_AUTH_CLIENT_SECRET: \$\{\{ secrets\.WEB_AUTH_CLIENT_SECRET \}\}/,
   );
-  assert.doesNotMatch(ci, /WEB_ACCESS_PASSPHRASE/);
+  // 全権限をバイパスする共有資格情報が CI 経由で戻ってこないようにする（Auth/06）。
+  // これらは設定・コード・Cloudflare・GitHub の secret すべてから消した。
+  // どれか1か所でも復活すれば恒久的な裏口になるので、名前の出現そのものを禁じる。
+  for (const name of [
+    "WEB_ACCESS_PASSPHRASE",
+    "WEB_API_TOKEN",
+    "DEV_AUTH_TOKEN",
+    "DEV_AUTH_USER_ID",
+  ]) {
+    assert.doesNotMatch(ci, new RegExp(name), `${name} は Auth/06 で廃止した`);
+    assert.doesNotMatch(webPreview, new RegExp(name), `${name} は Auth/06 で廃止した`);
+  }
   assert.match(ci, /deploy-web:[\s\S]*name: Require Web Worker secrets/);
   assert.match(ci, /deploy-web:[\s\S]*--secrets-file "\$secrets_file"/);
 });

@@ -74,8 +74,8 @@ React は学習プロフィールを表示し、Web Worker はブラウザに AP
 `apps/api` へ要求を中継する。ブラウザには HttpOnly のセッション Cookie だけを渡し、
 API 用の Access Token やサービス用トークンを保存させない。
 
-以下は認証方式を Auth0 に統一した後の責務である。移行が完了するまでは、開発環境に限り
-`DEV_AUTH_TOKEN` を使う経路が残る。
+以下は認証方式を Auth0 に統一した後の責務である。移行は完了しており、開発用の
+共有トークンを使う経路は残っていない（docs/auth.md §7、Auth/06）。
 
 Web Worker は次の処理を担当する。
 

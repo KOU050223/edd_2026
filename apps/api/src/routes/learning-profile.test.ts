@@ -1,7 +1,8 @@
 import { beforeEach, expect, test } from "vitest";
 import { Hono } from "hono";
 import type { LearningEvent } from "@gakushu-sochi/domain";
-import { devAuth, type AuthVariables } from "../auth/middleware.js";
+import { type AuthVariables } from "../auth/middleware.js";
+import { TEST_TOKEN, stubAuth } from "../auth/test-auth.js";
 import { InMemoryLearningEventRepository } from "../repository/memory.js";
 import { createLearningProfileRoute } from "./learning-profile.js";
 import type { LearningProfileResponse } from "../contract/learning-profile.js";
@@ -9,13 +10,14 @@ import type { LearningProfileResponse } from "../contract/learning-profile.js";
 let events: InMemoryLearningEventRepository;
 let app: Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>;
 
-const ENV = { DEV_AUTH_TOKEN: "secret", DEV_AUTH_USER_ID: "user-a" };
+/** 認証は `stubAuth` が担うので、env に資格情報は要らない。 */
+const ENV = {};
 const NOW = "2026-09-06T00:00:00.000Z";
 
 beforeEach(() => {
   events = new InMemoryLearningEventRepository();
   app = new Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>();
-  app.use("/v1/*", devAuth);
+  app.use("/v1/*", stubAuth("user-a"));
   app.route(
     "/v1",
     createLearningProfileRoute(() => ({ events, nowIso: () => NOW })),
@@ -39,7 +41,7 @@ async function seed(userId: string, list: Partial<LearningEvent>[]) {
   );
 }
 
-async function getProfile(token = "secret") {
+async function getProfile(token = TEST_TOKEN) {
   return app.request(
     "/v1/learning-profile",
     { headers: { Authorization: `Bearer ${token}` } },

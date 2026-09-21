@@ -1,6 +1,7 @@
 import { expect, test } from "vitest";
 import { Hono } from "hono";
-import { devAuth, type AuthVariables } from "./middleware.js";
+import { type AuthVariables } from "./middleware.js";
+import { AUTHORIZED_HEADERS, stubAuth } from "./test-auth.js";
 import { rateLimit } from "./rate-limit.js";
 
 /** 呼ばれた key を記録し、指定回数を超えたら拒否するテスト用のリミッタ。 */
@@ -22,24 +23,16 @@ function fakeLimiter(allowed: number) {
 
 function buildApp(limiter: RateLimit | undefined, userId = "user-a") {
   const app = new Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>();
-  app.use("/limited", devAuth);
+  app.use("/limited", stubAuth(userId));
   app.use(
     "/limited",
     rateLimit((env) => env.SYNC_RATE_LIMITER),
   );
   app.get("/limited", (c) => c.json({ ok: true }));
 
-  const env = {
-    DEV_AUTH_TOKEN: "secret",
-    DEV_AUTH_USER_ID: userId,
-    SYNC_RATE_LIMITER: limiter,
-  };
+  const env = { SYNC_RATE_LIMITER: limiter };
   return () =>
-    app.request(
-      "/limited",
-      { headers: { Authorization: "Bearer secret" } },
-      env as unknown as CloudflareBindings,
-    );
+    app.request("/limited", { headers: AUTHORIZED_HEADERS }, env as unknown as CloudflareBindings);
 }
 
 test("上限内のリクエストは通す", async () => {
@@ -87,7 +80,7 @@ test("リミッタが未設定なら素通りさせず500にする", async () =>
 test("認証が無ければレート制限より前に401で止める", async () => {
   const { limiter, keys } = fakeLimiter(10);
   const app = new Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>();
-  app.use("/limited", devAuth);
+  app.use("/limited", stubAuth("user-a"));
   app.use(
     "/limited",
     rateLimit((env) => env.SYNC_RATE_LIMITER),
@@ -95,7 +88,6 @@ test("認証が無ければレート制限より前に401で止める", async ()
   app.get("/limited", (c) => c.json({ ok: true }));
 
   const res = await app.request("/limited", { headers: { Authorization: "Bearer wrong" } }, {
-    DEV_AUTH_TOKEN: "secret",
     SYNC_RATE_LIMITER: limiter,
   } as unknown as CloudflareBindings);
 

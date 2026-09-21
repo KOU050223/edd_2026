@@ -25,8 +25,11 @@ npm run --workspace=@gakushu-sochi/api dev
 ```
 
 `apps/api/.dev.vars` に `GEMINI_API_KEY` を設定すると、`POST /v1/ai/responses` が
-Gemini の `streamGenerateContent` を中継します。desktop 側の API トークンには
-`DEV_AUTH_TOKEN` の値を設定してください。Gemini キーは desktop に保存しません。
+Gemini の `streamGenerateContent` を中継します。Gemini キーは desktop に保存しません。
+
+API の認証は Auth0 のアクセストークン検証です（docs/auth.md §4）。各クライアントは
+自分でログインして得たトークンを送ります。開発用の共有トークン `DEV_AUTH_TOKEN` は
+Auth/06 で廃止したので、手で貼り付ける共有の値はもうありません。
 
 D1 のスキーマを適用する。
 

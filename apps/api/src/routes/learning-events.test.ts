@@ -1,6 +1,7 @@
 import { beforeEach, expect, test } from "vitest";
 import { Hono } from "hono";
-import { devAuth, type AuthVariables } from "../auth/middleware.js";
+import { type AuthVariables } from "../auth/middleware.js";
+import { TEST_TOKEN, stubAuth } from "../auth/test-auth.js";
 import {
   InMemoryIdentityRepository,
   InMemoryLearningEventRepository,
@@ -12,14 +13,15 @@ let identity: InMemoryIdentityRepository;
 let events: InMemoryLearningEventRepository;
 let app: Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>;
 
-const ENV = { DEV_AUTH_TOKEN: "secret", DEV_AUTH_USER_ID: "user-a" };
+/** 認証は `stubAuth` が担うので、env に資格情報は要らない。 */
+const ENV = {};
 
 beforeEach(() => {
   identity = new InMemoryIdentityRepository();
   events = new InMemoryLearningEventRepository();
 
   app = new Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>();
-  app.use("/v1/*", devAuth);
+  app.use("/v1/*", stubAuth("user-a"));
   app.route(
     "/v1",
     createLearningEventsRoute(() => ({ identity, events, now: () => 1000 })),
@@ -37,7 +39,7 @@ function validEvent(id: string, overrides: Record<string, unknown> = {}) {
   };
 }
 
-async function sync(body: unknown, token = "secret") {
+async function sync(body: unknown, token = TEST_TOKEN) {
   const res = await app.request(
     "/v1/learning-events:sync",
     {
