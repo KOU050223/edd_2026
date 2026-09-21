@@ -1,3 +1,4 @@
 API_ORIGIN=http://localhost:8787
-API_TOKEN=replace-with-the-api-dev-auth-token
-WEB_ACCESS_PASSPHRASE=replace-with-a-long-passphrase
+# Auth0 の Web アプリ（regular_web）の client secret。docs/auth.md §5 を参照。
+# client_id と issuer は秘密ではないので wrangler.jsonc の vars にある。
+AUTH_CLIENT_SECRET=replace-with-the-auth0-web-client-secret

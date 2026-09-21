@@ -204,19 +204,16 @@ footer {
 .card h1 {
   margin-top: 0;
 }
-.card form {
-  display: grid;
-  gap: 16px;
-}
-.card label {
-  display: grid;
-  gap: 6px;
-}
-.card input {
-  padding: 10px;
-  border: 1px solid #94a3b8;
+/* ログインは Auth0 への遷移なので、入力欄ではなくリンク1本を置く。 */
+.card .button {
+  display: inline-block;
+  margin-top: 8px;
   border-radius: 8px;
+  padding: 10px 14px;
+  background: #0f766e;
+  color: #fff;
   font: inherit;
+  text-decoration: none;
 }
 .error-text {
   color: #b91c1c;

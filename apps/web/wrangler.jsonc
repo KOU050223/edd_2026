@@ -10,16 +10,38 @@
     "directory": "./dist/client",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*", "/login", "/logout"],
+    // `/callback` を落とすと assets バインディングが `index.html` を返し、
+    // **認可コードの交換が Worker に届かないまま静かに失敗する**
+    // （docs/web-viewer.md の警告 / docs/auth.md §5.3）。
+    // `/login` は IdP へのリダイレクト開始点として Worker 側に残る。
+    "run_worker_first": ["/api/*", "/login", "/callback", "/logout"],
   },
-  "vars": { "API_ORIGIN": "https://gakushu-sochi-api.uozumi05.workers.dev" },
-  "secrets": { "required": ["API_TOKEN", "WEB_ACCESS_PASSPHRASE"] },
+  "vars": {
+    "API_ORIGIN": "https://gakushu-sochi-api.uozumi05.workers.dev",
+    // Auth0 の issuer。OIDC Discovery が返す値をそのまま置く（末尾スラッシュ必須）。
+    "AUTH_ISSUER": "https://gakushu-sochi.jp.auth0.com/",
+    // API の audience。これを指定しないと API 向けでないトークンが返り、
+    // apps/api の検証で弾かれる（docs/auth.md §4）。
+    "AUTH_AUDIENCE": "https://api.gakushu-sochi.dev",
+    // Web は confidential client（`regular_web`）。client_id は秘密ではないので
+    // ここに置く（docs/auth.md §5）。secret だけを `secrets` で宣言する。
+    "AUTH_CLIENT_ID": "EGkN3vMFwcfzJ9RdMDdlIa14OTbgnwRp",
+  },
+  // 共有の `API_TOKEN` と `WEB_ACCESS_PASSPHRASE` は使わなくなった（docs/auth.md §5.3）。
+  // secret の削除そのものは Auth/06（#85）で行う。
+  "secrets": { "required": ["AUTH_CLIENT_SECRET"] },
   "kv_namespaces": [{ "binding": "SESSIONS", "id": "c652d3fa57234d318beffb571e594eb3" }],
   "ratelimits": [
     {
+      // 認証前エンドポイント（`/login` と `/callback`）への到達を数える。
+      // パスワード試行の制限は IdP へ移ったが、叩かれれば Auth0 への
+      // 外向き通信が発生する（docs/auth.md §5.3）。
+      //
+      // 1 回のログインが `/login` と `/callback` の 2 回を消費する。
+      // パスフレーズ時代の 5 回/分のままだと、やり直しを 2 回で使い切る。
       "name": "LOGIN_RATE_LIMITER",
       "namespace_id": "2001",
-      "simple": { "limit": 5, "period": 60 },
+      "simple": { "limit": 20, "period": 60 },
     },
   ],
 }

@@ -1,4 +1,9 @@
-export type ApiErrorKind = "session_expired" | "api_token_invalid" | "rate_limited" | "unavailable";
+/**
+ * 共有 `API_TOKEN` が無くなったので `api_token_invalid` は存在しない状態になった
+ * （docs/auth.md §5.3）。代わりに `auth_unavailable` がある。これは IdP 側の
+ * 一時的な失敗で、**セッションは生きている**ので再試行で直る。
+ */
+export type ApiErrorKind = "session_expired" | "auth_unavailable" | "rate_limited" | "unavailable";
 
 export class ApiError extends Error {
   constructor(readonly kind: ApiErrorKind) {
@@ -44,7 +49,7 @@ export async function requestJson<T>(
   }
   const body = (await response.json().catch(() => ({}))) as { error?: string };
   if (body.error === "session_expired") throw new ApiError("session_expired");
-  if (body.error === "api_token_invalid") throw new ApiError("api_token_invalid");
+  if (body.error === "auth_unavailable") throw new ApiError("auth_unavailable");
   if (response.status === 429) throw new ApiError("rate_limited");
   throw new ApiError("unavailable");
 }
@@ -135,7 +140,7 @@ export async function putJson<T>(
   if (!response.ok) {
     const body = (await response.json().catch(() => ({}))) as { error?: string };
     if (body.error === "session_expired") throw new ApiError("session_expired");
-    if (body.error === "api_token_invalid") throw new ApiError("api_token_invalid");
+    if (body.error === "auth_unavailable") throw new ApiError("auth_unavailable");
     if (response.status === 429) throw new ApiError("rate_limited");
     throw new ApiError("unavailable");
   }
