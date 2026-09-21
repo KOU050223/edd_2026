@@ -21,6 +21,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 
 import { createCredentialStore } from "./credentials.js";
+import { performLogout } from "./logout.js";
 import {
   BOOKMARK_TYPE,
   captureSelection,
@@ -42,9 +43,11 @@ import {
   parseCallbackUrl,
   refreshAccessToken,
   OAuthTokenError,
+  revokeRefreshToken,
   type OAuthConfig,
 } from "./oauth.js";
 import { describeApiFailure } from "./api-error.js";
+import { AuthOperationState } from "./auth-operation.js";
 import { CONCEPTS } from "@gakushu-sochi/domain";
 
 const execFileAsync = promisify(execFile);
@@ -67,6 +70,7 @@ let popup: BrowserWindow | undefined;
 let tray: Tray | undefined;
 let settings = { ...DEFAULT_SETTINGS };
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
+const authOperation = new AuthOperationState();
 
 if (!hasSingleInstanceLock) {
   app.quit();
@@ -123,25 +127,51 @@ function refreshTokenStore() {
 }
 
 async function loginWithBrowser(): Promise<void> {
-  const pkce = createPkcePair();
-  const state = randomState();
-  const callback = await waitForOAuthCallback(state);
+  const generation = authOperation.beginLogin();
   try {
-    const redirectUri = callback.redirectUri;
-    const authorizationUrl = buildAuthorizationUrl(
-      OAUTH_CONFIG,
-      redirectUri,
-      state,
-      pkce.challenge,
-    );
+    const pkce = createPkcePair();
+    const state = randomState();
+    const callback = await waitForOAuthCallback(state);
+    try {
+      const redirectUri = callback.redirectUri;
+      const authorizationUrl = buildAuthorizationUrl(
+        OAUTH_CONFIG,
+        redirectUri,
+        state,
+        pkce.challenge,
+      );
 
-    await shell.openExternal(authorizationUrl);
-    const code = await callback.code;
-    const tokens = await exchangeAuthorizationCode(OAUTH_CONFIG, code, redirectUri, pkce.verifier);
-    refreshTokenStore().set(tokens.refreshToken);
+      await shell.openExternal(authorizationUrl);
+      const code = await callback.code;
+      const tokens = await exchangeAuthorizationCode(
+        OAUTH_CONFIG,
+        code,
+        redirectUri,
+        pkce.verifier,
+      );
+      if (!authOperation.isCurrent(generation)) {
+        throw new Error("認証状態が変更されたため、ログイン結果を破棄しました。");
+      }
+      refreshTokenStore().set(tokens.refreshToken);
+    } finally {
+      callback.close();
+    }
   } finally {
-    callback.close();
+    authOperation.finishLogin();
   }
+}
+
+/** ログアウトの順序は `logout.ts` が固定する（docs/auth.md §8）。ここは配線だけ。 */
+async function logout(): Promise<void> {
+  authOperation.begin();
+  const store = refreshTokenStore();
+  await performLogout({
+    readRefreshToken: () => store.get(),
+    clearRefreshToken: () => store.clear(),
+    revoke: (refreshToken) => revokeRefreshToken(OAUTH_CONFIG, refreshToken),
+    notify: (state) => popup?.webContents.send("auth:state", state),
+    logError: (message, detail) => console.error(message, detail),
+  });
 }
 
 function randomState(): string {
@@ -434,11 +464,16 @@ function createTray(): void {
  * 保存済みトークンを消す。ネットワーク障害やその他の OAuth エラーでは残す
  * （消すと、復旧すれば使えたはずのトークンを捨てて再ログインを強いることになる）。
  */
-async function refreshAccessTokenOrClearOnInvalidGrant(refreshToken: string) {
+async function refreshAccessTokenOrClearOnInvalidGrant(refreshToken: string, generation: number) {
   try {
     return await refreshAccessToken(OAUTH_CONFIG, refreshToken);
   } catch (error) {
     if (error instanceof OAuthTokenError && error.code === "invalid_grant") {
+      if (!authOperation.isCurrent(generation)) {
+        throw new Error("認証状態が変更されたため、古い更新結果を破棄しました。", {
+          cause: error,
+        });
+      }
       refreshTokenStore().clear();
       // 消したことを画面へ伝える。伝えないと設定を開き直すまで「ログイン済み」のままになる。
       popup?.webContents.send("auth:state", { hasRefreshToken: false });
@@ -455,9 +490,16 @@ async function askManagedAI(
   question: string,
   onDelta: (text: string) => void,
 ): Promise<void> {
+  const generation = authOperation.current();
+  if (authOperation.isLoginInProgress()) {
+    throw new Error("ログイン中は更新できません。");
+  }
   const refreshToken = refreshTokenStore().get();
   if (!refreshToken) throw new Error("ログインが必要です。設定からログインしてください。");
-  const refreshed = await refreshAccessTokenOrClearOnInvalidGrant(refreshToken);
+  const refreshed = await refreshAccessTokenOrClearOnInvalidGrant(refreshToken, generation);
+  if (!authOperation.isCurrent(generation)) {
+    throw new Error("認証状態が変更されたため、更新結果を破棄しました。");
+  }
   if (refreshed.refreshToken) refreshTokenStore().set(refreshed.refreshToken);
   const apiToken = refreshed.accessToken;
   const response = await fetch(`${settings.apiBaseUrl.replace(/\/$/, "")}/v1/ai/responses`, {
@@ -537,6 +579,7 @@ app
       await saveSettings(valid);
     });
     ipcMain.handle("auth:login", loginWithBrowser);
+    ipcMain.handle("auth:logout", logout);
     ipcMain.handle("selection:retry", openForSelection);
     ipcMain.handle("answer:ask", async (event, selection: string, question: string) => {
       if (!selection.trim()) throw new Error("選択テキストを取得できませんでした。");

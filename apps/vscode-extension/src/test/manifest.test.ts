@@ -22,6 +22,17 @@ test("選択・ターミナル・クリップボードの入力経路を利用�
   );
 });
 
+test("ログインとログアウトを利用者がコマンドから実行できる", () => {
+  // ログアウトの導線が無いと、撤回も SecretStorage の破棄も呼べない
+  // （docs/auth.md §8）。
+  expect(manifest.contributes.commands).toEqual(
+    expect.arrayContaining([
+      { command: "gakushuSochi.login", title: "Gakushu Sochi: ログイン" },
+      { command: "gakushuSochi.logout", title: "Gakushu Sochi: ログアウト" },
+    ]),
+  );
+});
+
 test("エディタとターミナルの同じキーをフォーカス条件で使い分ける", () => {
   expect(manifest.contributes.keybindings).toEqual(
     expect.arrayContaining([

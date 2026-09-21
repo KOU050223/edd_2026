@@ -30,6 +30,10 @@
         "title": "Gakushu Sochi: ログイン"
       },
       {
+        "command": "gakushuSochi.logout",
+        "title": "Gakushu Sochi: ログアウト"
+      },
+      {
         "command": "gakushuSochi.askSelection",
         "title": "Gakushu Sochi: Ask Selection"
       },

@@ -107,6 +107,9 @@ export interface DeviceAuthOptions {
 export class DeviceAuth {
   private accessToken: { value: string; expiresAt: number } | undefined;
   private refreshPromise: Promise<string> | undefined;
+  private authGeneration = 0;
+  private loginInProgress = false;
+  private storageOperation: Promise<void> = Promise.resolve();
   private readonly sleep: (milliseconds: number) => Promise<void>;
 
   constructor(
@@ -117,18 +120,33 @@ export class DeviceAuth {
   }
 
   async login(): Promise<void> {
-    const device = await this.requestDeviceCode();
-    const opened = await vscode.env.openExternal(
-      vscode.Uri.parse(device.verification_uri_complete ?? device.verification_uri),
-    );
-    if (!opened) throw new DeviceAuthError("ブラウザで認証ページを開けませんでした");
-    void vscode.window.showInformationMessage(`Gakushu Sochi の認証コード: ${device.user_code}`);
-    const token = await this.pollToken(device);
-    this.saveToken(token);
-    await this.storeRefreshToken(token);
+    if (this.loginInProgress) throw new DeviceAuthError("ログイン中です");
+    this.loginInProgress = true;
+    this.authGeneration += 1;
+    this.refreshPromise = undefined;
+    const generation = this.authGeneration;
+    try {
+      const device = await this.requestDeviceCode();
+      const opened = await vscode.env.openExternal(
+        vscode.Uri.parse(device.verification_uri_complete ?? device.verification_uri),
+      );
+      if (!opened) throw new DeviceAuthError("ブラウザで認証ページを開けませんでした");
+      void vscode.window.showInformationMessage(`Gakushu Sochi の認証コード: ${device.user_code}`);
+      const token = await this.pollToken(device);
+      await this.enqueueStorageOperation(async () => {
+        this.assertAuthGeneration(generation);
+        this.saveToken(token);
+        this.assertAuthGeneration(generation);
+        await this.storeRefreshToken(token);
+        this.assertAuthGeneration(generation);
+      });
+    } finally {
+      this.loginInProgress = false;
+    }
   }
 
   async getAccessToken(): Promise<string> {
+    if (this.loginInProgress) throw new DeviceAuthError("ログイン中です");
     if (this.accessToken && this.accessToken.expiresAt > Date.now() + 30_000) {
       return this.accessToken.value;
     }
@@ -144,8 +162,12 @@ export class DeviceAuth {
   }
 
   private async refreshAccessToken(): Promise<string> {
-    const refreshToken = await this.secrets.get(REFRESH_TOKEN_KEY);
+    const generation = this.authGeneration;
+    const refreshToken = await this.enqueueStorageOperation(() =>
+      this.secrets.get(REFRESH_TOKEN_KEY),
+    );
     if (!refreshToken) throw new DeviceAuthError("再ログインが必要です");
+    this.assertAuthGeneration(generation);
 
     let response: Response;
     try {
@@ -164,6 +186,7 @@ export class DeviceAuth {
       throw new DeviceAuthError(`トークン更新に失敗しました: ${String(error)}`);
     }
     const body = await responseJson(response);
+    this.assertAuthGeneration(generation);
     if (!response.ok) {
       if (this.oauthErrorCode(body) === "invalid_grant") {
         await this.clear();
@@ -172,14 +195,100 @@ export class DeviceAuth {
       throw new DeviceAuthError(`トークン更新に失敗しました: ${this.oauthError(body)}`);
     }
     const token = parseToken(body);
-    this.saveToken(token);
-    await this.storeRefreshToken(token);
+    await this.enqueueStorageOperation(async () => {
+      this.assertAuthGeneration(generation);
+      this.saveToken(token);
+      this.assertAuthGeneration(generation);
+      await this.storeRefreshToken(token);
+      this.assertAuthGeneration(generation);
+    });
     return token.access_token;
   }
 
   async clear(): Promise<void> {
+    this.authGeneration += 1;
+    this.refreshPromise = undefined;
     this.accessToken = undefined;
-    await this.secrets.delete(REFRESH_TOKEN_KEY);
+    await this.enqueueStorageOperation(() => this.secrets.delete(REFRESH_TOKEN_KEY));
+  }
+
+  private assertAuthGeneration(generation: number): void {
+    if (generation !== this.authGeneration) {
+      throw new DeviceAuthError("再ログインが必要です");
+    }
+  }
+
+  private async enqueueStorageOperation<T>(operation: () => PromiseLike<T>): Promise<T> {
+    const queued = this.storageOperation.then(() => Promise.resolve(operation()));
+    this.storageOperation = queued.then(
+      () => undefined,
+      () => undefined,
+    );
+    return queued;
+  }
+
+  /**
+   * ログアウトする（docs/auth.md §8）。
+   *
+   * **先にローカルの Refresh Token を破棄し、その後 `POST /oauth/revoke` を呼ぶ。**
+   * 利用者を守っているのはローカルの破棄であり、撤回の成否ではない。順序が逆だと、
+   * 撤回の通信で失敗したときに SecretStorage へトークンが残り、
+   * ログアウトしたつもりの端末がログイン済みのままになる。
+   *
+   * 撤回の失敗は握りつぶさず記録するが、例外にはしない
+   * （.agents/rules/rules.md RULE-004）。利用者から見たログアウトは
+   * ローカルの破棄が終わった時点で既に成立しており、ここで投げると
+   * 「ログアウトに失敗した」と表示され、実際には消えているのに
+   * もう一度押させることになる。露出はアクセストークンの寿命（15分）に上限される。
+   */
+  async logout(): Promise<void> {
+    // 破棄の前に読む。破棄してから読むと、撤回する対象が取れない。
+    let refreshToken: string | undefined;
+    try {
+      refreshToken = await this.enqueueStorageOperation(() => this.secrets.get(REFRESH_TOKEN_KEY));
+    } catch (error) {
+      console.error("failed to read the refresh token before local logout", {
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    await this.clear();
+
+    if (!refreshToken) return;
+
+    try {
+      await this.revokeRefreshToken(refreshToken);
+    } catch (error) {
+      console.error("failed to revoke the refresh token after local logout", {
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * IdP 側で Refresh Token を撤回する。
+   *
+   * public client なので `client_secret` は送らない（配布物に隠せない）。
+   * Auth0 は `token_endpoint_auth_method` が `none` のクライアントに対して、
+   * `client_id` と `token` だけでの撤回を認めている。
+   */
+  private async revokeRefreshToken(refreshToken: string): Promise<void> {
+    const response = await fetch(endpoint("/oauth/revoke"), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ client_id: CLIENT_ID, token: refreshToken }),
+      // 資格情報を載せるのでリダイレクトを追跡しない（RULE-002）。
+      redirect: "error",
+      // 単発の外向きリクエスト。応答が返らないまま待ち続けない（RULE-001）。
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+
+    // 2xx 以外を成功に丸めない。呼び出し側が記録できるよう投げる（RULE-004）。
+    if (!response.ok) {
+      throw new DeviceAuthError(
+        `トークンの撤回に失敗しました: ${this.oauthError(await responseJson(response).catch(() => undefined))}`,
+      );
+    }
   }
 
   private async requestDeviceCode(): Promise<DeviceCodeResponse> {

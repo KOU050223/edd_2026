@@ -93,9 +93,10 @@ const resetCard = () => {
 };
 
 const login = $("auth-login");
+const logout = $("auth-logout");
 // ログイン状態は main からの通知（auth:state）でも書き換わる。進行中かどうかは
 // disabled ではなくこの状態で判断する（.agents/rules/rules.md RULE-007）。
-let authView = { loggingIn: false, hasRefreshToken: false };
+let authView = { loggingIn: false, loggingOut: false, hasRefreshToken: false };
 
 const renderAuthStatus = () => {
   $("auth-status").textContent = authStatusLabel(authView);
@@ -107,13 +108,13 @@ const setAuthState = (hasRefreshToken) => {
 };
 
 login.onclick = async () => {
-  if (authView.loggingIn) return; // 入口で弾く。disabled は見た目でしかない。
+  if (authView.loggingIn || authView.loggingOut) return; // 入口で弾く。disabled は見た目でしかない。
   authView = { ...authView, loggingIn: true };
   login.disabled = true;
   renderAuthStatus();
   try {
     await window.desktop.login();
-    authView = { loggingIn: false, hasRefreshToken: true };
+    authView = { ...authView, loggingIn: false, hasRefreshToken: true };
     renderAuthStatus();
   } catch (e) {
     authView = { ...authView, loggingIn: false };
@@ -122,6 +123,28 @@ login.onclick = async () => {
   } finally {
     authView = { ...authView, loggingIn: false };
     login.disabled = false;
+  }
+};
+
+logout.onclick = async () => {
+  // 入口で弾く。disabled は見た目でしかない（RULE-007）。
+  if (authView.loggingOut || authView.loggingIn) return;
+  authView = { ...authView, loggingOut: true };
+  logout.disabled = true;
+  login.disabled = true;
+  renderAuthStatus();
+  try {
+    await window.desktop.logout();
+    authView = { loggingIn: false, loggingOut: false, hasRefreshToken: false };
+    renderAuthStatus();
+  } catch (e) {
+    showError(e instanceof Error ? e.message : String(e));
+  } finally {
+    // 失敗しても必ず戻す。try の末尾に置くとボタンが固まったままになる。
+    authView = { ...authView, loggingOut: false };
+    logout.disabled = false;
+    login.disabled = false;
+    renderAuthStatus();
   }
 };
 

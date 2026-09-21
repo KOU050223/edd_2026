@@ -134,6 +134,42 @@ export async function refreshAccessToken(
   };
 }
 
+/**
+ * Refresh Token を IdP 側で撤回する（docs/auth.md §8）。
+ *
+ * **呼ぶ側は、これより先にローカルの Refresh Token を破棄していること。**
+ * 利用者を守っているのはローカルの破棄であり、この撤回の成否ではない。
+ * ここが失敗しても露出はアクセストークンの寿命（15分）に上限される。
+ *
+ * public client なので `client_secret` は送らない（送れない。配布物に隠せない）。
+ * Auth0 は `token_endpoint_auth_method` が `none` のクライアントに対して、
+ * `client_id` と `token` だけでの撤回を認めている。
+ */
+export async function revokeRefreshToken(
+  config: OAuthConfig,
+  refreshToken: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<void> {
+  const response = await fetchImpl(`${config.issuer.replace(/\/$/, "")}/oauth/revoke`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    // 資格情報を載せるのでリダイレクトを追跡しない（.agents/rules/rules.md RULE-002）。
+    redirect: "error",
+    // 単発の外向きリクエスト。応答が返らないまま待ち続けない（RULE-001）。
+    signal: AbortSignal.timeout(TOKEN_TIMEOUT_MS),
+    body: JSON.stringify({ client_id: config.clientId, token: refreshToken }),
+  });
+
+  // 成功は 200。失敗を握りつぶさず、呼び出し側がログへ残せるよう投げる（RULE-004）。
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new OAuthTokenError(
+      `OAuth トークンの撤回に失敗しました (${response.status}): ${detail.slice(0, 200)}`,
+      { status: response.status },
+    );
+  }
+}
+
 async function requestToken(
   config: OAuthConfig,
   values: Record<string, string>,

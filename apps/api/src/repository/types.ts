@@ -13,6 +13,9 @@
 import type { LearningEvent } from "@gakushu-sochi/domain";
 import type { MasteryStatus } from "@gakushu-sochi/domain";
 
+/** 退会済みの sub を、発行済みアクセストークンの寿命を超えて再利用可能にする期間。 */
+export const ACCOUNT_DELETION_TOMBSTONE_TTL_MS = 60 * 60 * 1_000;
+
 /** 保存するイベント。検証済みの `LearningEvent` に、サーバー側が付与する情報を足したもの。 */
 export interface StoredEventInput {
   event: LearningEvent;
@@ -54,6 +57,24 @@ export interface IdentityRepository {
    * 端末ごとに変わり続ける値であり、初回登録時の値を残しても意味を持たないため。
    */
   ensureUserAndDevice(params: { userId: string; clientId: string; nowMs: number }): Promise<void>;
+
+  /**
+   * 退会中であることを永続化する。以後の書き込み経路はこの状態を見て拒否する。
+   * マーカーは Auth0 側の削除が失敗しても再実行できるよう残し、
+   * 発行済みアクセストークンの寿命を超えたら再登録を許可する。
+   */
+  startUserDeletion(userId: string, startedAtMs: number): Promise<void>;
+
+  /**
+   * ユーザーと、それにぶら下がる全データを消す（退会）。
+   *
+   * `learning_events` と `devices` は `users(id)` を `ON DELETE CASCADE` で
+   * 参照しているため、`users` の1行を消せば両方が消える。
+   *
+   * 行が無くても成功とする。退会の再実行（Auth0 側の削除だけが失敗した場合）で
+   * 呼ばれうるため、存在しないことを失敗にすると復旧の手順が塞がる。
+   */
+  deleteUser(userId: string): Promise<void>;
 }
 
 export interface LearningEventRepository {

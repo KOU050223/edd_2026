@@ -35,7 +35,15 @@
   // .dev.vars を持たない CI でも check:worker-types が通る。
   // デプロイ時には実際に設定済みかどうかも検証される。
   "secrets": {
-    "required": ["DEV_AUTH_TOKEN", "GEMINI_API_KEY"],
+    // AUTH_MANAGEMENT_* は退会（DELETE /v1/me）で Auth0 のユーザーを消すための
+    // M2M クライアント。`delete:users` だけを付けること。全ユーザーを消せる
+    // 資格情報なので、余分な scope を持たせない（docs/auth.md §8）。
+    "required": [
+      "DEV_AUTH_TOKEN",
+      "GEMINI_API_KEY",
+      "AUTH_MANAGEMENT_CLIENT_ID",
+      "AUTH_MANAGEMENT_CLIENT_SECRET",
+    ],
   },
   // レート制限。認証済みトークンであっても無制限に叩けないようにする。
   // period は 10 か 60 のみ。

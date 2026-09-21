@@ -6,6 +6,7 @@ import {
   exchangeAuthorizationCode,
   parseCallbackUrl,
   refreshAccessToken,
+  revokeRefreshToken,
   OAuthTokenError,
   type OAuthConfig,
 } from "./oauth.js";
@@ -169,5 +170,51 @@ describe("OAuth authorization code flow", () => {
     );
 
     expect(error).not.toBeInstanceOf(OAuthTokenError);
+  });
+});
+
+describe("revokeRefreshToken", () => {
+  it("posts the refresh token without a client secret", async () => {
+    // public client なので client_secret は送らない（配布物に隠せない）。
+    const fetchMock = vi.fn(async () => new Response(null, { status: 200 }));
+
+    await revokeRefreshToken(config, "refresh-token-value", fetchMock as unknown as typeof fetch);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("https://example.auth0.com/oauth/revoke");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body as string)).toEqual({
+      client_id: config.clientId,
+      token: "refresh-token-value",
+    });
+    expect(JSON.parse(init.body as string)).not.toHaveProperty("client_secret");
+  });
+
+  it("does not follow redirects and gives up after a timeout", () => {
+    const fetchMock = vi.fn(async () => new Response(null, { status: 200 }));
+
+    return revokeRefreshToken(
+      config,
+      "refresh-token-value",
+      fetchMock as unknown as typeof fetch,
+    ).then(() => {
+      const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+      // 資格情報を載せるので転送先へ渡さない（RULE-002）。
+      expect(init.redirect).toBe("error");
+      // 応答が返らないまま待ち続けない（RULE-001）。
+      expect(init.signal).toBeInstanceOf(AbortSignal);
+    });
+  });
+
+  it("throws when the identity provider rejects the revocation", async () => {
+    // 2xx 以外を成功に丸めない。呼び出し側がログへ残せるよう投げる（RULE-004）。
+    const fetchMock = vi.fn(
+      async () => new Response(JSON.stringify({ error: "invalid_request" }), { status: 400 }),
+    );
+
+    await expect(
+      revokeRefreshToken(config, "refresh-token-value", fetchMock as unknown as typeof fetch),
+    ).rejects.toBeInstanceOf(OAuthTokenError);
   });
 });

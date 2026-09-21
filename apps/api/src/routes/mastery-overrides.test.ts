@@ -109,3 +109,22 @@ test("nullで上書きを削除する", async () => {
 
   await expect(cleared.json()).resolves.toEqual({});
 });
+
+test("退会マーカーがあるユーザーの上書きを再作成しない", async () => {
+  const { app, identity, repository } = buildApp();
+  await identity.startUserDeletion("user-a", 1_000);
+
+  const response = await app.request(
+    "/v1/mastery-overrides",
+    {
+      method: "PUT",
+      headers: { Authorization: "Bearer secret", "Content-Type": "application/json" },
+      body: JSON.stringify({ conceptId: "go.pointer", status: "confirmed" }),
+    },
+    ENV as unknown as CloudflareBindings,
+  );
+
+  expect(response.status).toBe(500);
+  expect(identity.users.has("user-a")).toBe(false);
+  await expect(repository.listByUser("user-a")).resolves.toEqual({});
+});

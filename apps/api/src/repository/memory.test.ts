@@ -1,6 +1,11 @@
 import { beforeEach, expect, test } from "vitest";
 import type { LearningEvent } from "@gakushu-sochi/domain";
-import { InMemoryIdentityRepository, InMemoryLearningEventRepository } from "./memory.js";
+import {
+  createInMemoryRepositoryStore,
+  InMemoryIdentityRepository,
+  InMemoryLearningEventRepository,
+} from "./memory.js";
+import { ACCOUNT_DELETION_TOMBSTONE_TTL_MS } from "./types.js";
 import type { StoredEventInput } from "./types.js";
 
 let repo: InMemoryLearningEventRepository;
@@ -159,4 +164,32 @@ test("IDに区切り文字を含んでも別の端末として扱う", () => {
     expect(identity.getDevice("a:b", "c")).toBeDefined();
     expect(identity.getDevice("a", "b:c")).toBeDefined();
   });
+});
+
+test("退会でユーザー、端末、学習イベントを削除し、同期の再作成を拒否する", async () => {
+  const store = createInMemoryRepositoryStore();
+  const identity = new InMemoryIdentityRepository(store);
+  const events = new InMemoryLearningEventRepository(store);
+
+  await identity.ensureUserAndDevice({ userId: "user-a", clientId: "client-1", nowMs: 100 });
+  await events.append("user-a", [input("e1", "2026-09-05T00:00:01.000Z")]);
+  await identity.startUserDeletion("user-a", 200);
+  await identity.deleteUser("user-a");
+
+  expect(identity.users.has("user-a")).toBe(false);
+  expect(identity.deviceCount).toBe(0);
+  expect(await events.countByUser("user-a")).toBe(0);
+  await expect(
+    identity.ensureUserAndDevice({ userId: "user-a", clientId: "client-1", nowMs: 300 }),
+  ).rejects.toThrow("user deletion is in progress");
+});
+
+test("退会マーカーはアクセストークンの有効期間を過ぎると期限切れになる", async () => {
+  const identity = new InMemoryIdentityRepository();
+  const nowMs = 10_000_000;
+
+  await identity.startUserDeletion("user-a", nowMs - ACCOUNT_DELETION_TOMBSTONE_TTL_MS - 1);
+  await expect(
+    identity.ensureUserAndDevice({ userId: "user-a", clientId: "client-1", nowMs }),
+  ).resolves.toBeUndefined();
 });

@@ -20,6 +20,20 @@ describe("authStatusLabel", () => {
   });
 });
 
+describe("authStatusLabel during logout", () => {
+  it("shows progress while a logout is in flight", () => {
+    expect(authStatusLabel({ loggingIn: false, loggingOut: true, hasRefreshToken: true })).toBe(
+      AUTH_LABELS.loggingOut,
+    );
+  });
+
+  it("prefers the login label when both are somehow set", () => {
+    expect(authStatusLabel({ loggingIn: true, loggingOut: true, hasRefreshToken: false })).toBe(
+      AUTH_LABELS.loggingIn,
+    );
+  });
+});
+
 describe("shouldApplyAuthState", () => {
   it("applies a pushed state when no login is running", () => {
     expect(shouldApplyAuthState({ loggingIn: false, hasRefreshToken: false })).toBe(true);
@@ -28,5 +42,12 @@ describe("shouldApplyAuthState", () => {
   it("ignores a pushed state while a login is running", () => {
     // invalid_grant の通知がログイン中に届いても「未ログイン」へ戻さない。
     expect(shouldApplyAuthState({ loggingIn: true, hasRefreshToken: false })).toBe(false);
+  });
+
+  it("ignores a pushed state while a logout is running", () => {
+    // 撤回を待っている間に届いた通知で「ログイン済み」へ戻さない。
+    expect(
+      shouldApplyAuthState({ loggingIn: false, loggingOut: true, hasRefreshToken: true }),
+    ).toBe(false);
   });
 });
