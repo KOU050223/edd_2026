@@ -52,6 +52,30 @@ describe("describeApiFailure", () => {
     expect(message).toContain("500");
   });
 
+  it("shows the server's usage-limit guidance instead of a settings hint", () => {
+    // 上限到達は設定の誤りではない。「API URL と設定内容を確認してください」と
+    // 案内すると、利用者は設定を疑って時間を使う。
+    const message = describeApiFailure(429, {
+      error: "ai usage limit reached",
+      limit: "monthly",
+      resetAt: "2026-10-01T00:00:00.000Z",
+      message: "今月の AI 利用上限（150 回）に達しました。翌月 UTC 1日 0時に回復します。",
+    });
+
+    expect(message).toContain("今月の AI 利用上限");
+    expect(message).toContain("回復します");
+    expect(message).not.toContain("API URL");
+  });
+
+  it("falls back to a waiting hint for a rate limit with no message", () => {
+    // 同じ 429 でも、頻度のレート制限は message を持たない。
+    // ここで設定を疑わせないよう、待てば直ることを伝える。
+    const message = describeApiFailure(429, { error: "too many requests" });
+
+    expect(message).toContain("待って");
+    expect(message).not.toContain("API URL");
+  });
+
   it("does not report differing failures with the same text", () => {
     // 同じ文面に潰れると、利用者は次の一手を選べない。
     const seen = [
