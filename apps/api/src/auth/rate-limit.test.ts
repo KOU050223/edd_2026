@@ -35,6 +35,29 @@ function buildApp(limiter: RateLimit | undefined, userId = "user-a") {
     app.request("/limited", { headers: AUTHORIZED_HEADERS }, env as unknown as CloudflareBindings);
 }
 
+/** 別人の2つのトークン。同じアプリが両方を受け付ける。 */
+const TOKEN_A = "token-a";
+const TOKEN_B = "token-b";
+
+/** 1つのアプリで `TOKEN_A` / `TOKEN_B` を別の userId として受け付ける。 */
+function buildMultiUserApp(limiter: RateLimit) {
+  const app = new Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>();
+  app.use("/limited", stubAuth({ [TOKEN_A]: "user-a", [TOKEN_B]: "user-b" }));
+  app.use(
+    "/limited",
+    rateLimit((env) => env.SYNC_RATE_LIMITER),
+  );
+  app.get("/limited", (c) => c.json({ ok: true }));
+
+  const env = { SYNC_RATE_LIMITER: limiter };
+  return (token: string) =>
+    app.request(
+      "/limited",
+      { headers: { Authorization: `Bearer ${token}` } },
+      env as unknown as CloudflareBindings,
+    );
+}
+
 test("上限内のリクエストは通す", async () => {
   const { limiter } = fakeLimiter(2);
   const request = buildApp(limiter);
@@ -70,11 +93,53 @@ test("別のユーザーの消費は影響しない", async () => {
   expect((await buildApp(limiter, "user-b")()).status).toBe(200);
 });
 
+test("同じアプリに届いた別トークンでも上限は独立して消費される", async () => {
+  // アプリを分けて確かめても、本番の形にならない。実際には1つの Worker へ
+  // 別人のトークンが混ざって届く。その状態で鍵が userId ごとに分かれることを固定する。
+  const { limiter, keys } = fakeLimiter(2);
+  const request = buildMultiUserApp(limiter);
+
+  // user-a だけを上限いっぱいまで使い切る。
+  expect((await request(TOKEN_A)).status).toBe(200);
+  expect((await request(TOKEN_A)).status).toBe(200);
+  expect((await request(TOKEN_A)).status).toBe(429);
+
+  // user-b の残りは削られていない。
+  expect((await request(TOKEN_B)).status).toBe(200);
+  expect((await request(TOKEN_B)).status).toBe(200);
+  expect((await request(TOKEN_B)).status).toBe(429);
+
+  expect(keys).toEqual(["user-a", "user-a", "user-a", "user-b", "user-b", "user-b"]);
+});
+
 test("リミッタが未設定なら素通りさせず500にする", async () => {
   // 「設定が無いから無制限」にすると、設定漏れがそのまま制限の解除になる。
   const request = buildApp(undefined);
 
   expect((await request()).status).toBe(500);
+});
+
+test("リミッタが未設定ならハンドラまで到達しない", async () => {
+  // ステータスだけでは足りない。500 を返しつつ本体を実行していたら、
+  // 制限の無い書き込みがそのまま通ってしまう。
+  let handled = false;
+  const app = new Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>();
+  app.use("/limited", stubAuth("user-a"));
+  app.use(
+    "/limited",
+    rateLimit((env) => env.SYNC_RATE_LIMITER),
+  );
+  app.get("/limited", (c) => {
+    handled = true;
+    return c.json({ ok: true });
+  });
+
+  const res = await app.request("/limited", { headers: AUTHORIZED_HEADERS }, {
+    SYNC_RATE_LIMITER: undefined,
+  } as unknown as CloudflareBindings);
+
+  expect(res.status).toBe(500);
+  expect(handled).toBe(false);
 });
 
 test("認証が無ければレート制限より前に401で止める", async () => {
