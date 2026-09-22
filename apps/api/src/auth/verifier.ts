@@ -549,9 +549,10 @@ export class Auth0Verifier implements AuthVerifier {
         // 応答が返らないまま待ち続けると、Worker の課金時間を食い潰す
         // （.agents/rules/rules.md RULE-001）。
         signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-        // リダイレクトを追跡しない。直前に確かめたホストの固定が、これで初めて
-        // 実効になる（.agents/rules/rules.md RULE-002）。
-        redirect: "error",
+        // Workers は redirect: "error" を実装していないため manual にする。
+        // Discovery / JWKS の取得先は下で3xxを明示的に失敗扱いにし、認証情報を
+        // 意図しない転送先へ送らない（.agents/rules/rules.md RULE-002）。
+        redirect: "manual",
         headers: { Accept: "application/json" },
       });
     } catch (cause) {
@@ -560,6 +561,12 @@ export class Auth0Verifier implements AuthVerifier {
       throw new AuthVerificationError("unavailable", `failed to fetch ${label}`, { cause });
     }
 
+    if (response.status >= 300 && response.status < 400) {
+      throw new AuthVerificationError(
+        "unavailable",
+        `${label} redirected unexpectedly (${response.status})`,
+      );
+    }
     if (!response.ok) {
       throw new AuthVerificationError(
         "unavailable",
