@@ -1,14 +1,14 @@
 import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
-import { fillActivityDays, requestJson, type ActivityDay } from "../api.js";
+import { fillActivityDays, requestJson, type ActivityDay } from "../../api.js";
 import {
   ACTIVITY_PERIOD_DAYS,
   isActivityPeriodDays,
   isUserSettings,
   type ActivityPeriodDays,
   type UserSettings,
-} from "../../shared/settings.js";
-import { ApiError } from "../api.js";
-import { takeLoginRetry } from "../session.js";
+} from "../../../shared/settings.js";
+import { ApiError } from "../../api.js";
+import { takeLoginRetry } from "../../session.js";
 
 type Activity = { from: string; to: string; days: ActivityDay[] };
 

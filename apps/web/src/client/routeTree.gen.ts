@@ -9,13 +9,13 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as FramedRouteImport } from './routes/_framed'
+import { Route as FramedRouteRouteImport } from './routes/_framed/route'
 import { Route as LoginFailedRouteImport } from './routes/login-failed'
-import { Route as FramedIndexRouteImport } from './routes/_framed.index'
-import { Route as FramedActivityRouteImport } from './routes/_framed.activity'
-import { Route as FramedSettingsRouteImport } from './routes/_framed.settings'
+import { Route as FramedIndexRouteImport } from './routes/_framed/index'
+import { Route as FramedActivityRouteImport } from './routes/_framed/activity'
+import { Route as FramedSettingsRouteImport } from './routes/_framed/settings'
 
-const FramedRoute = FramedRouteImport.update({
+const FramedRouteRoute = FramedRouteRouteImport.update({
   id: '/_framed',
   getParentRoute: () => rootRouteImport,
 } as any)
@@ -27,17 +27,17 @@ const LoginFailedRoute = LoginFailedRouteImport.update({
 const FramedIndexRoute = FramedIndexRouteImport.update({
   id: '/',
   path: '/',
-  getParentRoute: () => FramedRoute,
+  getParentRoute: () => FramedRouteRoute,
 } as any)
 const FramedActivityRoute = FramedActivityRouteImport.update({
   id: '/activity',
   path: '/activity',
-  getParentRoute: () => FramedRoute,
+  getParentRoute: () => FramedRouteRoute,
 } as any)
 const FramedSettingsRoute = FramedSettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
-  getParentRoute: () => FramedRoute,
+  getParentRoute: () => FramedRouteRoute,
 } as any)
 
 export interface FileRoutesByFullPath {
@@ -54,7 +54,7 @@ export interface FileRoutesByTo {
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
-  '/_framed': typeof FramedRouteWithChildren
+  '/_framed': typeof FramedRouteRouteWithChildren
   '/login-failed': typeof LoginFailedRoute
   '/_framed/activity': typeof FramedActivityRoute
   '/_framed/settings': typeof FramedSettingsRoute
@@ -75,7 +75,7 @@ export interface FileRouteTypes {
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
-  FramedRoute: typeof FramedRouteWithChildren
+  FramedRouteRoute: typeof FramedRouteRouteWithChildren
   LoginFailedRoute: typeof LoginFailedRoute
 }
 
@@ -85,7 +85,7 @@ declare module '@tanstack/react-router' {
       id: '/_framed'
       path: ''
       fullPath: '/'
-      preLoaderRoute: typeof FramedRouteImport
+      preLoaderRoute: typeof FramedRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/login-failed': {
@@ -100,42 +100,43 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof FramedIndexRouteImport
-      parentRoute: typeof FramedRoute
+      parentRoute: typeof FramedRouteRoute
     }
     '/_framed/activity': {
       id: '/_framed/activity'
       path: '/activity'
       fullPath: '/activity'
       preLoaderRoute: typeof FramedActivityRouteImport
-      parentRoute: typeof FramedRoute
+      parentRoute: typeof FramedRouteRoute
     }
     '/_framed/settings': {
       id: '/_framed/settings'
       path: '/settings'
       fullPath: '/settings'
       preLoaderRoute: typeof FramedSettingsRouteImport
-      parentRoute: typeof FramedRoute
+      parentRoute: typeof FramedRouteRoute
     }
   }
 }
 
-interface FramedRouteChildren {
+interface FramedRouteRouteChildren {
   FramedActivityRoute: typeof FramedActivityRoute
   FramedSettingsRoute: typeof FramedSettingsRoute
   FramedIndexRoute: typeof FramedIndexRoute
 }
 
-const FramedRouteChildren: FramedRouteChildren = {
+const FramedRouteRouteChildren: FramedRouteRouteChildren = {
   FramedActivityRoute: FramedActivityRoute,
   FramedSettingsRoute: FramedSettingsRoute,
   FramedIndexRoute: FramedIndexRoute,
 }
 
-const FramedRouteWithChildren =
-  FramedRoute._addFileChildren(FramedRouteChildren)
+const FramedRouteRouteWithChildren = FramedRouteRoute._addFileChildren(
+  FramedRouteRouteChildren,
+)
 
 const rootRouteChildren: RootRouteChildren = {
-  FramedRoute: FramedRouteWithChildren,
+  FramedRouteRoute: FramedRouteRouteWithChildren,
   LoginFailedRoute: LoginFailedRoute,
 }
 export const routeTree = rootRouteImport

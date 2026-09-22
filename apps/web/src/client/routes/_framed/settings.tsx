@@ -1,6 +1,12 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useRef, useState } from "react";
-import { ApiError, createOperationQueue, createSubmitGuard, putJson, requestJson } from "../api.js";
+import {
+  ApiError,
+  createOperationQueue,
+  createSubmitGuard,
+  putJson,
+  requestJson,
+} from "../../api.js";
 import {
   DISPLAY_NAME_MAX_LENGTH,
   ACTIVITY_PERIOD_DAYS,
@@ -9,9 +15,9 @@ import {
   toSettingsInput,
   type SettingsDraft,
   type UserSettings,
-} from "../../shared/settings.js";
-import { toErrorText } from "../errors.js";
-import { takeLoginRetry } from "../session.js";
+} from "../../../shared/settings.js";
+import { toErrorText } from "../../errors.js";
+import { takeLoginRetry } from "../../session.js";
 
 const SETTINGS_PATH = "/api/v1/user-settings";
 
