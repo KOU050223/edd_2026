@@ -198,6 +198,24 @@ test("正しい署名のトークンはsubを返して通す", async () => {
   expect(await verifier.verify(await signJwt())).toEqual({ sub: "auth0|user-a" });
 });
 
+test("DiscoveryとJWKSの取得はWorkersで対応するmanualリダイレクトを使う", async () => {
+  const initValues: RequestInit[] = [];
+  const fetchImpl = ((input: RequestInfo | URL, init?: RequestInit) => {
+    initValues.push(init ?? {});
+    const url = String(input);
+    const body = url.endsWith("openid-configuration")
+      ? { issuer: ISSUER, jwks_uri: JWKS_URI }
+      : { keys: [jwksEntry(signingKey)] };
+    return Promise.resolve(new Response(JSON.stringify(body)));
+  }) as typeof fetch;
+  const verifier = new Auth0Verifier({ issuer: ISSUER, audience: AUDIENCE, fetch: fetchImpl });
+
+  await verifier.verify(await signJwt());
+
+  expect(initValues).not.toHaveLength(0);
+  expect(initValues.every((init) => init.redirect === "manual")).toBe(true);
+});
+
 test("署名が改ざんされていれば401にする", async () => {
   // 署名の先頭バイトを反転する。他はすべて正しいトークンのまま。
   // Base64URL の末尾文字は未使用ビットを含む場合があり、文字だけの差し替えでは
