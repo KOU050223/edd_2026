@@ -130,3 +130,61 @@ export interface UserSettingsRepository {
   get(userId: string): Promise<UserSettings | null>;
   put(userId: string, input: UserSettingsInput, updatedAt: string): Promise<UserSettings>;
 }
+
+/**
+ * Managed AI の利用量（Issue #89 / Auth/10）。
+ *
+ * 期間ごとの集計だけを持ち、リクエスト1件ごとの履歴は持たない。
+ * `selection` や `question` はここへ入らない。AGENTS.md のとおり、
+ * コード本文・質問本文・AI回答全文は明示的な同意なしに長期保存しない。
+ */
+export interface AiUsage {
+  /** 当月（UTC 暦月）の累計リクエスト数。 */
+  monthlyRequests: number;
+  /** 今日（UTC）の累計リクエスト数。日が変わっていれば 0。 */
+  dailyRequests: number;
+  /** 当月（UTC 暦月）の累計トークン数（入力 + 出力）。利用者へは見せない安全弁。 */
+  monthlyTokens: number;
+}
+
+export interface AiUsageRepository {
+  /**
+   * 指定した月・日の利用量を読む。記録が無ければ全て 0 を返す。
+   *
+   * 月が変われば `monthlyRequests` と `monthlyTokens` は 0 から、
+   * 日が変われば `dailyRequests` だけが 0 から数え直される。
+   * 期間の切り替わりを呼び出し側に判断させないため、キーは引数で受け取る。
+   */
+  get(params: { userId: string; monthKey: string; dayKey: string }): Promise<AiUsage>;
+
+  /**
+   * 回数を1つ増やし、消費したトークン数を足す。
+   *
+   * **回数はリクエストを上流へ流す前に増やす。** ストリームの完了を待って
+   * から数えると、応答を読み切らずに切断する呼び出しを繰り返すだけで
+   * 上限を素通りできる。トークン数は実消費が分かってから（`addTokens`）足す。
+   *
+   * @returns 加算後の利用量。上限との突き合わせに使う。
+   */
+  increment(params: {
+    userId: string;
+    monthKey: string;
+    dayKey: string;
+    updatedAt: string;
+  }): Promise<AiUsage>;
+
+  /**
+   * 実消費したトークン数を当月へ足す。
+   *
+   * 上流の `usageMetadata` は応答を読み切って初めて分かるため、
+   * `increment` とは別の呼び出しになる。取れなかった場合に 0 を足して
+   * 済ませない（RULE-004）。呼び出し側が見積もりを足すか、失敗を記録する。
+   */
+  addTokens(params: {
+    userId: string;
+    monthKey: string;
+    dayKey: string;
+    tokens: number;
+    updatedAt: string;
+  }): Promise<void>;
+}

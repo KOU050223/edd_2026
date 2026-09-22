@@ -1,3 +1,13 @@
+/**
+ * Managed AI の1回あたりの出力上限（tokens）。
+ *
+ * サーバー側の政策値と揃える（docs/architecture.md「Free / Pro の境界と
+ * Managed AI の利用上限」/ apps/api/src/contract/ai-usage.ts）。ここを緩めると、
+ * 保存できるのに送信すると必ず 400 で弾かれる設定を利用者に作らせることになる。
+ * **サーバー側を直すときは、この値も一緒に動かす。**
+ */
+export const MANAGED_AI_MAX_OUTPUT_TOKENS = 2_048;
+
 export interface DesktopSettings {
   apiBaseUrl: string;
   shortcut: string;
@@ -39,7 +49,7 @@ function isSettings(value: unknown): value is DesktopSettings {
     typeof settings.maxTokens === "number" &&
     Number.isInteger(settings.maxTokens) &&
     settings.maxTokens > 0 &&
-    settings.maxTokens <= 16_384 &&
+    settings.maxTokens <= MANAGED_AI_MAX_OUTPUT_TOKENS &&
     typeof settings.restoreClipboard === "boolean" &&
     typeof settings.launchAtLogin === "boolean"
   );

@@ -4,6 +4,7 @@ import { HTTPException } from "hono/http-exception";
 import { requireAuth, type AuthVariables } from "./auth/middleware.js";
 import { rateLimit } from "./auth/rate-limit.js";
 import {
+  D1AiUsageRepository,
   D1IdentityRepository,
   D1LearningEventRepository,
   D1MasteryOverrideRepository,
@@ -112,6 +113,11 @@ app.route(
     apiKey: env.GEMINI_API_KEY,
     model: env.GEMINI_MODEL,
     fetch: (input, init) => globalThis.fetch(input, init),
+    // 利用量は D1 に置く。退会が `DELETE FROM users` 1文で全データを消せる
+    // という前提を崩さないため（migrations/0004_ai_usage.sql）。
+    usage: new D1AiUsageRepository(env.DB),
+    identity: new D1IdentityRepository(env.DB),
+    now: () => new Date(),
   })),
 );
 

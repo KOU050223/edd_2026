@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { DEFAULT_SETTINGS, normalizeSettings, type DesktopSettings } from "./settings.js";
+import {
+  DEFAULT_SETTINGS,
+  MANAGED_AI_MAX_OUTPUT_TOKENS,
+  normalizeSettings,
+  type DesktopSettings,
+} from "./settings.js";
 
 describe("normalizeSettings", () => {
   it("uses safe defaults for an absent settings file", () => {
@@ -33,6 +38,20 @@ describe("normalizeSettings", () => {
         launchAtLogin: false,
       }),
     ).toEqual(DEFAULT_SETTINGS);
+  });
+
+  it("rejects maxTokens above the Managed AI policy limit", () => {
+    // サーバーが政策値（docs/architecture.md）で弾く値を保存させない。
+    // 保存だけ通ると、送信して初めて 400 になる設定を利用者に作らせる。
+    expect(
+      normalizeSettings({
+        ...DEFAULT_SETTINGS,
+        maxTokens: MANAGED_AI_MAX_OUTPUT_TOKENS + 1,
+      }),
+    ).toEqual(DEFAULT_SETTINGS);
+    expect(
+      normalizeSettings({ ...DEFAULT_SETTINGS, maxTokens: MANAGED_AI_MAX_OUTPUT_TOKENS }).maxTokens,
+    ).toBe(MANAGED_AI_MAX_OUTPUT_TOKENS);
   });
 
   it("allows local HTTP and remote HTTPS API URLs", () => {

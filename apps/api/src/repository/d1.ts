@@ -14,6 +14,8 @@ import {
 } from "../contract/user-settings.js";
 import { ACCOUNT_DELETION_TOMBSTONE_TTL_MS } from "./types.js";
 import type {
+  AiUsage,
+  AiUsageRepository,
   AppendResult,
   IdentityRepository,
   LearningEventRepository,
@@ -393,4 +395,111 @@ export class D1UserSettingsRepository implements UserSettingsRepository {
     }
     return { version: USER_SETTINGS_VERSION, ...input, updatedAt };
   }
+}
+
+/** ai_usage の1行。 */
+interface AiUsageRow {
+  day_key: string;
+  monthly_requests: number;
+  daily_requests: number;
+  monthly_tokens: number;
+}
+
+/**
+ * `AiUsageRepository` の D1 実装（Issue #89 / Auth/10）。
+ *
+ * 期間の切り替わりは SQL 側で処理する。行を読んでから
+ * アプリ側で判定して書き戻すと、同じユーザーの同時リクエストで
+ * 読みと書きの間に割り込まれ、回数を数え落とす。
+ * **加算は1文で行い、読みと書きを分けない。**
+ */
+export class D1AiUsageRepository implements AiUsageRepository {
+  constructor(private readonly db: D1Database) {}
+
+  async get(params: { userId: string; monthKey: string; dayKey: string }): Promise<AiUsage> {
+    const row = await this.db
+      .prepare(
+        `SELECT day_key, monthly_requests, daily_requests, monthly_tokens
+         FROM ai_usage WHERE user_id = ? AND month_key = ?`,
+      )
+      .bind(params.userId, params.monthKey)
+      .first<AiUsageRow>();
+    return toAiUsage(row, params.dayKey);
+  }
+
+  async increment(params: {
+    userId: string;
+    monthKey: string;
+    dayKey: string;
+    updatedAt: string;
+  }): Promise<AiUsage> {
+    const { userId, monthKey, dayKey, updatedAt } = params;
+    // 退会中のユーザーの行を作らない。`user_settings` と同じ守り方で、
+    // 削除の最中に users 行が復活する窓を塞ぐ（repository/types.ts の
+    // `startUserDeletion` の説明を参照）。
+    const nowMs = Date.now();
+    const row = await this.db
+      .prepare(
+        `INSERT INTO ai_usage (
+           user_id, month_key, day_key, monthly_requests, daily_requests, monthly_tokens, updated_at
+         )
+         SELECT ?, ?, ?, 1, 1, 0, ?
+         WHERE NOT EXISTS (
+           SELECT 1 FROM account_deletions
+           WHERE user_id = ? AND started_at_ms > ?
+         )
+         ON CONFLICT (user_id, month_key) DO UPDATE SET
+           monthly_requests = ai_usage.monthly_requests + 1,
+           -- 日が変わっていれば、その日の1回目として数え直す。
+           daily_requests = CASE
+             WHEN ai_usage.day_key = excluded.day_key THEN ai_usage.daily_requests + 1
+             ELSE 1
+           END,
+           day_key = excluded.day_key,
+           updated_at = excluded.updated_at
+         RETURNING day_key, monthly_requests, daily_requests, monthly_tokens`,
+      )
+      .bind(userId, monthKey, dayKey, updatedAt, userId, nowMs - ACCOUNT_DELETION_TOMBSTONE_TTL_MS)
+      .first<AiUsageRow>();
+    if (row === null) {
+      // RETURNING が空なのは、WHERE NOT EXISTS で INSERT が弾かれた場合に限る。
+      // 加算できていないので、成功として返さない（RULE-004）。
+      throw new Error("user deletion is in progress");
+    }
+    return toAiUsage(row, dayKey);
+  }
+
+  async addTokens(params: {
+    userId: string;
+    monthKey: string;
+    dayKey: string;
+    tokens: number;
+    updatedAt: string;
+  }): Promise<void> {
+    const { userId, monthKey, tokens, updatedAt } = params;
+    // 加算対象の行は `increment` が既に作っている。ここで行を作らないのは、
+    // 回数を数えていない消費が記録されると、回数とトークンの辻褄が合わなくなるため。
+    const result = await this.db
+      .prepare(
+        `UPDATE ai_usage
+         SET monthly_tokens = monthly_tokens + ?, updated_at = ?
+         WHERE user_id = ? AND month_key = ?`,
+      )
+      .bind(tokens, updatedAt, userId, monthKey)
+      .run();
+    if (result.meta.changes === 0) {
+      throw new Error(`ai_usage row is missing (user_id=${userId}, month_key=${monthKey})`);
+    }
+  }
+}
+
+/** ai_usage の行を `AiUsage` へ戻す。行が無ければ全て 0。 */
+function toAiUsage(row: AiUsageRow | null, dayKey: string): AiUsage {
+  if (row === null) return { monthlyRequests: 0, dailyRequests: 0, monthlyTokens: 0 };
+  return {
+    monthlyRequests: row.monthly_requests,
+    // 行が持つ日次は `day_key` の日のものである。日が変わっていれば 0 として扱う。
+    dailyRequests: row.day_key === dayKey ? row.daily_requests : 0,
+    monthlyTokens: row.monthly_tokens,
+  };
 }
