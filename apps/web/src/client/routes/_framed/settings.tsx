@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useRouter } from "@tanstack/react-router";
 import { useRef, useState } from "react";
 import {
   ApiError,
@@ -30,6 +30,7 @@ const SETTINGS_PATH = "/api/v1/user-settings";
  */
 function Settings() {
   const loaded = Route.useLoaderData();
+  const router = useRouter();
   // 保存済みの値と編集中の値の2つだけを持つ。項目ごとに state を増やすと、
   // 差分の判定と「読み込んだ値を入力欄へ戻す」処理が項目の数だけ散らばり、
   // 設定が増えたときに直し忘れる場所が増える。
@@ -68,6 +69,10 @@ function Settings() {
           setSaved(result);
           setDraft(toDraft(result));
           setJustSaved(true);
+          // **loader のキャッシュも捨てる。** ここを忘れると、`defaultStaleTime` の
+          // 間に他の画面へ移って戻ったとき、保存前の値で読み直されて
+          // 保存が取り消されたように見える（RULE-005）。
+          await router.invalidate();
         } catch (value: unknown) {
           // 保存の失敗を黙って飲み込まない（RULE-004）。
           if (value instanceof ApiError && value.kind === "session_expired") {

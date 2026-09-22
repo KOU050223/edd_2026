@@ -2,11 +2,10 @@ import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
 import { fillActivityDays, requestJson, type ActivityDay } from "../../api.js";
 import {
   ACTIVITY_PERIOD_DAYS,
-  isActivityPeriodDays,
   isUserSettings,
-  type ActivityPeriodDays,
   type UserSettings,
 } from "../../../shared/settings.js";
+import { parsePeriodSearch, resolvePeriod } from "../../activity-period.js";
 import { ApiError } from "../../api.js";
 import { takeLoginRetry } from "../../session.js";
 
@@ -77,25 +76,23 @@ function ActivityView() {
 
 export const Route = createFileRoute("/_framed/activity")({
   // 期間は URL に載せる。載せないと、再読み込みや共有で選択が消える。
-  // 省略時は `undefined` のままにして、既定値の決定を loader に委ねる。
-  // 既存の型ガードを使う。ここで条件を書き直すと、選択肢が増えたときに
-  // `shared/settings.ts` と食い違っても型が通ってしまう。
-  validateSearch: (search: Record<string, unknown>): { days?: ActivityPeriodDays } => {
-    const value = Number(search.days);
-    return isActivityPeriodDays(value) ? { days: value } : {};
-  },
-  loaderDeps: ({ search }) => ({ days: search.days }),
+  // 判断は `activity-period.ts` にある（描画から切り離さないと検証できない）。
+  validateSearch: parsePeriodSearch,
+  // **`loaderDeps` でもう一度通す。** `validateSearch` が捨てた値は
+  // `search` から消えない（TanStack/router#1965。親から併合されるため、
+  // 型では `days?: 7|30|90` でも実際には `?days=999` がそのまま入る）。
+  // ここを素通しにすると、検証していない値が API の要求に載る。
+  loaderDeps: ({ search }) => parsePeriodSearch(search),
   // 既定の期間は設定から来る。URL に指定が無いときだけ設定を読むので、
   // 期間が決まるまで表示が揺れることがない。
   loader: async ({ deps }) => {
     const retry = takeLoginRetry();
-    let period = deps.days;
-    if (period === undefined) {
+    const period = await resolvePeriod(deps.days, async () => {
       const settings = await requestJson<UserSettings>("/api/v1/user-settings", fetch, retry);
       // 2xx でも中身が契約どおりでなければ失敗として扱う（RULE-004）。
       if (!isUserSettings(settings)) throw new ApiError("unavailable");
-      period = settings.activityPeriodDays;
-    }
+      return settings.activityPeriodDays;
+    });
     const activity = await requestJson<Activity>(
       `/api/v1/learning-activity?days=${period}`,
       fetch,
