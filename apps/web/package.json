@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@gakushu-sochi/domain": "file:../../packages/domain",
+    "@tanstack/react-router": "^1.170.38",
     "hono": "^4.13.7",
     "react": "^19.2.4",
     "react-dom": "^19.2.4"
@@ -24,6 +25,7 @@
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260905.1",
     "@eslint/js": "^10.0.1",
+    "@tanstack/router-plugin": "^1.168.40",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.1.4",

@@ -8,3 +8,7 @@ apps/api/src/worker-configuration.d.ts
 .agents/skills
 .claude/skills
 skills-lock.json
+
+# TanStack Router が生成するルートツリー。ビルドのたびに作り直されるので
+# 手で直さない（git には追跡させる。実行時に使われる正真正銘のソースである）。
+apps/web/src/client/routeTree.gen.ts

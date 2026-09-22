@@ -37,9 +37,16 @@
 利用者が条件をすばやく切り替えると、先に投げた要求が後から完了しうる。
 その場合、選択状態と表示内容が食い違う。
 
+**取得をルーターの `loader` に寄せるのが第一の手段である。**
+TanStack Router は遷移ごとに古い loader を破棄し、最新の結果だけを描画へ渡すので、
+世代番号を手で持つ必要がなくなる。合わせて、表示を左右する条件（期間などの絞り込み）は
+`useState` ではなく URL の検索パラメータに置き、`loaderDeps` 経由で loader へ渡すこと。
+画面の状態と取得した内容が URL で一致し、共有や再読み込みでも食い違わない。
+参照実装は `apps/web/src/client/routes/_framed.activity.tsx`。
+
+loader の外で取得するとき（`useEffect` での取得、保存後の再取得など）は、
 要求ごとに世代番号を持つか `AbortController` を保持し、
 **最新の要求だけが state を更新できる**ようにすること。
-参照実装は `apps/web/src/client` の `createRequestTracker`。
 
 ---
 
