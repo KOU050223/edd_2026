@@ -65,6 +65,7 @@ main {
 }
 .summary button,
 .periods button,
+.periods a,
 .message button,
 form button {
   border: 0;
@@ -74,6 +75,13 @@ form button {
   color: #fff;
   font: inherit;
   cursor: pointer;
+}
+/* 期間の選択は「押すと URL が変わる」のでリンクで書いている。
+   見た目はボタンのままにしたいので、下線と既定の文字色を打ち消す。 */
+.periods a {
+  background: #e2e8f0;
+  color: #334155;
+  text-decoration: none;
 }
 .periods button {
   background: #e2e8f0;

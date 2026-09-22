@@ -11,16 +11,6 @@ export class ApiError extends Error {
   }
 }
 
-export function createRequestTracker() {
-  let latestRequestId = 0;
-  return {
-    start: () => {
-      const requestId = ++latestRequestId;
-      return () => requestId === latestRequestId;
-    },
-  };
-}
-
 export async function requestJson<T>(
   path: string,
   fetcher: typeof fetch = fetch,
