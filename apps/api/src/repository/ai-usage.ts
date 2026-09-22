@@ -24,14 +24,23 @@ export class InMemoryAiUsageRepository implements AiUsageRepository {
     return Promise.resolve(this.read(params));
   }
 
-  increment(params: {
+  reserve(params: {
     userId: string;
     monthKey: string;
     dayKey: string;
     updatedAt: string;
-  }): Promise<AiUsage> {
-    const { userId, monthKey, dayKey } = params;
+    limits: { dailyRequests: number; monthlyRequests: number };
+  }): Promise<{ reserved: boolean; usage: AiUsage }> {
+    const { userId, monthKey, dayKey, limits } = params;
     const current = this.read(params);
+    // 上限に達していたら加算しない。D1 側は `DO UPDATE ... WHERE` で同じことを
+    // 1文でやる。弾いた分まで枠を消費しないという性質を、両実装で揃える。
+    if (
+      current.monthlyRequests >= limits.monthlyRequests ||
+      current.dailyRequests >= limits.dailyRequests
+    ) {
+      return Promise.resolve({ reserved: false, usage: current });
+    }
     const next: Row = {
       monthKey,
       dayKey,
@@ -41,9 +50,12 @@ export class InMemoryAiUsageRepository implements AiUsageRepository {
     };
     this.write(userId, monthKey, next);
     return Promise.resolve({
-      monthlyRequests: next.monthlyRequests,
-      dailyRequests: next.dailyRequests,
-      monthlyTokens: next.monthlyTokens,
+      reserved: true,
+      usage: {
+        monthlyRequests: next.monthlyRequests,
+        dailyRequests: next.dailyRequests,
+        monthlyTokens: next.monthlyTokens,
+      },
     });
   }
 

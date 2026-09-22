@@ -7,6 +7,17 @@ import {
   type DesktopSettings,
 } from "./settings.js";
 
+/** 既存インストールに残っている、方針を厳しくする前の設定。 */
+const LEGACY_SETTINGS = {
+  apiBaseUrl: "https://api.example.com",
+  shortcut: "CommandOrControl+Shift+J",
+  model: "gemini-3.6-flash",
+  temperature: 0.7,
+  maxTokens: 4096,
+  restoreClipboard: false,
+  launchAtLogin: true,
+};
+
 describe("normalizeSettings", () => {
   it("uses safe defaults for an absent settings file", () => {
     expect(normalizeSettings(undefined)).toEqual(DEFAULT_SETTINGS);
@@ -16,7 +27,7 @@ describe("normalizeSettings", () => {
     const settings: DesktopSettings = {
       apiBaseUrl: "https://api.example.com",
       shortcut: "CommandOrControl+Shift+K",
-      model: "gpt-4.1-mini",
+      model: "gemini-3.8-flash",
       temperature: 0.2,
       maxTokens: 1024,
       restoreClipboard: false,
@@ -40,18 +51,35 @@ describe("normalizeSettings", () => {
     ).toEqual(DEFAULT_SETTINGS);
   });
 
-  it("rejects maxTokens above the Managed AI policy limit", () => {
-    // サーバーが政策値（docs/architecture.md）で弾く値を保存させない。
-    // 保存だけ通ると、送信して初めて 400 になる設定を利用者に作らせる。
-    expect(
-      normalizeSettings({
-        ...DEFAULT_SETTINGS,
-        maxTokens: MANAGED_AI_MAX_OUTPUT_TOKENS + 1,
-      }),
-    ).toEqual(DEFAULT_SETTINGS);
-    expect(
-      normalizeSettings({ ...DEFAULT_SETTINGS, maxTokens: MANAGED_AI_MAX_OUTPUT_TOKENS }).maxTokens,
-    ).toBe(MANAGED_AI_MAX_OUTPUT_TOKENS);
+  it("clamps a legacy oversized maxTokens without discarding other settings", () => {
+    // 方針を厳しくしたせいで無効になった値は、その項目だけを直す。
+    // ファイル全体を既定へ戻すと、API URL やショートカットといった
+    // 無関係の設定まで黙って消える（利用者には「設定が飛んだ」と見える）。
+    const migrated = normalizeSettings(LEGACY_SETTINGS);
+
+    expect(migrated.maxTokens).toBe(MANAGED_AI_MAX_OUTPUT_TOKENS);
+    expect(migrated.apiBaseUrl).toBe("https://api.example.com");
+    expect(migrated.shortcut).toBe("CommandOrControl+Shift+J");
+    expect(migrated.temperature).toBe(0.7);
+    expect(migrated.restoreClipboard).toBe(false);
+    expect(migrated.launchAtLogin).toBe(true);
+  });
+
+  it("falls back to the default model when a legacy model is no longer allowed", () => {
+    // allowlist を入れたので、以前保存できた高単価モデルは通らない。
+    // ここで直さないと、送信のたびに 400 になる設定が残り続ける。
+    const migrated = normalizeSettings({ ...LEGACY_SETTINGS, model: "gemini-3.5-flash" });
+
+    expect(migrated.model).toBe(DEFAULT_SETTINGS.model);
+    // 移行するのは model だけ。他は保持する。
+    expect(migrated.apiBaseUrl).toBe("https://api.example.com");
+    expect(migrated.launchAtLogin).toBe(true);
+  });
+
+  it("still rejects a structurally broken settings file", () => {
+    // 方針の変更ではなく壊れたファイルは、移行の対象にしない。
+    expect(normalizeSettings({ ...LEGACY_SETTINGS, maxTokens: "4096" })).toEqual(DEFAULT_SETTINGS);
+    expect(normalizeSettings({ ...LEGACY_SETTINGS, temperature: 99 })).toEqual(DEFAULT_SETTINGS);
   });
 
   it("allows local HTTP and remote HTTPS API URLs", () => {

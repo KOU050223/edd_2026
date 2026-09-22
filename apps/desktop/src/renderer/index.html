@@ -84,7 +84,14 @@
             <span id="auth-status" role="status"></span>
           </div>
           <label>ショートカット<input id="shortcut" required /></label>
-          <label>モデル<input id="model" required /></label>
+          <!-- 自由入力にしない。サーバーの allowlist（apps/api/src/contract/ai-usage.ts）に
+               無い値は送信時に 400 で弾かれるので、選べる時点で絞る。 -->
+          <label
+            >モデル<select id="model" required>
+              <option value="gemini-3.6-flash">gemini-3.6-flash</option>
+              <option value="gemini-3.8-flash">gemini-3.8-flash</option>
+            </select></label
+          >
           <label>温度<input id="temperature" type="number" min="0" max="2" step="0.1" /></label>
           <label>最大トークン<input id="max-tokens" type="number" min="1" max="2048" /></label>
           <label><input id="restore" type="checkbox" /> クリップボードを復元する</label>

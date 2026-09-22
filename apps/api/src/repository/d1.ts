@@ -427,17 +427,21 @@ export class D1AiUsageRepository implements AiUsageRepository {
     return toAiUsage(row, params.dayKey);
   }
 
-  async increment(params: {
+  async reserve(params: {
     userId: string;
     monthKey: string;
     dayKey: string;
     updatedAt: string;
-  }): Promise<AiUsage> {
-    const { userId, monthKey, dayKey, updatedAt } = params;
+    limits: { dailyRequests: number; monthlyRequests: number };
+  }): Promise<{ reserved: boolean; usage: AiUsage }> {
+    const { userId, monthKey, dayKey, updatedAt, limits } = params;
     // 退会中のユーザーの行を作らない。`user_settings` と同じ守り方で、
     // 削除の最中に users 行が復活する窓を塞ぐ（repository/types.ts の
     // `startUserDeletion` の説明を参照）。
     const nowMs = Date.now();
+    // 判定と加算を1文で行う。読んでから別の文で足すと、同じ利用者の同時
+    // リクエストがその隙間に割り込み、弾いた分まで枠を消費する。
+    // `DO UPDATE ... WHERE` が偽なら行は更新されず、RETURNING も空になる。
     const row = await this.db
       .prepare(
         `INSERT INTO ai_usage (
@@ -457,16 +461,35 @@ export class D1AiUsageRepository implements AiUsageRepository {
            END,
            day_key = excluded.day_key,
            updated_at = excluded.updated_at
+         WHERE ai_usage.monthly_requests < ?
+           AND (ai_usage.day_key <> excluded.day_key OR ai_usage.daily_requests < ?)
          RETURNING day_key, monthly_requests, daily_requests, monthly_tokens`,
       )
-      .bind(userId, monthKey, dayKey, updatedAt, userId, nowMs - ACCOUNT_DELETION_TOMBSTONE_TTL_MS)
+      .bind(
+        userId,
+        monthKey,
+        dayKey,
+        updatedAt,
+        userId,
+        nowMs - ACCOUNT_DELETION_TOMBSTONE_TTL_MS,
+        limits.monthlyRequests,
+        limits.dailyRequests,
+      )
       .first<AiUsageRow>();
-    if (row === null) {
-      // RETURNING が空なのは、WHERE NOT EXISTS で INSERT が弾かれた場合に限る。
-      // 加算できていないので、成功として返さない（RULE-004）。
-      throw new Error("user deletion is in progress");
-    }
-    return toAiUsage(row, dayKey);
+
+    if (row !== null) return { reserved: true, usage: toAiUsage(row, dayKey) };
+
+    // ここから先は「加算されなかった」理由の切り分けである。RETURNING が空に
+    // なる経路は2つあり、**上限到達と退会中を同じ扱いにしない**（RULE-004）。
+    const current = await this.get({ userId, monthKey, dayKey });
+    const atLimit =
+      current.monthlyRequests >= limits.monthlyRequests ||
+      current.dailyRequests >= limits.dailyRequests;
+    if (atLimit) return { reserved: false, usage: current };
+
+    // 上限に達していないのに加算されていないなら、INSERT が
+    // WHERE NOT EXISTS で弾かれている。つまり退会処理の最中である。
+    throw new Error("user deletion is in progress");
   }
 
   async addTokens(params: {
@@ -477,7 +500,7 @@ export class D1AiUsageRepository implements AiUsageRepository {
     updatedAt: string;
   }): Promise<void> {
     const { userId, monthKey, tokens, updatedAt } = params;
-    // 加算対象の行は `increment` が既に作っている。ここで行を作らないのは、
+    // 加算対象の行は `reserve` が既に作っている。ここで行を作らないのは、
     // 回数を数えていない消費が記録されると、回数とトークンの辻褄が合わなくなるため。
     const result = await this.db
       .prepare(

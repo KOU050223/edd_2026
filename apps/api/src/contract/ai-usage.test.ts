@@ -60,6 +60,25 @@ describe("入力トークンの見積もり", () => {
     expect(estimateInputTokens("あいうえお")).toBeGreaterThanOrEqual(5);
     expect(estimateInputTokens("")).toBe(0);
   });
+
+  it("文字数ではなく UTF-8 のバイト数で数える", () => {
+    // `String.length` は UTF-16 のコード単位なので、日本語は1文字=1になる。
+    // それを上界にすると、byte fallback で1バイト=1トークンまで分解される
+    // 入力を実際の3分の1に見積もり、1回あたりの単価の上限が崩れる。
+    expect("あ".length).toBe(1);
+    expect(estimateInputTokens("あ")).toBe(3);
+  });
+
+  it("サロゲートペアを含む文字を過小評価しない", () => {
+    // 絵文字は UTF-16 で2コード単位・UTF-8 で4バイト。
+    expect(estimateInputTokens("😀")).toBe(4);
+    // 数学記号も同様に4バイトある。
+    expect(estimateInputTokens("𝕏")).toBe(4);
+  });
+
+  it("ASCII は1文字1トークンのまま", () => {
+    expect(estimateInputTokens("const answer = 42")).toBe(17);
+  });
 });
 
 describe("期間のキーと回復時刻（UTC）", () => {

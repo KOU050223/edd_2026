@@ -158,20 +158,28 @@ export interface AiUsageRepository {
   get(params: { userId: string; monthKey: string; dayKey: string }): Promise<AiUsage>;
 
   /**
-   * 回数を1つ増やし、消費したトークン数を足す。
+   * 上限に収まるときだけ回数を1つ増やす（枠の確保）。
    *
    * **回数はリクエストを上流へ流す前に増やす。** ストリームの完了を待って
    * から数えると、応答を読み切らずに切断する呼び出しを繰り返すだけで
    * 上限を素通りできる。トークン数は実消費が分かってから（`addTokens`）足す。
    *
-   * @returns 加算後の利用量。上限との突き合わせに使う。
+   * **判定と加算を1つの操作にまとめる。** 読んでから別の文で足すと、同じ
+   * 利用者の同時リクエストがその隙間に割り込み、**上限を超えて弾いた分まで
+   * 枠を消費する**。15回の枠へ30回同時に来たとき、通るのは15回なのに
+   * 月次からは30回引かれる、という取りこぼしが起きる。
+   *
+   * @returns 確保できたら `reserved: true` と加算後の値。上限に達していれば
+   *   `reserved: false` と、**加算していない**現在値。どの上限で止まったかは
+   *   呼び出し側がその値から決める。
    */
-  increment(params: {
+  reserve(params: {
     userId: string;
     monthKey: string;
     dayKey: string;
     updatedAt: string;
-  }): Promise<AiUsage>;
+    limits: { dailyRequests: number; monthlyRequests: number };
+  }): Promise<{ reserved: boolean; usage: AiUsage }>;
 
   /**
    * 実消費したトークン数を当月へ足す。

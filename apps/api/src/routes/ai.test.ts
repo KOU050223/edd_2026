@@ -415,7 +415,7 @@ describe("POST /v1/ai/responses", () => {
   });
 
   describe("上限に達したユーザーを止める（完了条件）", () => {
-    /** 指定した回数を消費済みにする。 */
+    /** 指定した回数を消費済みにする。政策値では弾かれないよう上限を外して積む。 */
     async function seed(
       usage: AiUsageRepository,
       userId: string,
@@ -423,7 +423,15 @@ describe("POST /v1/ai/responses", () => {
       keys: { monthKey: string; dayKey: string },
     ) {
       for (let i = 0; i < count; i += 1) {
-        await usage.increment({ userId, ...keys, updatedAt: "2026-09-22T00:00:00.000Z" });
+        await usage.reserve({
+          userId,
+          ...keys,
+          updatedAt: "2026-09-22T00:00:00.000Z",
+          limits: {
+            dailyRequests: Number.MAX_SAFE_INTEGER,
+            monthlyRequests: Number.MAX_SAFE_INTEGER,
+          },
+        });
       }
     }
 
@@ -569,6 +577,60 @@ describe("POST /v1/ai/responses", () => {
       expect(after.dailyRequests).toBe(1);
       // 月次は跨いでいないので積み上がったまま。
       expect(after.monthlyRequests).toBe(AI_USAGE_LIMITS.dailyRequests + 1);
+      vi.unstubAllGlobals();
+    });
+
+    it("日次と月次の両方に達していたら、遠いほうの回復時刻を返す", async () => {
+      stubUpstream(SSE_WITH_USAGE);
+      const usage = new InMemoryAiUsageRepository();
+      // 月次150回のうち、今日ぶんが15回。両方の上限に同時に達している状態。
+      for (let day = 1; day <= 9; day += 1) {
+        await seed(usage, "auth0|user-a", 15, {
+          monthKey: "2026-09",
+          dayKey: `2026-09-${String(day).padStart(2, "0")}`,
+        });
+      }
+      await seed(usage, "auth0|user-a", 15, { monthKey: "2026-09", dayKey: "2026-09-22" });
+      const harness = buildApp({ usage });
+      const { ctx } = createExecutionContext();
+
+      const response = await ask(harness, { selection: "code", question: "explain" }, ctx);
+
+      expect(response.status).toBe(429);
+      // 明日 UTC 0時と答えると、その時刻に再試行しても月次で止まり続ける。
+      await expect(response.json()).resolves.toMatchObject({
+        limit: "monthly",
+        resetAt: "2026-10-01T00:00:00.000Z",
+      });
+      vi.unstubAllGlobals();
+    });
+
+    it("上限で弾かれたリクエストは枠を消費しない", async () => {
+      stubUpstream(SSE_WITH_USAGE);
+      const usage = new InMemoryAiUsageRepository();
+      await seed(usage, "auth0|user-a", AI_USAGE_LIMITS.dailyRequests, {
+        monthKey: "2026-09",
+        dayKey: "2026-09-22",
+      });
+      const harness = buildApp({ usage });
+
+      // 上限を越えた状態でさらに3回叩く。弾かれた分が加算されると、
+      // 通っていない回数まで月次の枠を食う。
+      for (let i = 0; i < 3; i += 1) {
+        const r = await ask(
+          harness,
+          { selection: "code", question: "explain" },
+          createExecutionContext().ctx,
+        );
+        expect(r.status).toBe(429);
+      }
+
+      const after = await usage.get({
+        userId: "auth0|user-a",
+        monthKey: "2026-09",
+        dayKey: "2026-09-22",
+      });
+      expect(after.monthlyRequests).toBe(AI_USAGE_LIMITS.dailyRequests);
       vi.unstubAllGlobals();
     });
 

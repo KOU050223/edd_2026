@@ -130,9 +130,14 @@ export function createAiRoute(resolve: AiDepsResolver) {
       return c.json(
         {
           error: "input is too large",
+          // 見積もりは上界なので、実際のトークン数はこれより小さい。
+          // 断定せず「見積もり」と書く。数字を実測のように見せると、
+          // 利用者は上限付近で拒否された理由を誤解する。
           message:
-            `入力が1回あたりの上限（約 ${String(AI_USAGE_LIMITS.inputTokensPerRequest)} tokens）を` +
-            `超えています（約 ${String(estimatedInputTokens)} tokens）。選択範囲を狭めてください。`,
+            `入力が1回あたりの上限（${String(AI_USAGE_LIMITS.inputTokensPerRequest)} tokens）を` +
+            `超える見積もりです。選択範囲を狭めてください。` +
+            `（日本語なら約 ${String(Math.floor(AI_USAGE_LIMITS.inputTokensPerRequest / 3))} 文字、` +
+            `英数字なら約 ${String(AI_USAGE_LIMITS.inputTokensPerRequest)} 文字が目安です）`,
           limitTokens: AI_USAGE_LIMITS.inputTokensPerRequest,
           estimatedTokens: estimatedInputTokens,
         },
@@ -150,8 +155,10 @@ export function createAiRoute(resolve: AiDepsResolver) {
     // （repository/types.ts の `ensureUser` の説明を参照）。
     await deps.identity.ensureUser({ userId, nowMs: now.getTime() });
 
-    // 上流へ流す前に読む。トークンの安全弁は前回までの累計で判定する
-    // （今回の消費は終わるまで分からない）。
+    // トークンの安全弁だけは先に読んで判定する。回数と違って**実消費が
+    // 分かるのはストリームを読み切った後**なので、確保の対象にできない。
+    // 前回までの累計で見るしかなく、1回分は超過しうる。それを許せるのは、
+    // これが利用者へ見せない安全弁であり、通常は回数が先に尽きるためである。
     const before = await deps.usage.get({ userId, monthKey, dayKey });
     if (before.monthlyTokens >= AI_USAGE_LIMITS.monthlyTokens) {
       // 通常は回数が先に尽きる。ここに来ること自体が「1回あたりの想定が
@@ -166,29 +173,29 @@ export function createAiRoute(resolve: AiDepsResolver) {
       });
       return c.json(limitReached("tokens", now), 429);
     }
-    if (before.dailyRequests >= AI_USAGE_LIMITS.dailyRequests) {
-      return c.json(limitReached("daily", now), 429);
-    }
-    if (before.monthlyRequests >= AI_USAGE_LIMITS.monthlyRequests) {
-      return c.json(limitReached("monthly", now), 429);
-    }
-
-    // 回数は上流へ流す前に増やす。ストリームの完了を待ってから数えると、
-    // 応答を読み切らずに切断する呼び出しを繰り返すだけで上限を素通りできる。
-    const after = await deps.usage.increment({
+    // 回数の枠を確保する。**判定と加算は1つの操作にまとめる**（`reserve`）。
+    // 読んでから別の文で足すと、同じ利用者の同時リクエストがその隙間に割り込み、
+    // 上限を超えて弾いた分まで枠を消費する。
+    //
+    // 確保が上流への送信より前なのは変わらない。ストリームの完了を待ってから
+    // 数えると、応答を読み切らずに切断する呼び出しを繰り返すだけで素通りできる。
+    const { reserved, usage: after } = await deps.usage.reserve({
       userId,
       monthKey,
       dayKey,
       updatedAt: now.toISOString(),
+      limits: {
+        dailyRequests: AI_USAGE_LIMITS.dailyRequests,
+        monthlyRequests: AI_USAGE_LIMITS.monthlyRequests,
+      },
     });
-    // 読みと加算の間に同じユーザーの別リクエストが割り込みうる。加算後の値で
-    // もう一度見て、上限を越えていたら流さない。D1 側の加算は1文なので、
-    // 競合しても回数を数え落とすことはない。
-    if (after.dailyRequests > AI_USAGE_LIMITS.dailyRequests) {
-      return c.json(limitReached("daily", now), 429);
-    }
-    if (after.monthlyRequests > AI_USAGE_LIMITS.monthlyRequests) {
-      return c.json(limitReached("monthly", now), 429);
+    if (!reserved) {
+      // 月次を先に見る。両方に達している利用者へ日次の `resetAt`（明日 UTC 0時）を
+      // 返すと、その時刻に再試行しても月次で止まり続ける。**回復時刻は、実際に
+      // 使えるようになる時刻でなければ案内にならない。** 遠いほうを返す。
+      const kind: AiUsageLimitKind =
+        after.monthlyRequests >= AI_USAGE_LIMITS.monthlyRequests ? "monthly" : "daily";
+      return c.json(limitReached(kind, now), 429);
     }
 
     const upstream = await deps.fetch(
