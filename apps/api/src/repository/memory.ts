@@ -83,6 +83,12 @@ export class InMemoryLearningEventRepository implements LearningEventRepository 
     return Promise.resolve(this.byUser.get(userId)?.size ?? 0);
   }
 
+  deleteByUser(userId: string): Promise<number> {
+    const count = this.byUser.get(userId)?.size ?? 0;
+    this.byUser.delete(userId);
+    return Promise.resolve(count);
+  }
+
   deleteUser(userId: string): void {
     this.byUser.delete(userId);
   }

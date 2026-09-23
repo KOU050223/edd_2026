@@ -101,6 +101,17 @@ export interface LearningEventRepository {
 
   /** 1ユーザーのイベント総件数。Profile レスポンスの `eventCount` に使う。 */
   countByUser(userId: string): Promise<number>;
+
+  /**
+   * 1ユーザーの全イベントを消す（学習履歴の削除。退会ではない）。
+   *
+   * `users` / `devices` の行は残す。アカウントを保持したまま履歴だけを消す経路であり、
+   * 行ごと消すのは退会（`IdentityRepository.deleteUser`）の責務である。
+   * 習熟度は保存値を持たずイベントから導出するため、これだけで習熟度も消える。
+   *
+   * @returns 消した件数。0件でも成功とする（再実行で失敗させない）。
+   */
+  deleteByUser(userId: string): Promise<number>;
 }
 
 export interface MasteryOverride {

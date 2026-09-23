@@ -179,6 +179,21 @@ export class D1LearningEventRepository implements LearningEventRepository {
 
     return row?.count ?? 0;
   }
+
+  async deleteByUser(userId: string): Promise<number> {
+    const result = await this.db
+      .prepare(`DELETE FROM learning_events WHERE user_id = ?`)
+      .bind(userId)
+      .run();
+
+    // 件数が取れなければ既定値で埋めない。0 と答えると「消すものが無かった」と
+    // 「消せたか分からない」の区別が消える（RULE-004）。
+    const changes = result.meta?.changes;
+    if (typeof changes !== "number") {
+      throw new Error("D1 delete result has no meta.changes");
+    }
+    return changes;
+  }
 }
 
 /** `IdentityRepository` の D1 実装。 */
