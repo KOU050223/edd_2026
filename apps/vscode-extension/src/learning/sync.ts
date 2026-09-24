@@ -33,7 +33,16 @@ export type SyncEventStatus = "accepted" | "duplicate" | "rejected";
 
 /** サーバー応答の最小限の形。呼び出し側が使わない項目は持たない。 */
 interface SyncResponseBody {
-  results: { status: SyncEventStatus; reason?: string }[];
+  results: {
+    status: SyncEventStatus;
+    reason?: string;
+    /**
+     * 受理されたが削除境界の内側に倒れ、サーバーへは保存されなかった
+     * イベントなら true（Issue #124）。古いサーバーは返さないため、
+     * 省略は false と同じ意味で扱う。
+     */
+    droppedByReset?: boolean;
+  }[];
   /**
    * サーバーで学習履歴が最後に削除された時刻（epoch ミリ秒）。無ければ null。
    *
@@ -56,6 +65,11 @@ export type SyncOutcome =
        * どちらの場合もローカルを消す根拠にしないためである。
        */
       historyResetAtMs: number | null;
+      /**
+       * 受理されたが削除境界の内側に倒れ、サーバーへは保存されなかった
+       * なら true。追従後にローカルへ記録し直すかの判断に使う。
+       */
+      droppedByReset: boolean;
     }
   | { ok: false; reason: string };
 
@@ -105,7 +119,7 @@ export async function syncEvent(event: LearningEvent, config: SyncConfig): Promi
 
   const url = `${config.apiBaseUrl.replace(/\/+$/, "")}/v1/learning-events:sync`;
 
-  let result: { status: SyncEventStatus; reason?: string } | undefined;
+  let result: SyncResponseBody["results"][number] | undefined;
   let historyResetAtMs: number | null;
   try {
     const apiToken = await config.apiToken();
@@ -166,7 +180,13 @@ export async function syncEvent(event: LearningEvent, config: SyncConfig): Promi
     return { ok: false, reason: "サーバー応答にこのイベントの結果が含まれていません" };
   }
 
-  return { ok: true, status: result.status, reason: result.reason, historyResetAtMs };
+  return {
+    ok: true,
+    status: result.status,
+    reason: result.reason,
+    historyResetAtMs,
+    droppedByReset: result.droppedByReset === true,
+  };
 }
 
 /** `DELETE /v1/learning-events` の応答（apps/api/src/routes/learning-data.ts の DeleteLearningEventsResponse と対応）。 */

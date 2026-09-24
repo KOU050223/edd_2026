@@ -252,9 +252,11 @@ test("削除より前に受け取った同期は、書き込みが削除の後�
 
   // 受理はする。受理したうえで削除に含まれた、という扱い。
   // 重複と答えると、既に保存されていたかのように見える。
+  // droppedByReset で「受理したが書かなかった」を区別する。クライアントは
+  // 追従後にこのイベントをローカルへ記録し直さない（Issue #124）。
   expect(res.status).toBe(200);
   expect(((await res.json()) as SyncResponse).results).toEqual([
-    { index: 0, id: "in-flight", status: "accepted" },
+    { index: 0, id: "in-flight", status: "accepted", droppedByReset: true },
   ]);
   expect(await events.countByUser("user-a")).toBe(0);
 });
@@ -273,6 +275,22 @@ test("まだ一度も同期していない利用者の削除も、並行する�
 
   expect(await events.countByUser("user-a")).toBe(0);
   expect(identity.users.has("user-a")).toBe(true);
+});
+
+test("削除応答の削除時刻は、巻き戻らなかった記録後の実効値を返す", async () => {
+  // deleteByUser は既存の削除時刻を巻き戻さない。時計の逆行などで
+  // 既存値のほうが新しい場合、応答も新しい値を返さないと、呼んだ端末が
+  // 古い「適用済み」を記録して次回同期で自分の削除へ二度追従する（Issue #124）。
+  await events.deleteByUser("user-a", 2_000);
+  clockMs = 1_500;
+
+  const res = await request("/v1/learning-events", "token-a", "DELETE");
+
+  expect(res.status).toBe(200);
+  expect((await res.json()) as DeleteLearningEventsResponse).toEqual({
+    deletedCount: 0,
+    resetAtMs: 2_000,
+  });
 });
 
 test("削除時刻は巻き戻らない", async () => {

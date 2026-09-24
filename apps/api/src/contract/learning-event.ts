@@ -144,6 +144,15 @@ export interface SyncEventResult {
   status: SyncResultStatus;
   /** `rejected` のときだけ入る、人が読める拒否理由。 */
   reason?: string;
+  /**
+   * 受理したが、履歴の削除境界（`learning_history_resets`）の内側に倒れて
+   * 保存しなかった場合に true。
+   *
+   * status は `accepted` のまま。受理したうえで削除に含まれた、という
+   * 扱いは変えず、クライアントが削除への追従後にこのイベントをローカルへ
+   * 記録し直すかの区別だけに使う（Issue #124）。
+   */
+  droppedByReset?: boolean;
 }
 
 export interface SyncResponse {

@@ -158,17 +158,16 @@ export function activate(context: vscode.ExtensionContext): void {
   /**
    * サーバー側の削除に追従して、この端末のローカルコピーも消す（Issue #124）。
    *
-   * @returns 追従を適用したなら true。既に適用済み・失敗時は false。
-   *   コピーの削除に失敗したときは適用済みとして記録しないため、次回の同期で
-   *   再試行される。
+   * コピーの削除に失敗したときは適用済みとして記録しないため、次回の同期で
+   * 再試行される。
    */
   // globalState への記録に失敗しても、同じセッション内で同じ削除へ二度追従して
   // 削除の後に記録したイベントまで消すことがないよう、メモリ上にも適用済みの
   // 時刻を持つ。次回起動時は globalState の値から読み直す。
   let lastAppliedResetAtMs = getAppliedHistoryResetAtMs(context);
-  async function applyServerHistoryReset(resetAtMs: number): Promise<boolean> {
+  async function applyServerHistoryReset(resetAtMs: number): Promise<void> {
     if (resetAtMs <= Math.max(lastAppliedResetAtMs, getAppliedHistoryResetAtMs(context))) {
-      return false;
+      return;
     }
     try {
       await clearLocalLearningData(context);
@@ -178,7 +177,7 @@ export function activate(context: vscode.ExtensionContext): void {
       vscode.window.showErrorMessage(
         "サーバーで削除された学習データをこの端末から消せませんでした。「Gakushu Sochi: 学習データを削除する」を実行してください。",
       );
-      return false;
+      return;
     }
     // コピーは消えた。記録が残らなくてもセッション内では適用済みとして扱う。
     lastAppliedResetAtMs = resetAtMs;
@@ -195,11 +194,27 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.window.showInformationMessage(
       "サーバーで学習データが削除されたため、この端末のコピーも消去しました。",
     );
-    return true;
   }
 
+  // イベントの記録を直列化する。追従処理は「ローカル消去 → 記録し直し」の
+  // 区間を持ち、ここへ別のイベント記録が割り込むと、そのイベントは消えるが
+  // 記録し直されない。サーバーには届いているのにローカルにだけ欠落する
+  // イベントが生まれうるため、記録の単位ごとに順番待ちにする（#124）。
+  let persistQueue: Promise<void> = Promise.resolve();
+
   /** 学習イベントを1件記録する。保存に失敗しても質問フローは止めない。 */
-  async function persistEvent(event: LearningEvent): Promise<void> {
+  function persistEvent(event: LearningEvent): Promise<void> {
+    persistQueue = persistQueue
+      .then(() => persistEventNow(event))
+      .catch((error) => {
+        // persistEventNow は内側で失敗を処理して投げない設計だが、万一の
+        // 例外でキューが失敗のまま残ると後続の記録が全て止まる。
+        channel.appendLine(`LearningEvent の記録に失敗しました: ${String(error)}`);
+      });
+    return persistQueue;
+  }
+
+  async function persistEventNow(event: LearningEvent): Promise<void> {
     profile = await recordEvent(context, profile, event, (error) => {
       channel.appendLine(`LearnerProfile の保存に失敗しました: ${String(error)}`);
     });
@@ -242,13 +257,20 @@ export function activate(context: vscode.ExtensionContext): void {
       );
 
       // Issue #124: この端末以外からサーバー側が削除されていたら、ローカルの
-      // コピーも消す。直前に同期したイベントは削除の後にサーバーへ書かれて
-      // いるため、消したあとで記録し直してサーバーと齟齬しないようにする。
-      // （拒否されたイベントはサーバーにも無いので、消えたままでよい。）
+      // コピーも消す。
+      if (outcome.historyResetAtMs !== null) {
+        await applyServerHistoryReset(outcome.historyResetAtMs);
+      }
+
+      // 追従（この呼び出しで適用したか、割り込んだ削除コマンドで既に適用
+      // 済みだったかを問わず）で、直前に記録したイベントがローカルから
+      // 消えていることがある。サーバーへ保存されたイベントは記録し直して
+      // 齟齬しないようにする。削除境界の内側に倒れた受理（droppedByReset）と
+      // 拒否はサーバーにも無いので記録し直さない。
       if (
-        outcome.historyResetAtMs !== null &&
-        (await applyServerHistoryReset(outcome.historyResetAtMs)) &&
-        outcome.status !== "rejected"
+        outcome.status !== "rejected" &&
+        !outcome.droppedByReset &&
+        !profile.events.some((e) => e.id === event.id)
       ) {
         profile = await recordEvent(context, profile, event, (error) => {
           channel.appendLine(`LearnerProfile の保存に失敗しました: ${String(error)}`);
@@ -535,76 +557,93 @@ export function activate(context: vscode.ExtensionContext): void {
   // 「消えたように見える」状態を作らないためである
   // （docs/architecture.md「クライアント側に残るコピー」）。
   // このコマンドを呼ばなかった他端末は、同期応答の historyResetAtMs で追従する。
+  let deletingLearningData = false;
   const deleteLearningDataCommand = vscode.commands.registerCommand(
     "gakushuSochi.deleteLearningData",
     async () => {
-      const config = vscode.workspace.getConfiguration("gakushuSochi");
-      const apiBaseUrl = config.get<string>("api.baseUrl", "");
-
-      const confirmed = await vscode.window.showWarningMessage(
-        "学習データを削除しますか？",
-        {
-          modal: true,
-          detail: apiBaseUrl
-            ? "サーバー上の学習イベントと、この端末に保存された学習履歴・習熟度・解説済みエラーの記憶を削除します。アカウントと設定は残ります。この操作は取り消せません。"
-            : "この端末に保存された学習履歴・習熟度・解説済みエラーの記憶を削除します。同期先が設定されていないためサーバー側は対象外です。この操作は取り消せません。",
-        },
-        "削除する",
-      );
-      if (confirmed !== "削除する") {
+      // 実行中の再入は止める（RULE-007）。2回起動すると確認モーダルが
+      // 2重に出て双方で DELETE が飛ぶ。削除自体は冪等なので実害は無いが、
+      // 確認と実行の組が崩れるのを防ぐ。
+      if (deletingLearningData) {
+        vscode.window.showInformationMessage("学習データの削除を実行中です。");
         return;
       }
-
-      let resetAtMs: number | null = null;
-      if (apiBaseUrl) {
-        const outcome = await deleteServerLearningData({
-          apiBaseUrl,
-          apiToken: () => deviceAuth.getAccessToken(),
-        });
-        if (!outcome.ok) {
-          channel.appendLine(`学習データの削除に失敗しました: ${outcome.reason}`);
-          vscode.window.showErrorMessage(
-            `サーバー上の学習データを削除できませんでした（${outcome.reason}）。この端末のデータも残しています。`,
-          );
-          return;
-        }
-        resetAtMs = outcome.resetAtMs;
-      }
-
+      deletingLearningData = true;
       try {
-        await clearLocalLearningData(context);
-      } catch (error) {
-        channel.appendLine(`ローカルの学習データの削除に失敗しました: ${String(error)}`);
+        await runDeleteLearningData();
+      } finally {
+        deletingLearningData = false;
+      }
+    },
+  );
+
+  async function runDeleteLearningData(): Promise<void> {
+    const config = vscode.workspace.getConfiguration("gakushuSochi");
+    const apiBaseUrl = config.get<string>("api.baseUrl", "");
+
+    const confirmed = await vscode.window.showWarningMessage(
+      "学習データを削除しますか？",
+      {
+        modal: true,
+        detail: apiBaseUrl
+          ? "サーバー上の学習イベントと、この端末に保存された学習履歴・習熟度・解説済みエラーの記憶を削除します。アカウントと設定は残ります。この操作は取り消せません。"
+          : "この端末に保存された学習履歴・習熟度・解説済みエラーの記憶を削除します。同期先が設定されていないためサーバー側は対象外です。この操作は取り消せません。",
+      },
+      "削除する",
+    );
+    if (confirmed !== "削除する") {
+      return;
+    }
+
+    let resetAtMs: number | null = null;
+    if (apiBaseUrl) {
+      const outcome = await deleteServerLearningData({
+        apiBaseUrl,
+        apiToken: () => deviceAuth.getAccessToken(),
+      });
+      if (!outcome.ok) {
+        channel.appendLine(`学習データの削除に失敗しました: ${outcome.reason}`);
         vscode.window.showErrorMessage(
-          apiBaseUrl
-            ? "サーバー側の削除は完了しましたが、この端末のコピーを消せませんでした。もう一度実行してください。"
-            : "この端末の学習データを消せませんでした。もう一度実行してください。",
+          `サーバー上の学習データを削除できませんでした（${outcome.reason}）。この端末のデータも残しています。`,
         );
         return;
       }
+      resetAtMs = outcome.resetAtMs;
+    }
 
-      // 削除はこれで成立している。適用済みの削除時刻を記録しておくと、次回の同期で
-      // 自分が呼んだ削除を「他端末から見えた削除」として二度処理しない。
-      // 記録に失敗してもデータは消えているため、失敗はログに留める。
-      if (resetAtMs !== null) {
-        lastAppliedResetAtMs = resetAtMs;
-        try {
-          await markHistoryResetApplied(context, resetAtMs);
-        } catch (error) {
-          channel.appendLine(`適用済みの削除時刻の記録に失敗しました: ${String(error)}`);
-        }
-      }
-
-      profile = createEmptyProfile(new Date().toISOString());
-      explainedErrors = {};
-      channel.appendLine("学習データを削除しました。");
-      vscode.window.showInformationMessage(
+    try {
+      await clearLocalLearningData(context);
+    } catch (error) {
+      channel.appendLine(`ローカルの学習データの削除に失敗しました: ${String(error)}`);
+      vscode.window.showErrorMessage(
         apiBaseUrl
-          ? "学習データを削除しました。"
-          : "この端末の学習データを削除しました。過去に同期していた場合、サーバー側にコピーが残っていることがあります。",
+          ? "サーバー側の削除は完了しましたが、この端末のコピーを消せませんでした。もう一度実行してください。"
+          : "この端末の学習データを消せませんでした。もう一度実行してください。",
       );
-    },
-  );
+      return;
+    }
+
+    // 削除はこれで成立している。適用済みの削除時刻を記録しておくと、次回の同期で
+    // 自分が呼んだ削除を「他端末から見えた削除」として二度処理しない。
+    // 記録に失敗してもデータは消えているため、失敗はログに留める。
+    if (resetAtMs !== null) {
+      lastAppliedResetAtMs = resetAtMs;
+      try {
+        await markHistoryResetApplied(context, resetAtMs);
+      } catch (error) {
+        channel.appendLine(`適用済みの削除時刻の記録に失敗しました: ${String(error)}`);
+      }
+    }
+
+    profile = createEmptyProfile(new Date().toISOString());
+    explainedErrors = {};
+    channel.appendLine("学習データを削除しました。");
+    vscode.window.showInformationMessage(
+      apiBaseUrl
+        ? "学習データを削除しました。"
+        : "この端末の学習データを削除しました。過去に同期していた場合、サーバー側にコピーが残っていることがあります。",
+    );
+  }
 
   // #34: 既定のキーバインドは利用者が上書きできるが、その設定画面への導線が
   // 拡張から辿れなかった。独自の設定画面は作らず、標準の画面へ案内する。

@@ -141,6 +141,9 @@ export function createLearningEventsRoute(resolve: SyncDepsResolver) {
           index: target.index,
           id: result.id,
           status: result.duplicate ? "duplicate" : "accepted",
+          // 削除境界に吞まれた受理だけ区別を返す。クライアントは追従後の
+          // 再記録をこれで判断する（Issue #124）。
+          ...(result.droppedByReset ? { droppedByReset: true } : {}),
         };
       });
     }

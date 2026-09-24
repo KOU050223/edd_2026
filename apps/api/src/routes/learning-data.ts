@@ -78,8 +78,19 @@ export function createLearningDataRoute(resolve: LearningDataDepsResolver) {
 
     // 時刻は ensureUser の後で取り直す。Workers の Date.now() は I/O を挟むまで進まないため、
     // 先に取った値を使うと、その間に受け取った同期を境界の外へ取りこぼす。
-    const resetAtMs = deps.nowMs();
-    const deletedCount = await deps.events.deleteByUser(userId, resetAtMs);
+    const deletedCount = await deps.events.deleteByUser(userId, deps.nowMs());
+
+    // 応答には記録後の実効値を返す。deleteByUser は既存の削除時刻を
+    // 巻き戻さない（MAX を取る）ため、時計の逆行などで要求時刻より新しい値が
+    // 残っている場合がある。要求時刻を返すとクライアントが古い「適用済み」を
+    // 記録し、次回同期で自分が呼んだ削除へ再度追従してしまう。
+    const resetAtMs = await deps.events.latestResetAtMs(userId);
+    if (resetAtMs === null) {
+      // deleteByUser の直後に読めないのはリポジトリの不整合。要求時刻で
+      // 埋めると削除時刻が他端末へ伝わらないままになるため握らない。
+      // deleteByUser は冪等なので、失敗と返して再実行してもらう。
+      throw new Error("履歴の削除時刻が記録されていません");
+    }
 
     const body: DeleteLearningEventsResponse = { deletedCount, resetAtMs };
     return c.json(body);

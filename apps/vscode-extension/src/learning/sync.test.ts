@@ -65,6 +65,7 @@ test("受理されたら status: accepted を返す", async () => {
     status: "accepted",
     reason: undefined,
     historyResetAtMs: null,
+    droppedByReset: false,
   });
 });
 
@@ -157,6 +158,7 @@ test("重複ならstatus: duplicateと理由を返す", async () => {
     status: "duplicate",
     reason: undefined,
     historyResetAtMs: null,
+    droppedByReset: false,
   });
 });
 
@@ -191,6 +193,7 @@ test("ローカル開発のhttpは許可する", async () => {
     status: "accepted",
     reason: undefined,
     historyResetAtMs: null,
+    droppedByReset: false,
   });
   expect(fetchMock).toHaveBeenCalledWith(
     "http://localhost:8787/v1/learning-events:sync",
@@ -281,6 +284,34 @@ test("応答の削除時刻を呼び出し側へ返す", async () => {
     status: "accepted",
     reason: undefined,
     historyResetAtMs: 1_700_000_000_000,
+    droppedByReset: false,
+  });
+});
+
+test("削除境界に吞まれた受理を呼び出し側へ伝える", async () => {
+  // status は accepted のまま。サーバーへは保存されなかったイベントであり、
+  // 追従後にローカルへ記録し直すかの区別だけに使う（Issue #124）。
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          results: [{ status: "accepted", droppedByReset: true }],
+          historyResetAtMs: 1_000,
+        }),
+        { status: 200 },
+      ),
+    ),
+  );
+
+  const outcome = await syncEvent(EVENT, CONFIG);
+
+  expect(outcome).toEqual({
+    ok: true,
+    status: "accepted",
+    reason: undefined,
+    historyResetAtMs: 1_000,
+    droppedByReset: true,
   });
 });
 
@@ -319,7 +350,12 @@ test("削除時刻のフィールドが無い古いサーバーからの応答�
 
   const outcome = await syncEvent(EVENT, CONFIG);
 
-  expect(outcome).toEqual({ ok: true, status: "accepted", historyResetAtMs: null });
+  expect(outcome).toEqual({
+    ok: true,
+    status: "accepted",
+    historyResetAtMs: null,
+    droppedByReset: false,
+  });
 });
 
 // --- #124: DELETE /v1/learning-events -----------------------------------------

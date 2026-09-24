@@ -167,14 +167,16 @@ export class D1LearningEventRepository implements LearningEventRepository {
 
       // 削除より前に受け取ったイベントは、受理したうえで削除に含まれた扱いにする。
       // 重複と答えないのは、既に保存済みだったかのように見せないため。
+      // droppedByReset で区別を返すのは、クライアントが削除への追従後に
+      // このイベントをローカルへ記録し直さないための根拠になるため（Issue #124）。
       if (changes === 0 && reset !== null && reset.reset_at_ms >= input.receivedAtMs) {
-        return { id: input.event.id, duplicate: false };
+        return { id: input.event.id, duplicate: false, droppedByReset: true };
       }
 
       // 書き込まれた行が0なら、同じ ID が既にあったということ。
       // 主キーが (user_id, id) なので、これは常に「このユーザーの再送」を意味し、
       // 他ユーザーの同じ文字列との衝突ではない。
-      return { id: input.event.id, duplicate: changes === 0 };
+      return { id: input.event.id, duplicate: changes === 0, droppedByReset: false };
     });
   }
 
