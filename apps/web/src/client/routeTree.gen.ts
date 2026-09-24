@@ -13,7 +13,10 @@ import { Route as FramedRouteRouteImport } from './routes/_framed/route'
 import { Route as LoginFailedRouteImport } from './routes/login-failed'
 import { Route as FramedIndexRouteImport } from './routes/_framed/index'
 import { Route as FramedActivityRouteImport } from './routes/_framed/activity'
-import { Route as FramedSettingsRouteImport } from './routes/_framed/settings'
+import { Route as FramedSettingsRouteRouteImport } from './routes/_framed/settings/route'
+import { Route as FramedSettingsIndexRouteImport } from './routes/_framed/settings/index'
+import { Route as FramedSettingsBillingRouteImport } from './routes/_framed/settings/billing'
+import { Route as FramedSettingsUsageRouteImport } from './routes/_framed/settings/usage'
 
 const FramedRouteRoute = FramedRouteRouteImport.update({
   id: '/_framed',
@@ -34,44 +37,83 @@ const FramedActivityRoute = FramedActivityRouteImport.update({
   path: '/activity',
   getParentRoute: () => FramedRouteRoute,
 } as any)
-const FramedSettingsRoute = FramedSettingsRouteImport.update({
+const FramedSettingsRouteRoute = FramedSettingsRouteRouteImport.update({
   id: '/settings',
   path: '/settings',
   getParentRoute: () => FramedRouteRoute,
+} as any)
+const FramedSettingsIndexRoute = FramedSettingsIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => FramedSettingsRouteRoute,
+} as any)
+const FramedSettingsBillingRoute = FramedSettingsBillingRouteImport.update({
+  id: '/billing',
+  path: '/billing',
+  getParentRoute: () => FramedSettingsRouteRoute,
+} as any)
+const FramedSettingsUsageRoute = FramedSettingsUsageRouteImport.update({
+  id: '/usage',
+  path: '/usage',
+  getParentRoute: () => FramedSettingsRouteRoute,
 } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof FramedIndexRoute
   '/login-failed': typeof LoginFailedRoute
+  '/settings': typeof FramedSettingsRouteRouteWithChildren
   '/activity': typeof FramedActivityRoute
-  '/settings': typeof FramedSettingsRoute
+  '/settings/billing': typeof FramedSettingsBillingRoute
+  '/settings/usage': typeof FramedSettingsUsageRoute
+  '/settings/': typeof FramedSettingsIndexRoute
 }
 export interface FileRoutesByTo {
   '/login-failed': typeof LoginFailedRoute
   '/activity': typeof FramedActivityRoute
-  '/settings': typeof FramedSettingsRoute
   '/': typeof FramedIndexRoute
+  '/settings/billing': typeof FramedSettingsBillingRoute
+  '/settings/usage': typeof FramedSettingsUsageRoute
+  '/settings': typeof FramedSettingsIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_framed': typeof FramedRouteRouteWithChildren
   '/login-failed': typeof LoginFailedRoute
+  '/_framed/settings': typeof FramedSettingsRouteRouteWithChildren
   '/_framed/activity': typeof FramedActivityRoute
-  '/_framed/settings': typeof FramedSettingsRoute
   '/_framed/': typeof FramedIndexRoute
+  '/_framed/settings/billing': typeof FramedSettingsBillingRoute
+  '/_framed/settings/usage': typeof FramedSettingsUsageRoute
+  '/_framed/settings/': typeof FramedSettingsIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/login-failed' | '/activity' | '/settings'
+  fullPaths:
+    | '/'
+    | '/login-failed'
+    | '/settings'
+    | '/activity'
+    | '/settings/billing'
+    | '/settings/usage'
+    | '/settings/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/login-failed' | '/activity' | '/settings' | '/'
+  to:
+    | '/login-failed'
+    | '/activity'
+    | '/'
+    | '/settings/billing'
+    | '/settings/usage'
+    | '/settings'
   id:
     | '__root__'
     | '/_framed'
     | '/login-failed'
-    | '/_framed/activity'
     | '/_framed/settings'
+    | '/_framed/activity'
     | '/_framed/'
+    | '/_framed/settings/billing'
+    | '/_framed/settings/usage'
+    | '/_framed/settings/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -113,21 +155,57 @@ declare module '@tanstack/react-router' {
       id: '/_framed/settings'
       path: '/settings'
       fullPath: '/settings'
-      preLoaderRoute: typeof FramedSettingsRouteImport
+      preLoaderRoute: typeof FramedSettingsRouteRouteImport
       parentRoute: typeof FramedRouteRoute
+    }
+    '/_framed/settings/': {
+      id: '/_framed/settings/'
+      path: '/'
+      fullPath: '/settings/'
+      preLoaderRoute: typeof FramedSettingsIndexRouteImport
+      parentRoute: typeof FramedSettingsRouteRoute
+    }
+    '/_framed/settings/billing': {
+      id: '/_framed/settings/billing'
+      path: '/billing'
+      fullPath: '/settings/billing'
+      preLoaderRoute: typeof FramedSettingsBillingRouteImport
+      parentRoute: typeof FramedSettingsRouteRoute
+    }
+    '/_framed/settings/usage': {
+      id: '/_framed/settings/usage'
+      path: '/usage'
+      fullPath: '/settings/usage'
+      preLoaderRoute: typeof FramedSettingsUsageRouteImport
+      parentRoute: typeof FramedSettingsRouteRoute
     }
   }
 }
 
+interface FramedSettingsRouteRouteChildren {
+  FramedSettingsBillingRoute: typeof FramedSettingsBillingRoute
+  FramedSettingsUsageRoute: typeof FramedSettingsUsageRoute
+  FramedSettingsIndexRoute: typeof FramedSettingsIndexRoute
+}
+
+const FramedSettingsRouteRouteChildren: FramedSettingsRouteRouteChildren = {
+  FramedSettingsBillingRoute: FramedSettingsBillingRoute,
+  FramedSettingsUsageRoute: FramedSettingsUsageRoute,
+  FramedSettingsIndexRoute: FramedSettingsIndexRoute,
+}
+
+const FramedSettingsRouteRouteWithChildren =
+  FramedSettingsRouteRoute._addFileChildren(FramedSettingsRouteRouteChildren)
+
 interface FramedRouteRouteChildren {
+  FramedSettingsRouteRoute: typeof FramedSettingsRouteRouteWithChildren
   FramedActivityRoute: typeof FramedActivityRoute
-  FramedSettingsRoute: typeof FramedSettingsRoute
   FramedIndexRoute: typeof FramedIndexRoute
 }
 
 const FramedRouteRouteChildren: FramedRouteRouteChildren = {
+  FramedSettingsRouteRoute: FramedSettingsRouteRouteWithChildren,
   FramedActivityRoute: FramedActivityRoute,
-  FramedSettingsRoute: FramedSettingsRoute,
   FramedIndexRoute: FramedIndexRoute,
 }
 

@@ -184,7 +184,7 @@ Client が観測する事実
 | Identity       | OAuth / OIDC                                                    | ログイン、トークン発行、VS Codeの端末認可              |
 | Sync Command   | `POST /v1/learning-events:sync`                                 | 追記型イベントをまとめて冪等に同期する                 |
 | Learning Query | `GET /v1/learning-profile`                                      | 導出済みのLearning Mapと根拠を返す                     |
-| AI Gateway     | `POST /v1/ai/responses`                                         | Managed AI の実行・利用制限・課金を扱う                |
+| AI Gateway     | `POST /v1/ai/responses` / `GET /v1/ai/usage`                    | Managed AI の実行・利用制限・課金と、残量の提示を扱う  |
 | Data Rights    | `GET /v1/learning-events:export` / `DELETE /v1/learning-events` | 自分の学習データを取り出す／消す（「保存期間と削除」） |
 
 端末をユーザーへ結びつける処理は Identity の責務であり、独立した `/devices` という

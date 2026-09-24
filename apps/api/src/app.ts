@@ -112,6 +112,12 @@ app.use(
   "/v1/ai/responses",
   rateLimit((env) => env.PROFILE_RATE_LIMITER),
 );
+// 利用量の読み取り（#165）。設定画面を開くたびに D1 を1回読む。頻度の性質は
+// Profile と同じなので同じ上限を使う。
+app.use(
+  "/v1/ai/usage",
+  rateLimit((env) => env.PROFILE_RATE_LIMITER),
+);
 // 退会は Auth0 の Management API を呼ぶ。Auth0 側にもレート制限があるため、
 // 認証済みであっても叩き放題にしない。頻度の想定は Profile より遥かに低い。
 app.use(

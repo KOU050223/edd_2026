@@ -1,5 +1,6 @@
 /**
  * `POST /v1/ai/responses`。Managed AI（運営が Gemini を叩く経路）。
+ * `GET /v1/ai/usage` は同じ利用量を利用者向けに読み出す。
  *
  * この経路だけが外部プロバイダの単価に直結する。上限を掛けないまま開けておくと、
  * 1ユーザーで月 約$91,000 に達しうる（docs/auth.md §10.1）。
@@ -31,6 +32,7 @@ import {
   utcMonthKey,
   type AiUsageLimitBody,
   type AiUsageLimitKind,
+  type AiUsageSummary,
 } from "../contract/ai-usage.js";
 import type { AiUsageRepository, IdentityRepository } from "../repository/types.js";
 
@@ -93,6 +95,50 @@ function limitReached(kind: AiUsageLimitKind, now: Date): AiUsageLimitBody {
 
 export function createAiRoute(resolve: AiDepsResolver) {
   const route = new Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>();
+
+  // 利用者が残量を自分で確かめるための読み取り（Issue #165）。上限に当たって
+  // 初めて残量が分かるのでは、使い方を計画できない。
+  //
+  // `apiKey` を見ない。Managed AI が止まっていても、使った回数は読める。
+  // `ensureUser` も呼ばない。読み取りで行を作る理由は無く、記録が無ければ
+  // repository が 0 を返す。
+  route.get("/ai/usage", async (c) => {
+    const deps = resolve(c.env);
+    const userId = c.get("user").userId;
+    const now = deps.now();
+    const usage = await deps.usage.get({
+      userId,
+      monthKey: utcMonthKey(now),
+      dayKey: utcDayKey(now),
+    });
+    // 返す項目を1つずつ書き出す。`usage` を広げて返すと、利用者へ見せない
+    // `monthlyTokens` まで載る（docs/architecture.md「利用者への見せ方」）。
+    // 上限は必ず `AI_USAGE_LIMITS` から取る。Web に数字を持たせると、
+    // 政策値を動かしたときに画面だけが古い上限を示す。
+    const body: AiUsageSummary = {
+      plan: "free",
+      managedAi: {
+        daily: {
+          used: usage.dailyRequests,
+          limit: AI_USAGE_LIMITS.dailyRequests,
+          resetAt: nextUtcDay(now).toISOString(),
+        },
+        monthly: {
+          // トークンの安全弁に当たっていれば、回数が残っていても `POST` は
+          // 翌月まで拒否する。そのまま回数を返すと「まだ使える」と表示される。
+          // 利用者へは回数を使い切ったのと同じ扱いで見せる。トークン数そのものは
+          // 出さない（docs/architecture.md「利用者への見せ方」）。
+          used:
+            usage.monthlyTokens >= AI_USAGE_LIMITS.monthlyTokens
+              ? Math.max(usage.monthlyRequests, AI_USAGE_LIMITS.monthlyRequests)
+              : usage.monthlyRequests,
+          limit: AI_USAGE_LIMITS.monthlyRequests,
+          resetAt: nextUtcMonth(now).toISOString(),
+        },
+      },
+    };
+    return c.json(body);
+  });
 
   route.post("/ai/responses", vValidator("json", requestSchema), async (c) => {
     const {

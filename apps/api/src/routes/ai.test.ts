@@ -70,6 +70,10 @@ function buildApp(
     "/v1/ai/responses",
     rateLimit((env) => env.PROFILE_RATE_LIMITER),
   );
+  app.use(
+    "/v1/ai/usage",
+    rateLimit((env) => env.PROFILE_RATE_LIMITER),
+  );
   app.route(
     "/v1",
     createAiRoute((env) => ({
@@ -651,5 +655,221 @@ describe("POST /v1/ai/responses", () => {
       await settled();
       vi.unstubAllGlobals();
     });
+  });
+});
+
+describe("GET /v1/ai/usage", () => {
+  const NOW = new Date("2026-09-22T10:00:00.000Z");
+
+  function readUsage(harness: Harness, env: CloudflareBindings = ENV) {
+    return harness.app.request(
+      "https://api.example.test/v1/ai/usage",
+      { headers: { Authorization: "Bearer valid-token" } },
+      env,
+    );
+  }
+
+  /** 回数を積む。`reserve` は上流を呼ばずに枠だけを確保する。 */
+  async function consume(
+    usage: AiUsageRepository,
+    params: { userId: string; at: Date; times: number },
+  ) {
+    for (let i = 0; i < params.times; i++) {
+      await usage.reserve({
+        userId: params.userId,
+        monthKey: params.at.toISOString().slice(0, 7),
+        dayKey: params.at.toISOString().slice(0, 10),
+        updatedAt: params.at.toISOString(),
+        limits: {
+          dailyRequests: AI_USAGE_LIMITS.dailyRequests,
+          monthlyRequests: AI_USAGE_LIMITS.monthlyRequests,
+        },
+      });
+    }
+  }
+
+  it("未使用のユーザーには日次・月次ともに 0 を返す", async () => {
+    const harness = buildApp({ now: () => NOW });
+
+    const response = await readUsage(harness);
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      plan: "free",
+      managedAi: {
+        daily: {
+          used: 0,
+          limit: AI_USAGE_LIMITS.dailyRequests,
+          resetAt: "2026-09-23T00:00:00.000Z",
+        },
+        monthly: {
+          used: 0,
+          limit: AI_USAGE_LIMITS.monthlyRequests,
+          resetAt: "2026-10-01T00:00:00.000Z",
+        },
+      },
+    });
+  });
+
+  it("保存された回数を返し、上限は AI_USAGE_LIMITS から取る", async () => {
+    const harness = buildApp({ now: () => NOW });
+    await consume(harness.usage, { userId: "auth0|user-a", at: NOW, times: 3 });
+
+    const body = (await (await readUsage(harness)).json()) as {
+      managedAi: Record<"daily" | "monthly", { used: number; limit: number }>;
+    };
+
+    expect(body.managedAi.daily).toMatchObject({
+      used: 3,
+      limit: AI_USAGE_LIMITS.dailyRequests,
+    });
+    expect(body.managedAi.monthly).toMatchObject({
+      used: 3,
+      limit: AI_USAGE_LIMITS.monthlyRequests,
+    });
+  });
+
+  it("日が変わると日次だけが 0 に戻る", async () => {
+    const yesterday = new Date("2026-09-21T23:59:00.000Z");
+    const harness = buildApp({ now: () => NOW });
+    await consume(harness.usage, { userId: "auth0|user-a", at: yesterday, times: 4 });
+
+    const body = (await (await readUsage(harness)).json()) as {
+      managedAi: Record<"daily" | "monthly", { used: number }>;
+    };
+
+    expect(body.managedAi.daily.used).toBe(0);
+    expect(body.managedAi.monthly.used).toBe(4);
+  });
+
+  it("月が変わると月次も 0 に戻る", async () => {
+    const lastMonth = new Date("2026-08-31T23:59:00.000Z");
+    const harness = buildApp({ now: () => new Date("2026-09-01T00:00:00.000Z") });
+    await consume(harness.usage, { userId: "auth0|user-a", at: lastMonth, times: 5 });
+
+    const body = (await (await readUsage(harness)).json()) as {
+      managedAi: Record<"daily" | "monthly", { used: number; resetAt: string }>;
+    };
+
+    expect(body.managedAi.daily.used).toBe(0);
+    expect(body.managedAi.monthly.used).toBe(0);
+    // 境界ちょうどの時刻は新しい期間に属する。回復時刻はその次の境界になる。
+    expect(body.managedAi.daily.resetAt).toBe("2026-09-02T00:00:00.000Z");
+    expect(body.managedAi.monthly.resetAt).toBe("2026-10-01T00:00:00.000Z");
+  });
+
+  it("年をまたぐ月末でも回復時刻は翌年の1月1日になる", async () => {
+    const harness = buildApp({ now: () => new Date("2026-12-31T23:30:00.000Z") });
+
+    const body = (await (await readUsage(harness)).json()) as {
+      managedAi: Record<"daily" | "monthly", { resetAt: string }>;
+    };
+
+    expect(body.managedAi.daily.resetAt).toBe("2027-01-01T00:00:00.000Z");
+    expect(body.managedAi.monthly.resetAt).toBe("2027-01-01T00:00:00.000Z");
+  });
+
+  it("他のユーザーの利用量を混ぜない", async () => {
+    const usage = new InMemoryAiUsageRepository();
+    await consume(usage, { userId: "auth0|user-b", at: NOW, times: 7 });
+    const harness = buildApp({ sub: "auth0|user-a", usage, now: () => NOW });
+
+    const body = (await (await readUsage(harness)).json()) as {
+      managedAi: Record<"daily" | "monthly", { used: number }>;
+    };
+
+    expect(body.managedAi.daily.used).toBe(0);
+    expect(body.managedAi.monthly.used).toBe(0);
+  });
+
+  it("トークン数を返さない", async () => {
+    const harness = buildApp({ now: () => NOW });
+    await consume(harness.usage, { userId: "auth0|user-a", at: NOW, times: 1 });
+    await harness.usage.addTokens({
+      userId: "auth0|user-a",
+      monthKey: "2026-09",
+      dayKey: "2026-09-22",
+      tokens: 1_234,
+      updatedAt: NOW.toISOString(),
+    });
+
+    const text = await (await readUsage(harness)).text();
+
+    expect(text).not.toMatch(/token/i);
+    expect(text).not.toContain("1234");
+  });
+
+  it("トークンの安全弁に当たっていれば、月次は使い切った扱いで返す", async () => {
+    const harness = buildApp({ now: () => NOW });
+    await consume(harness.usage, { userId: "auth0|user-a", at: NOW, times: 2 });
+    await harness.usage.addTokens({
+      userId: "auth0|user-a",
+      monthKey: "2026-09",
+      dayKey: "2026-09-22",
+      tokens: AI_USAGE_LIMITS.monthlyTokens,
+      updatedAt: NOW.toISOString(),
+    });
+
+    const response = await readUsage(harness);
+    const text = await response.text();
+    const body = JSON.parse(text) as {
+      managedAi: Record<"daily" | "monthly", { used: number; limit: number }>;
+    };
+
+    // `POST /v1/ai/responses` はこの状態で 429 を返す。画面も残り 0 を示す。
+    expect(body.managedAi.monthly.used).toBe(AI_USAGE_LIMITS.monthlyRequests);
+    expect(body.managedAi.monthly.limit).toBe(AI_USAGE_LIMITS.monthlyRequests);
+    expect(text).not.toMatch(/token/i);
+    expect(text).not.toContain(String(AI_USAGE_LIMITS.monthlyTokens));
+  });
+
+  it("安全弁の手前なら回数をそのまま返す", async () => {
+    const harness = buildApp({ now: () => NOW });
+    await consume(harness.usage, { userId: "auth0|user-a", at: NOW, times: 2 });
+    await harness.usage.addTokens({
+      userId: "auth0|user-a",
+      monthKey: "2026-09",
+      dayKey: "2026-09-22",
+      tokens: AI_USAGE_LIMITS.monthlyTokens - 1,
+      updatedAt: NOW.toISOString(),
+    });
+
+    const body = (await (await readUsage(harness)).json()) as {
+      managedAi: Record<"daily" | "monthly", { used: number }>;
+    };
+
+    expect(body.managedAi.monthly.used).toBe(2);
+  });
+
+  it("Gemini の API キーが無くても読める", async () => {
+    const harness = buildApp({ now: () => NOW });
+
+    const response = await readUsage(harness, {
+      ...ENV,
+      GEMINI_API_KEY: undefined,
+    } as unknown as CloudflareBindings);
+
+    expect(response.status).toBe(200);
+  });
+
+  it("レート制限を超えたら 429 を返す", async () => {
+    const harness = buildApp({ now: () => NOW });
+
+    const response = await readUsage(harness, {
+      ...ENV,
+      PROFILE_RATE_LIMITER: {
+        limit: () => Promise.resolve({ success: false }),
+      },
+    } as unknown as CloudflareBindings);
+
+    expect(response.status).toBe(429);
+  });
+
+  it("認証が無ければ 401 を返す", async () => {
+    const harness = buildApp({ now: () => NOW });
+
+    const response = await harness.app.request("https://api.example.test/v1/ai/usage", {}, ENV);
+
+    expect(response.status).toBe(401);
   });
 });
