@@ -47,7 +47,13 @@ export function applyOverrides(
   return concepts.map((concept) => {
     const derived = { status: concept.status, score: concept.score };
     const override = overrides[concept.conceptId];
-    if (!override) return { ...concept, manual: false, derived };
+    if (!override)
+      return {
+        ...concept,
+        score: clampScoreToStatus(concept.score, concept.status),
+        manual: false,
+        derived,
+      };
     return {
       ...concept,
       status: override.status,

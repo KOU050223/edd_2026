@@ -38,6 +38,13 @@ test("手動で変えた Concept は自動算出の値を併せて保持する",
   expect(overlaid[1]?.derived).toEqual({ status: "unobserved", score: 0 });
 });
 
+test("手動修正の無い未観測も割合を表示しない", () => {
+  const overlaid = applyOverrides(CONCEPTS, {});
+
+  expect(overlaid[1]?.score).toBeNull();
+  expect(overlaid[0]?.score).toBe(0.4);
+});
+
 test("確認済みへ手動で上げたらメーターの割合も確認済みの範囲に入る", () => {
   const overlaid = applyOverrides(CONCEPTS, {
     "go.pointer": { status: "confirmed", updatedAt: "2026-09-21T00:00:00.000Z" },
