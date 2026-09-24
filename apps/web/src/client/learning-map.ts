@@ -107,7 +107,7 @@ export interface MapEdge {
   to: string;
 }
 
-/** 言語ごとの 1 枚の木。 */
+/** プレフィックスごとの 1 枚の木。 */
 export interface MapTree {
   language: string;
   nodes: MapNode[];
@@ -119,7 +119,7 @@ export interface MapTree {
 }
 
 /**
- * Concept 定義を、言語ごとの Skill Tree の配置へ変換する。
+ * Concept 定義を、プレフィックスごとの Skill Tree の配置へ変換する。
  *
  * 列は前提を辿った最長の段数、行は木を深さ優先で辿った葉の順で決める。
  * 複数の前提を持つ Concept は、最も深い前提（同じ深さなら先に書かれた前提）の子として

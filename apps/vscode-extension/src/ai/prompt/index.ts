@@ -14,6 +14,13 @@ function conceptLanguageFor(languageId: string): string {
   return languageId === "typescript" || languageId === "javascript" ? "ts" : languageId;
 }
 
+/**
+ * ファイルの言語に依らず質問されうる領域の Concept プレフィックス。
+ * languageId と一致する Concept に加えて常に一覧へ載せる。
+ * 言語ではない領域を concepts.md へ追加したらここへも登録する（docs/concepts.md）。
+ */
+const CROSS_DOMAIN_PREFIXES: ReadonlySet<string> = new Set(["db", "design", "git", "http"]);
+
 function presetInstruction(request: AIRequest): string[] {
   if (request.diagnostics && request.diagnostics.length > 0) {
     return [
@@ -113,11 +120,14 @@ export function buildPrompt(request: AIRequest): string {
     lines.push("", "--- 関連するエラー ---", ...request.diagnostics);
   }
 
-  const knownConcepts = request.context.languageId
-    ? CONCEPTS.filter(
-        (concept) => concept.language === conceptLanguageFor(request.context.languageId!),
-      )
-    : [];
+  // 言語の Concept は languageId と一致するものだけに絞る。git や db のような
+  // 領域の Concept は languageId に対応付かないため、有無に関わらず常に載せる。
+  const languageId = request.context.languageId;
+  const knownConcepts = CONCEPTS.filter(
+    (concept) =>
+      CROSS_DOMAIN_PREFIXES.has(concept.language) ||
+      (languageId !== undefined && concept.language === conceptLanguageFor(languageId)),
+  );
   if (knownConcepts.length > 0) {
     lines.push(
       "",

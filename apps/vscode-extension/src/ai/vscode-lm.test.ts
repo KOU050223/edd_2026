@@ -116,7 +116,7 @@ test.each(["typescript", "javascript"])(
   },
 );
 
-test("languageIdが無ければConcept一覧を含めない", async () => {
+test("languageIdが無くても、言語に依らない領域のConceptは一覧に含める", async () => {
   const sendRequest = vi.fn().mockResolvedValue(responseOf("説明文"));
   selectChatModels.mockResolvedValueOnce([
     { id: "gpt-4o-mini", family: "gpt-4o-mini", vendor: "copilot", sendRequest },
@@ -135,9 +135,13 @@ test("languageIdが無ければConcept一覧を含めない", async () => {
   const messages = sendRequest.mock.calls[0]?.[0] as { text: string }[];
   const prompt = messages.at(-1)?.text ?? "";
 
-  // 一覧の見出しそのものが無いことを見る。「既知の概念一覧が無いため空配列に」という
-  // フォールバック文言自体に同じ語が含まれるため、見出し（--- 付き）で区別する。
-  expect(prompt).not.toContain("--- 既知の概念一覧");
+  // git や db のような領域の Concept は languageId に対応付かないため、
+  // languageId が無い入力（クリップボード経由など）でも一覧へ載せる。
+  // 言語の Concept は当てはめ先が分からないので載せない。
+  expect(prompt).toContain("--- 既知の概念一覧");
+  expect(prompt).toContain("git.commit");
+  expect(prompt).not.toContain("ts.variable_declaration");
+  expect(prompt).not.toContain("conceptIds は空配列にしてください");
 });
 
 /** family 指定に一致するモデルを1つだけ返す selectChatModels を仕込む。 */

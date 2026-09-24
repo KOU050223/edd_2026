@@ -77,7 +77,7 @@ const occurredAtSchema = v.pipe(
 
 const conceptIdSchema = v.pipe(
   v.string(),
-  v.regex(CONCEPT_ID_PATTERN, "conceptId must match <language>.<concept>"),
+  v.regex(CONCEPT_ID_PATTERN, "conceptId must match <prefix>.<concept>"),
 );
 
 /**
