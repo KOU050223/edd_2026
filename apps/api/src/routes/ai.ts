@@ -124,7 +124,14 @@ export function createAiRoute(resolve: AiDepsResolver) {
           resetAt: nextUtcDay(now).toISOString(),
         },
         monthly: {
-          used: usage.monthlyRequests,
+          // トークンの安全弁に当たっていれば、回数が残っていても `POST` は
+          // 翌月まで拒否する。そのまま回数を返すと「まだ使える」と表示される。
+          // 利用者へは回数を使い切ったのと同じ扱いで見せる。トークン数そのものは
+          // 出さない（docs/architecture.md「利用者への見せ方」）。
+          used:
+            usage.monthlyTokens >= AI_USAGE_LIMITS.monthlyTokens
+              ? Math.max(usage.monthlyRequests, AI_USAGE_LIMITS.monthlyRequests)
+              : usage.monthlyRequests,
           limit: AI_USAGE_LIMITS.monthlyRequests,
           resetAt: nextUtcMonth(now).toISOString(),
         },

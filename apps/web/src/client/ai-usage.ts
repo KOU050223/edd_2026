@@ -42,9 +42,21 @@ function isPeriod(value: unknown): value is AiUsagePeriod {
     isCount(period.limit) &&
     // 上限 0 は割り算が壊れるうえ、契約上ありえない。受け取った時点で弾く。
     period.limit > 0 &&
-    typeof period.resetAt === "string" &&
-    !Number.isNaN(Date.parse(period.resetAt))
+    isUtcTimestamp(period.resetAt)
   );
+}
+
+/**
+ * API が返す形（`toISOString()` の出力）そのものかを確かめる。
+ *
+ * `Date.parse` だけでは足りない。`2026-02-30T00:00:00.000Z` のような存在しない
+ * 日付も繰り上げて受け入れ、3月2日として表示してしまう。往復して同じ文字列に
+ * 戻るものだけを通す。
+ */
+function isUtcTimestamp(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const time = Date.parse(value);
+  return !Number.isNaN(time) && new Date(time).toISOString() === value;
 }
 
 /**

@@ -61,6 +61,36 @@ describe("isAiUsageSummary", () => {
         managedAi: { ...valid.managedAi, daily: { ...valid.managedAi.daily, resetAt: "明日" } },
       },
     ],
+    [
+      "存在しない日付",
+      {
+        ...valid,
+        managedAi: {
+          ...valid.managedAi,
+          monthly: { ...valid.managedAi.monthly, resetAt: "2026-02-30T00:00:00.000Z" },
+        },
+      },
+    ],
+    [
+      "UTC でない回復時刻",
+      {
+        ...valid,
+        managedAi: {
+          ...valid.managedAi,
+          daily: { ...valid.managedAi.daily, resetAt: "2026-09-25T09:00:00+09:00" },
+        },
+      },
+    ],
+    [
+      "日付だけの回復時刻",
+      {
+        ...valid,
+        managedAi: {
+          ...valid.managedAi,
+          daily: { ...valid.managedAi.daily, resetAt: "2026-09-25" },
+        },
+      },
+    ],
   ])("%s なら拒否する", (_, value) => {
     expect(isAiUsageSummary(value)).toBe(false);
   });

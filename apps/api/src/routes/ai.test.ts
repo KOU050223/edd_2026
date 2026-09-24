@@ -799,6 +799,48 @@ describe("GET /v1/ai/usage", () => {
     expect(text).not.toContain("1234");
   });
 
+  it("トークンの安全弁に当たっていれば、月次は使い切った扱いで返す", async () => {
+    const harness = buildApp({ now: () => NOW });
+    await consume(harness.usage, { userId: "auth0|user-a", at: NOW, times: 2 });
+    await harness.usage.addTokens({
+      userId: "auth0|user-a",
+      monthKey: "2026-09",
+      dayKey: "2026-09-22",
+      tokens: AI_USAGE_LIMITS.monthlyTokens,
+      updatedAt: NOW.toISOString(),
+    });
+
+    const response = await readUsage(harness);
+    const text = await response.text();
+    const body = JSON.parse(text) as {
+      managedAi: Record<"daily" | "monthly", { used: number; limit: number }>;
+    };
+
+    // `POST /v1/ai/responses` はこの状態で 429 を返す。画面も残り 0 を示す。
+    expect(body.managedAi.monthly.used).toBe(AI_USAGE_LIMITS.monthlyRequests);
+    expect(body.managedAi.monthly.limit).toBe(AI_USAGE_LIMITS.monthlyRequests);
+    expect(text).not.toMatch(/token/i);
+    expect(text).not.toContain(String(AI_USAGE_LIMITS.monthlyTokens));
+  });
+
+  it("安全弁の手前なら回数をそのまま返す", async () => {
+    const harness = buildApp({ now: () => NOW });
+    await consume(harness.usage, { userId: "auth0|user-a", at: NOW, times: 2 });
+    await harness.usage.addTokens({
+      userId: "auth0|user-a",
+      monthKey: "2026-09",
+      dayKey: "2026-09-22",
+      tokens: AI_USAGE_LIMITS.monthlyTokens - 1,
+      updatedAt: NOW.toISOString(),
+    });
+
+    const body = (await (await readUsage(harness)).json()) as {
+      managedAi: Record<"daily" | "monthly", { used: number }>;
+    };
+
+    expect(body.managedAi.monthly.used).toBe(2);
+  });
+
   it("Gemini の API キーが無くても読める", async () => {
     const harness = buildApp({ now: () => NOW });
 
