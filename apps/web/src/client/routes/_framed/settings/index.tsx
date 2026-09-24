@@ -6,7 +6,7 @@ import {
   createSubmitGuard,
   putJson,
   requestJson,
-} from "../../api.js";
+} from "../../../api.js";
 import {
   DISPLAY_NAME_MAX_LENGTH,
   ACTIVITY_PERIOD_DAYS,
@@ -15,14 +15,14 @@ import {
   toSettingsInput,
   type SettingsDraft,
   type UserSettings,
-} from "../../../shared/settings.js";
-import { toErrorText } from "../../errors.js";
-import { takeLoginRetry } from "../../session.js";
+} from "../../../../shared/settings.js";
+import { toErrorText } from "../../../errors.js";
+import { takeLoginRetry } from "../../../session.js";
 
 const SETTINGS_PATH = "/api/v1/user-settings";
 
 /**
- * ユーザー設定の編集画面。
+ * ユーザー設定の編集画面（設定の「一般」）。
  *
  * **実装済みの設定だけを並べる。** 未実装の機能の欄を先に作らない（Issue #123）。
  * 空の欄は利用者から見れば壊れているのと区別がつかず、保存しても何も起きないことが
@@ -97,8 +97,8 @@ function Settings() {
     setJustSaved(false);
   };
   return (
-    <section className="settings">
-      <h1>{draft.displayName ? `${draft.displayName}さんの設定` : "設定"}</h1>
+    <section>
+      <h2>一般</h2>
       <form
         onSubmit={(event) => {
           event.preventDefault();
@@ -166,7 +166,7 @@ function Settings() {
   );
 }
 
-export const Route = createFileRoute("/_framed/settings")({
+export const Route = createFileRoute("/_framed/settings/")({
   loader: () => requestJson<UserSettings>(SETTINGS_PATH, fetch, takeLoginRetry()),
   component: Settings,
 });

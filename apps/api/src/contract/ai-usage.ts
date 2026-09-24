@@ -144,3 +144,31 @@ export function nextUtcDay(now: Date): Date {
 export function nextUtcMonth(now: Date): Date {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1, 0, 0, 0, 0));
 }
+
+/**
+ * 利用者が契約しているプラン。**当面 Free のみ**（docs/architecture.md
+ * 「決定: 当面 Free のみ。Pro は作らない」）。Pro を作るときにここへ足す。
+ */
+export type Plan = "free";
+
+/** 1つの期間（日次 / 月次）の利用量。回数で示す。 */
+export interface AiUsagePeriod {
+  used: number;
+  limit: number;
+  /** この期間の回数が 0 に戻る時刻（ISO 8601, UTC）。 */
+  resetAt: string;
+}
+
+/**
+ * `GET /v1/ai/usage` の本文。Web の「使用状況」「プラン」画面が読む。
+ *
+ * **トークン数を含めない。** `monthlyTokens` は利用者へ見せない安全弁であり、
+ * 残量は回数で示す（docs/architecture.md「利用者への見せ方」）。
+ */
+export interface AiUsageSummary {
+  plan: Plan;
+  managedAi: {
+    daily: AiUsagePeriod;
+    monthly: AiUsagePeriod;
+  };
+}
