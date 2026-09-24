@@ -1,7 +1,7 @@
 import { createFileRoute, Link, Outlet } from "@tanstack/react-router";
 
 /**
- * 設定の共通枠。「一般 / 使用状況 / プラン」を切り替える（Issue #165）。
+ * 設定の共通枠。「一般 / 使用状況 / プラン / データ」を切り替える（Issue #165）。
  *
  * 切り替えはリンクで書く。どの画面を開いているかが URL に載るので、
  * 再読み込みや共有で開いていた画面が変わらない。
@@ -24,6 +24,9 @@ function SettingsLayout() {
         </Link>
         <Link to="/settings/billing" activeProps={{ className: "selected" }}>
           プラン
+        </Link>
+        <Link to="/settings/data" activeProps={{ className: "selected" }}>
+          データ
         </Link>
       </nav>
       <Outlet />
