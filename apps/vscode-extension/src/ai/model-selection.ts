@@ -153,6 +153,10 @@ export function buildNoModelGuidance(vscodeVersion: string): string {
           `   Copilot の契約なしで BYOK を使うには VS Code ${BYOK_WITHOUT_COPILOT_SINCE.major}.${BYOK_WITHOUT_COPILOT_SINCE.minor} 以降へ更新してください。`,
         ]
       : []),
+    "3. **この拡張に自分の API キーを登録する（拡張の BYOK 経路）。**",
+    "   コマンド「Gakushu Sochi: BYOK の API キーを設定する」でキーを保存し、",
+    '   設定 gakushuSochi.ai.provider を "byok" にしてください。',
+    "   この経路は VS Code のバージョンや GitHub サインインに依らず使えます。",
     "",
     "登録し直したあとは、もう一度質問してください。",
   ].join("\n");

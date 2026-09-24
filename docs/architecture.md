@@ -819,10 +819,22 @@ AI が文脈を読み落とした状態になり、原因が分からない
 
 Copilot を最優先にするのは、運営が AI 利用料を負担しない構成の要だから。
 3 があることで、**Copilot 未契約でも BYOK が登録されていれば拡張が使える。**
-新たな Provider 実装は足していない。BYOK 経路を拡張自身が持つかどうかは #55 の判断に残る。
 
-1 件も無いときは `model-unavailable` を返し、`detail` に Copilot へのサインインと
-BYOK 登録の手順を載せる。失敗は失敗のまま返しつつ、利用者を行き止まりに置かない。
+### 拡張自身が持つ BYOK 経路（AI/04 #55）
+
+上の既定 provider とは別に、拡張が `vscode.lm` を通さず AI 提供元を直接呼ぶ
+`BYOKProvider` を `apps/vscode-extension/src/ai/byok.ts` に持つ。
+対象は Anthropic Messages API と OpenAI Chat Completions API（互換エンドポイントを含む）。
+
+利用者は `gakushuSochi.ai.provider` で `vscode-lm` / `byok` を切り替える。
+API キーは `Gakushu Sochi: BYOK の API キーを設定する` コマンドから SecretStorage へ
+保存し、設定ファイルにも運営側サーバーにも載せない。送信先を左右する設定
+（`ai.provider`、`byok.vendor`、`byok.model`、`byok.baseUrl`）はすべて
+`scope: "machine"` で、ワークスペースからは上書きできない（RULE-006）。
+
+`vscode.lm` 経路で 1 件もモデルが無いときは `model-unavailable` を返し、`detail` に
+Copilot へのサインインと BYOK 登録の手順を載せる。失敗は失敗のまま返しつつ、
+利用者を行き止まりに置かない。
 選択方針の実装は `apps/vscode-extension/src/ai/model-selection.ts`。
 
 ## 関連文書
