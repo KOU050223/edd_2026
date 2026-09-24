@@ -1,7 +1,9 @@
 import { expect, test } from "vitest";
 import {
+  DiagnosticSeverityValue,
   diagnosticCodeOfKey,
   errorKeyOf,
+  isErrorLikeSeverity,
   normalizeDiagnosticMessage,
   rangesOverlap,
 } from "./diagnostics";
@@ -22,6 +24,14 @@ test("選択範囲と実際に重なるDiagnosticsだけを採用する", () => 
   expect(rangesOverlap(selection, range(10, 4, 10, 7))).toBe(true);
   expect(rangesOverlap(selection, range(10, 8, 10, 12))).toBe(false);
   expect(rangesOverlap(selection, range(9, 0, 11, 0))).toBe(true);
+});
+
+test("ErrorとWarningだけをエラーとしてAIへ渡す", () => {
+  expect(isErrorLikeSeverity(DiagnosticSeverityValue.Error)).toBe(true);
+  expect(isErrorLikeSeverity(DiagnosticSeverityValue.Warning)).toBe(true);
+  // 未使用変数などの Hint で Error Explain に切り替えない（#161）。
+  expect(isErrorLikeSeverity(DiagnosticSeverityValue.Information)).toBe(false);
+  expect(isErrorLikeSeverity(DiagnosticSeverityValue.Hint)).toBe(false);
 });
 
 test("長さ0のDiagnosticは、その位置が選択範囲の内側にあれば採用する", () => {

@@ -11,7 +11,12 @@ import { readClipboard, readTerminalSelection } from "./context/clipboard";
 import { openGakushuSochiKeybindings } from "./keybindings/open";
 import { ensureConsent, hasConsent, revokeConsent, reviewConsent } from "./consent/consent";
 import { collectFromEditor, collectFromText } from "./context/collector";
-import { diagnosticCodeOfKey, errorKeyOf, rangesOverlap } from "./context/diagnostics";
+import {
+  diagnosticCodeOfKey,
+  errorKeyOf,
+  isErrorLikeSeverity,
+  rangesOverlap,
+} from "./context/diagnostics";
 import {
   getOrCreateClientId,
   loadExplainedErrors,
@@ -73,7 +78,9 @@ function nowIso(): string {
 }
 
 /**
- * 選択した範囲に重なる Diagnostics を取り出す。
+ * 選択した範囲に重なる Error / Warning の Diagnostics を取り出す。
+ *
+ * Hint と Information は渡さない。渡すと回答が Error Explain に切り替わる（#161）。
  *
  * `messages` は回答用に AI へ渡す短い文字列、`errorKeys` は再発判定用の識別キー
  * （診断/02 #76）。
@@ -86,7 +93,10 @@ function diagnosticsForSelection(
     .getDiagnostics()
     .filter(([uri]) => uri.toString() === documentUri.toString())
     .flatMap(([, diagnostics]) =>
-      diagnostics.filter((diagnostic) => rangesOverlap(diagnostic.range, selection)),
+      diagnostics.filter(
+        (diagnostic) =>
+          isErrorLikeSeverity(diagnostic.severity) && rangesOverlap(diagnostic.range, selection),
+      ),
     );
   return {
     messages: overlapping.map((diagnostic) => diagnostic.message),
