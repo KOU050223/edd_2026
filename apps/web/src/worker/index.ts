@@ -381,9 +381,11 @@ export function createWebApp(
 
     // #174: 書き込み系の要求は、同意の記録があるときだけ上流へ中継する。
     // 版が古い・壊れた記録は同意なしとして扱う（readConsent の仕様）。
-    // GET/HEAD の閲覧は利用者の本文を送らないので対象外。ログインや
+    // GET/HEAD の閲覧と DELETE は利用者の本文を送らないので対象外。
+    // 特に削除は「同意を取り消したあとにも使える別操作」なので、同意で
+    // 止めると取り消した人が自分のデータを消せなくなる。ログインや
     // `/consent` 自体など同意の前に必要な経路を止めないためでもある。
-    if (c.req.method !== "GET" && c.req.method !== "HEAD") {
+    if (c.req.method !== "GET" && c.req.method !== "HEAD" && c.req.method !== "DELETE") {
       const consent = await readConsent(c.env.SESSIONS, session.sub);
       if (!consent) {
         return c.json({ error: "consent_required" }, 403, { "cache-control": "no-store" });

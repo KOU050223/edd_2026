@@ -587,6 +587,22 @@ footer {
 .plan-card.upcoming {
   background: #f1f5f9;
 }
+/* 削除は取り消せないので、実行ボタンだけを警告色にする。 */
+.settings .actions button.danger {
+  background: #b91c1c;
+}
+/* 削除の確認はカードの中で一段目立たせる。取り消せない操作の前に
+   立ち止まる場所なので、通常の入力欄より強い枠を引く。 */
+.confirm-delete {
+  margin-top: 12px;
+  padding: 12px 16px;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  background: #fef2f2;
+}
+.confirm-delete p {
+  margin: 0 0 10px;
+}
 
 @media (max-width: 600px) {
   .map-layout {

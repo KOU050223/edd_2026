@@ -900,6 +900,30 @@ test("版が古い・壊れた同意の記録では書き込みを中継しな�
   expect(apiCalls).toBe(0);
 });
 
+test("削除は同意が無くても中継される（取り消し後でも消せる）", async () => {
+  const sessions = new MemoryKv();
+  const token = await createSession(kvOf(sessions), { refreshToken: "rt-1", sub: "auth0|a" });
+  const received: string[] = [];
+  const app = createWebApp({
+    fetch: async (input) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url.startsWith("https://idp.example.test"))
+        return Response.json({ access_token: "at-1", expires_in: 900 });
+      received.push(url);
+      return Response.json({ deletedCount: 3, resetAtMs: 0 });
+    },
+  });
+
+  const response = await app.request(
+    "https://web.example.test/api/v1/learning-events",
+    { method: "DELETE", headers: { cookie: `session=${token}` } },
+    envWith(sessions),
+  );
+
+  expect(response.status).toBe(200);
+  expect(received[0]).toBe("https://api.example.test/v1/learning-events");
+});
+
 test("読み取りは同意が無くても中継される", async () => {
   const sessions = new MemoryKv();
   const token = await createSession(kvOf(sessions), { refreshToken: "rt-1", sub: "auth0|a" });

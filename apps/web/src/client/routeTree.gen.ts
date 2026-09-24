@@ -16,6 +16,7 @@ import { Route as FramedActivityRouteImport } from './routes/_framed/activity'
 import { Route as FramedSettingsRouteRouteImport } from './routes/_framed/settings/route'
 import { Route as FramedSettingsIndexRouteImport } from './routes/_framed/settings/index'
 import { Route as FramedSettingsBillingRouteImport } from './routes/_framed/settings/billing'
+import { Route as FramedSettingsDataRouteImport } from './routes/_framed/settings/data'
 import { Route as FramedSettingsUsageRouteImport } from './routes/_framed/settings/usage'
 
 const FramedRouteRoute = FramedRouteRouteImport.update({
@@ -52,6 +53,11 @@ const FramedSettingsBillingRoute = FramedSettingsBillingRouteImport.update({
   path: '/billing',
   getParentRoute: () => FramedSettingsRouteRoute,
 } as any)
+const FramedSettingsDataRoute = FramedSettingsDataRouteImport.update({
+  id: '/data',
+  path: '/data',
+  getParentRoute: () => FramedSettingsRouteRoute,
+} as any)
 const FramedSettingsUsageRoute = FramedSettingsUsageRouteImport.update({
   id: '/usage',
   path: '/usage',
@@ -64,6 +70,7 @@ export interface FileRoutesByFullPath {
   '/settings': typeof FramedSettingsRouteRouteWithChildren
   '/activity': typeof FramedActivityRoute
   '/settings/billing': typeof FramedSettingsBillingRoute
+  '/settings/data': typeof FramedSettingsDataRoute
   '/settings/usage': typeof FramedSettingsUsageRoute
   '/settings/': typeof FramedSettingsIndexRoute
 }
@@ -72,6 +79,7 @@ export interface FileRoutesByTo {
   '/activity': typeof FramedActivityRoute
   '/': typeof FramedIndexRoute
   '/settings/billing': typeof FramedSettingsBillingRoute
+  '/settings/data': typeof FramedSettingsDataRoute
   '/settings/usage': typeof FramedSettingsUsageRoute
   '/settings': typeof FramedSettingsIndexRoute
 }
@@ -83,6 +91,7 @@ export interface FileRoutesById {
   '/_framed/activity': typeof FramedActivityRoute
   '/_framed/': typeof FramedIndexRoute
   '/_framed/settings/billing': typeof FramedSettingsBillingRoute
+  '/_framed/settings/data': typeof FramedSettingsDataRoute
   '/_framed/settings/usage': typeof FramedSettingsUsageRoute
   '/_framed/settings/': typeof FramedSettingsIndexRoute
 }
@@ -94,6 +103,7 @@ export interface FileRouteTypes {
     | '/settings'
     | '/activity'
     | '/settings/billing'
+    | '/settings/data'
     | '/settings/usage'
     | '/settings/'
   fileRoutesByTo: FileRoutesByTo
@@ -102,6 +112,7 @@ export interface FileRouteTypes {
     | '/activity'
     | '/'
     | '/settings/billing'
+    | '/settings/data'
     | '/settings/usage'
     | '/settings'
   id:
@@ -112,6 +123,7 @@ export interface FileRouteTypes {
     | '/_framed/activity'
     | '/_framed/'
     | '/_framed/settings/billing'
+    | '/_framed/settings/data'
     | '/_framed/settings/usage'
     | '/_framed/settings/'
   fileRoutesById: FileRoutesById
@@ -172,6 +184,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof FramedSettingsBillingRouteImport
       parentRoute: typeof FramedSettingsRouteRoute
     }
+    '/_framed/settings/data': {
+      id: '/_framed/settings/data'
+      path: '/data'
+      fullPath: '/settings/data'
+      preLoaderRoute: typeof FramedSettingsDataRouteImport
+      parentRoute: typeof FramedSettingsRouteRoute
+    }
     '/_framed/settings/usage': {
       id: '/_framed/settings/usage'
       path: '/usage'
@@ -184,12 +203,14 @@ declare module '@tanstack/react-router' {
 
 interface FramedSettingsRouteRouteChildren {
   FramedSettingsBillingRoute: typeof FramedSettingsBillingRoute
+  FramedSettingsDataRoute: typeof FramedSettingsDataRoute
   FramedSettingsUsageRoute: typeof FramedSettingsUsageRoute
   FramedSettingsIndexRoute: typeof FramedSettingsIndexRoute
 }
 
 const FramedSettingsRouteRouteChildren: FramedSettingsRouteRouteChildren = {
   FramedSettingsBillingRoute: FramedSettingsBillingRoute,
+  FramedSettingsDataRoute: FramedSettingsDataRoute,
   FramedSettingsUsageRoute: FramedSettingsUsageRoute,
   FramedSettingsIndexRoute: FramedSettingsIndexRoute,
 }

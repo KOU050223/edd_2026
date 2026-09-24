@@ -130,6 +130,10 @@ test("案内は Copilot と BYOK の両方の経路を示す", () => {
   expect(guidance).toContain("BYOK");
   expect(guidance).toContain("Manage Models");
   expect(guidance).toContain("Copilot の契約は要りません");
+  // vscode.lm にモデルが無い利用者には、拡張の BYOK 経路（#55）が行き止まりを
+  // 解く道なので、設定方法まで案内に含める。
+  expect(guidance).toContain("gakushuSochi.ai.provider");
+  expect(guidance).toContain("BYOK の API キーを設定する");
 });
 
 test("古い VS Code では、BYOK にサインインが要ることまで案内する", () => {
@@ -140,6 +144,8 @@ test("古い VS Code では、BYOK にサインインが要ることまで案内
   expect(guidance).not.toContain("Copilot の契約は要りません");
   expect(guidance).toContain("サインインが要ります");
   expect(guidance).toContain("1.122");
+  // 古い版でこそ拡張の BYOK 経路が唯一の Copilot 不要な道なので、必ず案内する。
+  expect(guidance).toContain("gakushuSochi.ai.provider");
   // どの版で判断したのかを利用者が確かめられること。
   expect(guidance).toContain("1.100.0");
 });

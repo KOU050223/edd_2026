@@ -12,25 +12,15 @@
 
 import * as vscode from "vscode";
 import type { AIProvider } from "./provider";
-import { buildPrompt, knownConceptsFor, META_MARKER } from "./prompt";
+import { buildPrompt, knownConceptsFor } from "./prompt";
+import { MAX_HISTORY_TURNS, parseAnswer } from "./answer";
 import { buildNoModelGuidance, selectModel } from "./model-selection";
 import {
   type AIError,
   type AIErrorReason,
   type AIRequest,
   type AIResponse,
-  type ConceptId,
 } from "@gakushu-sochi/domain";
-
-/**
- * プロンプトに含める過去の会話ターン数の上限。
- *
- * `AIRequest.history` は会話が続く限り増え続けるため、上限を設けないと
- * 毎回のリクエストが際限なく重くなり、いずれモデルのコンテキスト長を
- * 超えてしまう。理解が解消されたかの判断には直近のやり取りで十分なため、
- * 直近 {@link MAX_HISTORY_TURNS} 件だけを残す（古いものは切り捨てる）。
- */
-const MAX_HISTORY_TURNS = 10;
 
 /** AIRequest を LanguageModelChatMessage の配列へ変換する。 */
 function toMessages(request: AIRequest): vscode.LanguageModelChatMessage[] {
@@ -45,59 +35,6 @@ function toMessages(request: AIRequest): vscode.LanguageModelChatMessage[] {
   );
 
   return [...historyMessages, vscode.LanguageModelChatMessage.User(buildPrompt(request))];
-}
-
-/** parseAnswer() の戻り値。 */
-interface ParsedAnswer {
-  /** ユーザーへ表示する本文。メタ情報は含まない。 */
-  text: string;
-  conceptIds: ConceptId[];
-  resolution?: "resolved" | "unclear";
-}
-
-/**
- * モデルの応答から、表示用の本文と末尾のメタ情報(JSON)を分離する。
- *
- * モデルが指示に従わない・JSONが壊れている場合は、本文だけをそのまま使い
- * conceptIds は空配列、resolution は省略にする。出力形式は保証されないため、
- * ここでの失敗が質問フロー自体を止めてはならない。
- */
-function parseAnswer(raw: string, allowedConceptIds: ReadonlySet<ConceptId>): ParsedAnswer {
-  const markerIndex = raw.indexOf(META_MARKER);
-
-  if (markerIndex === -1) {
-    return { text: raw.trim(), conceptIds: [] };
-  }
-
-  const text = raw.slice(0, markerIndex).trim();
-  const jsonMatch = raw.slice(markerIndex + META_MARKER.length).match(/\{[\s\S]*\}/);
-
-  if (!jsonMatch) {
-    return { text, conceptIds: [] };
-  }
-
-  try {
-    const parsed: unknown = JSON.parse(jsonMatch[0]);
-
-    if (typeof parsed !== "object" || parsed === null) {
-      return { text, conceptIds: [] };
-    }
-
-    const rawConceptIds = (parsed as { conceptIds?: unknown }).conceptIds;
-    const conceptIds = Array.isArray(rawConceptIds)
-      ? rawConceptIds.filter(
-          (id): id is ConceptId => typeof id === "string" && allowedConceptIds.has(id),
-        )
-      : [];
-
-    const rawResolution = (parsed as { resolution?: unknown }).resolution;
-    const resolution =
-      rawResolution === "resolved" || rawResolution === "unclear" ? rawResolution : undefined;
-
-    return { text, conceptIds, resolution };
-  } catch {
-    return { text, conceptIds: [] };
-  }
 }
 
 /**
@@ -153,8 +90,10 @@ export class VSCodeLMProvider implements AIProvider {
   private debug(message: string): void {
     try {
       this.onDebug?.(message);
-    } catch {
-      // 出力先が壊れている場合に報告する手段が無いため、ここは握って続行する。
+    } catch (error) {
+      // 出力先が壊れていても回答自体は続ける。別系統の出力先である
+      // 拡張ホストのコンソールへ理由を残し、失敗を握りつぶさない（RULE-004）。
+      console.error("デバッグ出力に失敗しました", error);
     }
   }
 

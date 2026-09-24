@@ -113,23 +113,24 @@ export function createSubmitGuard() {
 }
 
 /**
- * 理解度の手動上書きを保存する。単発リクエストなので締め切りを設ける
- * （.agents/rules/rules.md RULE-001）。
+ * 単発の書き込みリクエスト。締め切りを設ける（.agents/rules/rules.md RULE-001）。
  *
  * 2xx でも本文の解析に失敗したら失敗として扱う（RULE-004）。
  */
-export async function putJson<T>(
+async function sendJson<T>(
+  method: "PUT" | "DELETE",
   path: string,
   payload: unknown,
-  fetcher: typeof fetch = fetch,
-  timeoutMs = 10_000,
+  fetcher: typeof fetch,
+  timeoutMs: number,
 ): Promise<T> {
   let response: Response;
   try {
     response = await fetcher(path, {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(payload),
+      method,
+      ...(payload !== undefined
+        ? { headers: { "content-type": "application/json" }, body: JSON.stringify(payload) }
+        : {}),
       cache: "no-store",
       signal: AbortSignal.timeout(timeoutMs),
     });
@@ -149,4 +150,23 @@ export async function putJson<T>(
   } catch {
     throw new ApiError("unavailable");
   }
+}
+
+/** 理解度の手動上書きを保存する。 */
+export function putJson<T>(
+  path: string,
+  payload: unknown,
+  fetcher: typeof fetch = fetch,
+  timeoutMs = 10_000,
+): Promise<T> {
+  return sendJson("PUT", path, payload, fetcher, timeoutMs);
+}
+
+/** 学習データの削除など、本文を持たない DELETE を送る。 */
+export function deleteJson<T>(
+  path: string,
+  fetcher: typeof fetch = fetch,
+  timeoutMs = 10_000,
+): Promise<T> {
+  return sendJson("DELETE", path, undefined, fetcher, timeoutMs);
 }

@@ -367,9 +367,11 @@ VS Code・Desktop・Web のどのクライアントも、上記の送信は**同
 - **Web**: Web Worker が Workers KV の `consent:{sub}` にユーザー単位で記録する。
   ブラウザ側（Cookie・localStorage）には置かない。`GET / PUT / DELETE /consent` が
   管理経路で、`PUT` は画面が提示した文面の版を送らせ、ずれていれば
-  `409 consent_notice_outdated` で弾く。`/api/*` への書き込み（GET/HEAD 以外）は
+  `409 consent_notice_outdated` で弾く。`/api/*` への書き込み（GET/HEAD/DELETE 以外）は
   Worker が同意を確認してからだけ API Server へ中継し、無ければ
-  `403 consent_required` を返す。閲覧（GET/HEAD）は同意が無くても使える。
+  `403 consent_required` を返す。閲覧（GET/HEAD）と削除（DELETE）は同意が無くても使える。
+  削除は「同意を取り消したあとにも使える別操作」なので、同意で止めると
+  取り消した人が自分のデータを消せなくなる。
   確認・同意・取り消しは設定画面の「送信の同意」から。
 
 送信の直前に出す `confirmSend`（ターミナル／クリップボード経由の本文プレビュー）は
@@ -811,7 +813,7 @@ AI が文脈を読み落とした状態になり、原因が分からない
 - 認証方式と、VS Code の端末ログインフロー
 - ~~Free / Pro の機能境界と、Managed AI の利用上限~~ → 「Free / Pro の境界と Managed AI の利用上限」で決定済み（上限の実装も #89 で完了）
 - ~~保存期間、データ削除、エクスポート、退会後の扱い~~ → 「保存期間と削除」で決定済み
-  （API は #79 で実装。クライアント側のコピーの削除は #124、Web の操作画面は未了）
+  （API は #79、クライアント側のコピーの削除は #124、Web の操作画面は #173 で実装）
 - ~~コード・質問本文を送信／保存する際の同意UI~~ → 「同意を取るまで送らない」で決定済み。
   VS Code は #119、Desktop / Web は #174 で実装
 - ~~APIの監視、監査ログ、レート制限、障害時の再送方針~~ → 「監視・監査ログ・障害時の再送」で決定済み
@@ -843,10 +845,22 @@ AI が文脈を読み落とした状態になり、原因が分からない
 
 Copilot を最優先にするのは、運営が AI 利用料を負担しない構成の要だから。
 3 があることで、**Copilot 未契約でも BYOK が登録されていれば拡張が使える。**
-新たな Provider 実装は足していない。BYOK 経路を拡張自身が持つかどうかは #55 の判断に残る。
 
-1 件も無いときは `model-unavailable` を返し、`detail` に Copilot へのサインインと
-BYOK 登録の手順を載せる。失敗は失敗のまま返しつつ、利用者を行き止まりに置かない。
+### 拡張自身が持つ BYOK 経路（AI/04 #55）
+
+上の既定 provider とは別に、拡張が `vscode.lm` を通さず AI 提供元を直接呼ぶ
+`BYOKProvider` を `apps/vscode-extension/src/ai/byok.ts` に持つ。
+対象は Anthropic Messages API と OpenAI Chat Completions API（互換エンドポイントを含む）。
+
+利用者は `gakushuSochi.ai.provider` で `vscode-lm` / `byok` を切り替える。
+API キーは `Gakushu Sochi: BYOK の API キーを設定する` コマンドから SecretStorage へ
+保存し、設定ファイルにも運営側サーバーにも載せない。送信先を左右する設定
+（`ai.provider`、`byok.vendor`、`byok.model`、`byok.baseUrl`）はすべて
+`scope: "machine"` で、ワークスペースからは上書きできない（RULE-006）。
+
+`vscode.lm` 経路で 1 件もモデルが無いときは `model-unavailable` を返し、`detail` に
+Copilot へのサインインと BYOK 登録の手順を載せる。失敗は失敗のまま返しつつ、
+利用者を行き止まりに置かない。
 選択方針の実装は `apps/vscode-extension/src/ai/model-selection.ts`。
 
 ## 関連文書

@@ -45,6 +45,7 @@ export interface AIRequest {
 export type AIErrorReason =
   | "model-unavailable"
   | "consent-denied"
+  | "auth-failed"
   | "rate-limited"
   | "context-too-long"
   | "cancelled"
