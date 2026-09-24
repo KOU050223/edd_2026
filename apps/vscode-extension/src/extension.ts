@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import * as vscode from "vscode";
 import type { CodeContext, ConversationTurn, LearningEvent } from "@gakushu-sochi/domain";
+import type { AIError } from "./ai/types";
 import type { AIProvider } from "./ai/provider";
 import { VSCodeLMProvider } from "./ai/vscodeLm";
 import { BYOKProvider, byokSecretKey, isByokVendor, type ByokVendor } from "./ai/byok";
@@ -143,6 +144,17 @@ export function activate(context: vscode.ExtensionContext): void {
    * 設定は質問のたびに読み直す。起動時に読んで持ち回ると、
    * 経路の切り替えや API キーの設定し直しが次回起動まで効かない。
    */
+  /**
+   * provider 選択段階で起きた失敗を、ask が失敗を値で返す provider に変換する。
+   * ここで例外を投げると AIResponse の失敗描画を通らず、利用者に理由が届かない。
+   */
+  function unavailableProvider(reason: AIError["reason"], detail: string): AIProvider {
+    return {
+      id: "unavailable",
+      ask: async () => ({ ok: false as const, error: { reason, detail } }),
+    };
+  }
+
   async function currentProvider(): Promise<AIProvider> {
     const config = vscode.workspace.getConfiguration("gakushuSochi");
     const selected = config.get<string>("ai.provider", "vscode-lm");
@@ -154,25 +166,29 @@ export function activate(context: vscode.ExtensionContext): void {
     if (selected !== "byok") {
       // 認識できない経路を黙って Copilot へ落とさない。利用者は別の送信先を
       // 指定したつもりでいるため、送らずに失敗として見せる（RULE-004）。
-      return {
-        id: "unavailable",
-        ask: async () => ({
-          ok: false as const,
-          error: {
-            reason: "model-unavailable" as const,
-            detail:
-              `gakushuSochi.ai.provider の値 "${selected}" は未対応です。` +
-              "vscode-lm / byok のいずれかを設定してください。",
-          },
-        }),
-      };
+      return unavailableProvider(
+        "model-unavailable",
+        `gakushuSochi.ai.provider の値 "${selected}" は未対応です。` +
+          "vscode-lm / byok のいずれかを設定してください。",
+      );
     }
 
     const vendor = config.get<string>("byok.vendor", "anthropic");
-    // API キーは SecretStorage から読む。設定ファイルへは置かない（RULE-006）。
-    const apiKey = isByokVendor(vendor)
-      ? await context.secrets.get(byokSecretKey(vendor))
-      : undefined;
+    let apiKey: string | undefined;
+    if (isByokVendor(vendor)) {
+      try {
+        // API キーは SecretStorage から読む。設定ファイルへは置かない（RULE-006）。
+        apiKey = await context.secrets.get(byokSecretKey(vendor));
+      } catch (error) {
+        // OS の資格情報ストアがロック中など。ここで投げると provider.ask の
+        // 失敗描画を通らないため、失敗を値で返す provider に変換する。
+        channel.appendLine(`API キーの読み取りに失敗しました: ${String(error)}`);
+        return unavailableProvider(
+          "unknown",
+          `OS の資格情報ストアから API キーを読み取れませんでした: ${String(error)}`,
+        );
+      }
+    }
     return new BYOKProvider(
       {
         vendor,
@@ -524,14 +540,14 @@ export function activate(context: vscode.ExtensionContext): void {
     },
   );
 
-  /** BYOK の API キーを設定する提供元を選ばせる。 */
-  async function pickByokVendor(): Promise<ByokVendor | undefined> {
+  /** BYOK の API キーを操作する提供元を選ばせる。 */
+  async function pickByokVendor(title: string): Promise<ByokVendor | undefined> {
     const picked = await vscode.window.showQuickPick(
       [
         { label: "anthropic", description: "Claude（api.anthropic.com）" },
         { label: "openai", description: "OpenAI および OpenAI 互換エンドポイント" },
       ],
-      { title: "API キーを設定する提供元を選んでください", ignoreFocusOut: true },
+      { title, ignoreFocusOut: true },
     );
     return picked && isByokVendor(picked.label) ? picked.label : undefined;
   }
@@ -541,7 +557,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const setByokApiKeyCommand = vscode.commands.registerCommand(
     "gakushuSochi.setByokApiKey",
     async () => {
-      const vendor = await pickByokVendor();
+      const vendor = await pickByokVendor("API キーを設定する提供元を選んでください");
       if (!vendor) {
         return;
       }
@@ -562,9 +578,21 @@ export function activate(context: vscode.ExtensionContext): void {
         vscode.window.showErrorMessage(`API キーを保存できませんでした: ${String(error)}`);
         return;
       }
+      // 保存した提供元を使う意図に合わせて byok.vendor も揃える。揃えないと
+      // ai.provider=byok にした直後に別の提供元のキー未設定エラーが出る。
+      // machine スコープの設定なのでユーザー設定（Global）へ書く。
+      let vendorNote = `gakushuSochi.byok.vendor を "${vendor}" に設定しました。`;
+      try {
+        await vscode.workspace
+          .getConfiguration("gakushuSochi")
+          .update("byok.vendor", vendor, vscode.ConfigurationTarget.Global);
+      } catch (error) {
+        channel.appendLine(`byok.vendor の更新に失敗しました: ${String(error)}`);
+        vendorNote = `gakushuSochi.byok.vendor を "${vendor}" に設定してください。`;
+      }
       vscode.window.showInformationMessage(
         `${vendor} の API キーを保存しました。` +
-          `設定 gakushuSochi.ai.provider を "byok" にするとこの経路が使われます。`,
+          `設定 gakushuSochi.ai.provider を "byok" にするとこの経路が使われます。${vendorNote}`,
       );
     },
   );
@@ -572,7 +600,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const clearByokApiKeyCommand = vscode.commands.registerCommand(
     "gakushuSochi.clearByokApiKey",
     async () => {
-      const vendor = await pickByokVendor();
+      const vendor = await pickByokVendor("API キーを削除する提供元を選んでください");
       if (!vendor) {
         return;
       }

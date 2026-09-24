@@ -66,10 +66,37 @@ export function isSafeByokBaseUrl(value: string): boolean {
     const url = new URL(value);
     if (url.protocol === "https:") return true;
     if (url.protocol !== "http:") return false;
-    return ["localhost", "127.0.0.1", "::1", "[::1]"].includes(url.hostname.toLowerCase());
+    return isLoopbackUrl(value);
   } catch {
     return false;
   }
+}
+
+/**
+ * URL のホストがループバックか。
+ *
+ * Ollama などのローカルモデルは API キーなしで動くため、キー必須かの判定に使う。
+ */
+function isLoopbackUrl(value: string): boolean {
+  try {
+    return ["localhost", "127.0.0.1", "::1", "[::1]"].includes(
+      new URL(value).hostname.toLowerCase(),
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * `gakushuSochi.byok.baseUrl` を送信先のルートに正規化する。
+ *
+ * OpenAI 互換エンドポイントは `http://localhost:11434/v1` のように `/v1` まで
+ * 含めて案内されることが多い（Ollama、OpenRouter、Groq 等）。そのまま
+ * `/v1/chat/completions` を継ぐと `/v1/v1/...` になって 404 になるため、
+ * 末尾の `/v1` は取り除いてから各エンドポイントのパスを継ぐ。
+ */
+function normalizeBaseUrl(value: string): string {
+  return value.trim().replace(/\/+$/, "").replace(/\/v1$/i, "");
 }
 
 /** BYOK の設定。値は VS Code の設定・SecretStorage を呼び出し側が解決して渡す。 */
@@ -80,7 +107,7 @@ export interface ByokProviderConfig {
    * 未対応の値は ask() が失敗として返す（黙って既定へ落とさない。RULE-004）。
    */
   vendor: string;
-  /** 利用者の API キー。未設定なら undefined。 */
+  /** 利用者の API キー。未設定なら undefined（ループバックのローカルモデルなら不要）。 */
   apiKey?: string;
   /** `gakushuSochi.byok.model`。空なら vendor の既定。 */
   model?: string;
@@ -93,15 +120,38 @@ interface ChatMessage {
   content: string;
 }
 
-/** AIRequest を、各社 API に共通する単純な messages 配列へ変換する。 */
+/**
+ * AIRequest を、各社 API に共通する単純な messages 配列へ変換する。
+ *
+ * Anthropic Messages API は次を強制し、違反は 400 になる（OpenAI は寛容だが、
+ * 揃えても害はないため共通で正規化する）。
+ *
+ * 1. 先頭は必ず user。履歴は user 開始・交互に並ぶので、slice で先頭が
+ *    assistant にずれうる。対になる質問の無い先頭の assistant 分は落とす。
+ * 2. user / assistant は交互。履歴末尾が user で終わる場合に今回のプロンプトと
+ *    連続 user になるため、同じ role の連続は 1 件へ畳み込む。
+ * 3. content は非空。空のターンは除外する。
+ */
 function toChatMessages(request: AIRequest): ChatMessage[] {
   // 直近 MAX_HISTORY_TURNS 件だけを使う（vscodeLm.ts と同じ上限）。
   const history = (request.history ?? []).slice(-MAX_HISTORY_TURNS);
+  const turns = [...history, { role: "user" as const, text: buildPrompt(request) }];
 
-  return [
-    ...history.map((turn) => ({ role: turn.role, content: turn.text })),
-    { role: "user" as const, content: buildPrompt(request) },
-  ];
+  const messages: ChatMessage[] = [];
+  for (const turn of turns) {
+    const text = turn.text.trim();
+    if (!text) continue;
+    const last = messages.at(-1);
+    if (last && last.role === turn.role) {
+      last.content += `\n\n${text}`;
+    } else {
+      messages.push({ role: turn.role, content: text });
+    }
+  }
+  while (messages.length > 0 && messages[0]!.role !== "user") {
+    messages.shift();
+  }
+  return messages;
 }
 
 /** postJson の結果。body は JSON として解釈できないとき undefined。 */
@@ -143,15 +193,16 @@ async function postJson(
 function anthropicRequest(
   baseUrl: string,
   model: string,
-  apiKey: string,
+  apiKey: string | undefined,
   messages: ChatMessage[],
 ): { url: string; headers: Record<string, string>; body: unknown } {
   return {
     url: `${baseUrl}/v1/messages`,
     headers: {
       "content-type": "application/json",
-      "x-api-key": apiKey,
       "anthropic-version": "2023-06-01",
+      // ループバックのローカルモデル等、キーなしで呼ぶ場合は認証ヘッダを付けない。
+      ...(apiKey ? { "x-api-key": apiKey } : {}),
     },
     body: { model, max_tokens: MAX_OUTPUT_TOKENS, messages },
   };
@@ -160,14 +211,14 @@ function anthropicRequest(
 function openaiRequest(
   baseUrl: string,
   model: string,
-  apiKey: string,
+  apiKey: string | undefined,
   messages: ChatMessage[],
 ): { url: string; headers: Record<string, string>; body: unknown } {
   return {
     url: `${baseUrl}/v1/chat/completions`,
     headers: {
       "content-type": "application/json",
-      authorization: `Bearer ${apiKey}`,
+      ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}),
     },
     body: { model, messages },
   };
@@ -241,7 +292,7 @@ function classifyHttpError(status: number, body: unknown): AIError {
       reason: "model-unavailable",
       detail:
         `指定したモデルが見つかりません（HTTP 404${suffix}）。` +
-        "gakushuSochi.byok.model の値を確認してください。",
+        "gakushuSochi.byok.model と gakushuSochi.byok.baseUrl の値を確認してください。",
     };
   }
   if (status === 429) {
@@ -292,20 +343,8 @@ export class BYOKProvider implements AIProvider {
       };
     }
 
-    if (!apiKey) {
-      return {
-        ok: false,
-        error: {
-          reason: "model-unavailable",
-          detail:
-            "BYOK の API キーが未設定です。" +
-            "コマンドパレットから「Gakushu Sochi: BYOK の API キーを設定する」を実行してください。",
-        },
-      };
-    }
-
     const model = this.config.model?.trim() || DEFAULT_MODELS[vendor];
-    const baseUrl = (this.config.baseUrl?.trim() || DEFAULT_BASE_URLS[vendor]).replace(/\/+$/, "");
+    const baseUrl = normalizeBaseUrl(this.config.baseUrl?.trim() || DEFAULT_BASE_URLS[vendor]);
 
     if (!isSafeByokBaseUrl(baseUrl)) {
       // キーを載せる前に弾く。平文 http の外部宛てへ送るとキーが盗聴される（RULE-003）。
@@ -314,6 +353,21 @@ export class BYOKProvider implements AIProvider {
         error: {
           reason: "model-unavailable",
           detail: `BYOK の送信先 URL が安全ではありません（https、または localhost などのループバックのみ許可）: ${baseUrl}`,
+        },
+      };
+    }
+
+    // Ollama 等のローカルモデル（ループバック宛て）はキーなしで呼べる。
+    // それ以外でキーが無いまま送っても 401 が返るだけなので、先に案内する。
+    if (!apiKey && !isLoopbackUrl(baseUrl)) {
+      return {
+        ok: false,
+        error: {
+          reason: "model-unavailable",
+          detail:
+            "BYOK の API キーが未設定です。" +
+            "コマンドパレットから「Gakushu Sochi: BYOK の API キーを設定する」を実行してください。" +
+            "（localhost などループバックのローカルモデルならキーは不要です。）",
         },
       };
     }

@@ -155,6 +155,47 @@ test("ループバックの HTTP エンドポイントはローカルモデル�
   expect(response.ok).toBe(true);
 });
 
+test("ループバックのエンドポイントは API キーなしで呼べる", async () => {
+  // Ollama 等のローカルモデルは認証を持たない。ダミーのキーを要求しない。
+  const calls = stubFetch({ choices: [{ message: { content: "ローカルの回答" } }] });
+
+  const response = await new BYOKProvider({
+    vendor: "openai",
+    baseUrl: "http://localhost:11434",
+  }).ask(REQUEST);
+
+  expect(calls).toHaveLength(1);
+  const headers = calls[0]?.init?.headers as Record<string, string>;
+  expect(headers.authorization).toBeUndefined();
+  expect(response.ok).toBe(true);
+});
+
+test("baseUrl が /v1 で終わっていても、パスを二重にしない", async () => {
+  // OpenAI 互換の案内は `.../v1` 込みのことが多い（Ollama、OpenRouter 等）。
+  const calls = stubFetch({ choices: [{ message: { content: "ok" } }] });
+
+  await new BYOKProvider({
+    vendor: "openai",
+    apiKey: "k",
+    baseUrl: "http://localhost:11434/v1/",
+  }).ask(REQUEST);
+
+  expect(calls[0]?.url).toBe("http://localhost:11434/v1/chat/completions");
+});
+
+test("404 の案内は model だけでなく baseUrl の確認も促す", async () => {
+  // OpenAI 互換エンドポイントでは URL 側の誤りでも 404 になりうる。
+  stubFetch({ error: { message: "not found" } }, 404);
+
+  const response = await new BYOKProvider({ vendor: "openai", apiKey: "k" }).ask(REQUEST);
+
+  expect(response.ok).toBe(false);
+  if (!response.ok) {
+    expect(response.error.detail).toContain("byok.model");
+    expect(response.error.detail).toContain("byok.baseUrl");
+  }
+});
+
 test("401 / 403 は API キーの問題として auth-failed を返す", async () => {
   for (const status of [401, 403]) {
     const calls = stubFetch({ error: { message: "invalid api key" } }, status);
@@ -261,10 +302,69 @@ test("会話履歴は直近10件だけを送り、最後にプロンプトを置
 
   const body = JSON.parse(calls[0]?.init?.body as string);
   const texts = body.messages.map((m: { content: string }) => m.content);
-  // 15件の履歴のうち末尾10件 + プロンプト。
-  expect(body.messages).toHaveLength(11);
-  expect(texts[0]).toBe("turn-5");
+  // 15件の履歴のうち末尾10件（turn-5〜14）を切るが、先頭の turn-5 は assistant。
+  // Anthropic は先頭が user でなければ 400 なので、user 開始まで落とす。
+  // 末尾の turn-14 は user で、今回のプロンプトと1件に畳み込まれる。
+  expect(body.messages).toHaveLength(9);
+  expect(body.messages[0].role).toBe("user");
+  expect(texts[0]).toBe("turn-6");
+  expect(texts.at(-1)).toContain("turn-14");
   expect(texts.at(-1)).toContain("const answer = 42;");
+});
+
+test("履歴の先頭が assistant なら、user 開始まで落とす", async () => {
+  // Anthropic の「first message must use the "user" role」対策。
+  // 対になる質問を持たない先頭の応答は、送っても文脈にならない。
+  const calls = stubFetch({ content: [{ type: "text", text: "ok" }] });
+  const history = [
+    { role: "assistant" as const, text: "前の応答" },
+    { role: "user" as const, text: "次の質問" },
+    { role: "assistant" as const, text: "次の回答" },
+  ];
+
+  await new BYOKProvider({ vendor: "anthropic", apiKey: "k" }).ask({ ...REQUEST, history });
+
+  const messages = JSON.parse(calls[0]?.init?.body as string).messages;
+  expect(messages.map((m: { role: string }) => m.role)).toEqual(["user", "assistant", "user"]);
+  expect(messages[0].content).toBe("次の質問");
+});
+
+test("履歴末尾が user で終わる場合、今回のプロンプトと1件に畳み込む", async () => {
+  // Anthropic は user/assistant の交互を強制する。前回ターンが応答なく
+  // 終わった履歴だと、そのまま送ると連続 user になって 400 になる。
+  const calls = stubFetch({ content: [{ type: "text", text: "ok" }] });
+  const history = [
+    { role: "user" as const, text: "最初の質問" },
+    { role: "assistant" as const, text: "最初の回答" },
+    { role: "user" as const, text: "応答の無い質問" },
+  ];
+
+  await new BYOKProvider({ vendor: "anthropic", apiKey: "k" }).ask({ ...REQUEST, history });
+
+  const messages = JSON.parse(calls[0]?.init?.body as string).messages;
+  expect(messages).toHaveLength(3);
+  expect(messages[2].role).toBe("user");
+  expect(messages[2].content).toContain("応答の無い質問");
+  expect(messages[2].content).toContain("const answer = 42;");
+});
+
+test("空のテキストを持つ履歴ターンは送らない", async () => {
+  // Anthropic は空の content を 400 で弾く。[context:...] だけの入力などで
+  // 履歴へ空のターンが残りうるため、ここで除く。
+  const calls = stubFetch({ content: [{ type: "text", text: "ok" }] });
+  const history = [
+    { role: "user" as const, text: "質問" },
+    { role: "assistant" as const, text: "" },
+    { role: "user" as const, text: "  " },
+  ];
+
+  await new BYOKProvider({ vendor: "anthropic", apiKey: "k" }).ask({ ...REQUEST, history });
+
+  const messages = JSON.parse(calls[0]?.init?.body as string).messages;
+  // 空ターンが除かれると「質問」と今回のプロンプトが連続 user になり、畳み込まれる。
+  expect(messages).toHaveLength(1);
+  expect(messages[0].content).toContain("質問");
+  expect(messages[0].content).toContain("const answer = 42;");
 });
 
 test("isByokVendor は対応する提供元名だけを通す", () => {

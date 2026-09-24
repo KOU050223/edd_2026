@@ -124,7 +124,7 @@
           "type": "string",
           "scope": "machine",
           "default": "",
-          "description": "ai.provider が byok のときの送信先 URL。空にすると提供元の公式エンドポイントになる。OpenAI 互換エンドポイントやローカルモデルに向ける場合に使う。https のみ（localhost などのループバックは http も可）。"
+          "description": "ai.provider が byok のときの送信先 URL。空にすると提供元の公式エンドポイントになる。OpenAI 互換エンドポイントやローカルモデルに向ける場合に使う。https のみ（localhost などのループバックは http も可）。末尾の /v1 は含めても含めなくてもよい。"
         }
       }
     }

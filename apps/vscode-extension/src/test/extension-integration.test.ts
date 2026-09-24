@@ -658,6 +658,26 @@ test("ai.provider が byok なら、SecretStorage のキーで直接 AI 提供�
   expect(response.markdown).toHaveBeenCalledWith("BYOK の回答");
 });
 
+test("SecretStorage が読めないときも、例外を投げず失敗を案内する", async () => {
+  // OS の資格情報ストアがロック中などで secrets.get が reject しうる。
+  // provider.ask の外で例外が出ると失敗描画を通らないため、値として返す。
+  loadProfile.mockReturnValueOnce({ events: [], mastery: {} });
+  getConfiguration.mockReturnValue(byokConfiguration());
+  const fetchMock = vi.fn();
+  vi.stubGlobal("fetch", fetchMock);
+
+  const context = createExtensionContext(true);
+  context.secrets.get = async () => {
+    throw new Error("keychain is locked");
+  };
+  activate(context as never);
+  const response = await askByok();
+
+  expect(fetchMock).not.toHaveBeenCalled();
+  expect(askedRequests).toHaveLength(0);
+  expect(response.markdown).toHaveBeenCalledWith(expect.stringContaining("資格情報ストア"));
+});
+
 test("ai.provider が byok でもキーが未設定なら、送信せず設定コマンドへ案内する", async () => {
   loadProfile.mockReturnValueOnce({ events: [], mastery: {} });
   getConfiguration.mockReturnValue(byokConfiguration());
