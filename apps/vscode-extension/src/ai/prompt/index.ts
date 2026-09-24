@@ -81,12 +81,26 @@ function userQuestionOf(request: AIRequest): string | undefined {
 export function buildPrompt(request: AIRequest): string {
   const question = userQuestionOf(request);
 
+  // 利用者が設定した人物像・口調。口調や語りかけ方にだけ効かせ、
+  // 「何に答えるか」「どう答えるか」の学習方針は persona で上書きさせない。
+  const persona = request.persona?.trim();
+  const personaSection = persona
+    ? [
+        "",
+        "--- 応答の人物像 ---",
+        `利用者はあなたに次の人物像・口調を求めています: ${persona}`,
+        "人物像は口調や語りかけ方にだけ適用してください。解説・ヒントの方針や、",
+        "完成したコードを提示しないという学習方針は、人物像によって変わりません。",
+      ]
+    : [];
+
   // 利用者が質問を書いたなら、それを preset の前に置く。preset を先頭に置くと
   // 「コードを解説せよ」という強い指示が先に立ち、質問が他の付加情報と同列に
   // 埋もれて無視されることがある（#50）。質問が無いときの並びは変えない。
   const lines = question
     ? [
         SYSTEM_PROMPT,
+        ...personaSection,
         "",
         "--- 質問 ---",
         question,
@@ -105,6 +119,7 @@ export function buildPrompt(request: AIRequest): string {
       ]
     : [
         SYSTEM_PROMPT,
+        ...personaSection,
         "",
         ...presetInstruction(request),
         "",

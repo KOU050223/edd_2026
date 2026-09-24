@@ -4,6 +4,7 @@ import { createAuth, type AuthVariables } from "../auth/middleware.js";
 import type { AuthVerifier } from "../auth/verifier.js";
 import { rateLimit } from "../auth/rate-limit.js";
 import { AI_USAGE_LIMITS } from "../contract/ai-usage.js";
+import { PERSONA_MAX_LENGTH } from "@gakushu-sochi/domain";
 import { InMemoryAiUsageRepository } from "../repository/ai-usage.js";
 import { InMemoryIdentityRepository } from "../repository/memory.js";
 import type { AiUsageRepository } from "../repository/types.js";
@@ -267,6 +268,96 @@ describe("POST /v1/ai/responses", () => {
       "この選択テキストを初心者にも分かるように解説してください。",
     );
     vi.unstubAllGlobals();
+  });
+
+  describe("persona（応答の人物像）", () => {
+    it("persona を systemInstruction として上流へ送る", async () => {
+      const fetchMock = stubUpstream(SSE_WITH_USAGE);
+      const harness = buildApp();
+      const { ctx, settled } = createExecutionContext();
+
+      const response = await ask(
+        harness,
+        { selection: "code", question: "explain", persona: "優しい先生" },
+        ctx,
+      );
+
+      expect(response.status).toBe(200);
+      await response.text();
+      await settled();
+      const [, init] = fetchMock.mock.calls[0] ?? [];
+      const sent = JSON.parse(String((init as RequestInit | undefined)?.body)) as {
+        systemInstruction?: { parts: { text: string }[] };
+        contents: { parts: { text: string }[] }[];
+      };
+      // contents と分けて載せる。口調の指定を本文の質問と混ぜない。
+      expect(sent.systemInstruction?.parts[0]?.text).toContain("優しい先生");
+      // 自由記述がそのまま指示になると「質問を無視して〜」が効きうるため、
+      // 口調だけに適用する枠組みを添える（VSCode 側の buildPrompt と同じ扱い）。
+      expect(sent.systemInstruction?.parts[0]?.text).toContain(
+        "口調や語りかけ方にだけ適用してください",
+      );
+      expect(sent.contents[0]?.parts[0]?.text).not.toContain("優しい先生");
+      vi.unstubAllGlobals();
+    });
+
+    it("persona 未指定なら systemInstruction を送らない", async () => {
+      const fetchMock = stubUpstream(SSE_WITH_USAGE);
+      const harness = buildApp();
+      const { ctx, settled } = createExecutionContext();
+
+      const response = await ask(harness, { selection: "code", question: "explain" }, ctx);
+      await response.text();
+      await settled();
+
+      const [, init] = fetchMock.mock.calls[0] ?? [];
+      const sent = JSON.parse(String((init as RequestInit | undefined)?.body)) as {
+        systemInstruction?: unknown;
+      };
+      expect(sent.systemInstruction).toBeUndefined();
+      vi.unstubAllGlobals();
+    });
+
+    it("空白だけの persona は未設定として扱う", async () => {
+      const fetchMock = stubUpstream(SSE_WITH_USAGE);
+      const harness = buildApp();
+      const { ctx, settled } = createExecutionContext();
+
+      const response = await ask(
+        harness,
+        { selection: "code", question: "explain", persona: "   " },
+        ctx,
+      );
+      await response.text();
+      await settled();
+
+      const [, init] = fetchMock.mock.calls[0] ?? [];
+      const sent = JSON.parse(String((init as RequestInit | undefined)?.body)) as {
+        systemInstruction?: unknown;
+      };
+      expect(sent.systemInstruction).toBeUndefined();
+      vi.unstubAllGlobals();
+    });
+
+    it("上限を超える persona は上流を呼ばずに拒否する", async () => {
+      const fetchMock = stubUpstream(SSE_WITH_USAGE);
+      const harness = buildApp();
+      const { ctx } = createExecutionContext();
+
+      const response = await ask(
+        harness,
+        {
+          selection: "code",
+          question: "explain",
+          persona: "あ".repeat(PERSONA_MAX_LENGTH + 1),
+        },
+        ctx,
+      );
+
+      expect(response.status).toBe(400);
+      expect(fetchMock).not.toHaveBeenCalled();
+      vi.unstubAllGlobals();
+    });
   });
 
   describe("モデルの allowlist（docs/auth.md §10.1）", () => {

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { PERSONA_MAX_LENGTH } from "@gakushu-sochi/domain";
+
 import {
   DEFAULT_SETTINGS,
   MANAGED_AI_MAX_OUTPUT_TOKENS,
@@ -32,6 +34,7 @@ describe("normalizeSettings", () => {
       maxTokens: 1024,
       restoreClipboard: false,
       launchAtLogin: true,
+      persona: "優しい先生",
     };
 
     expect(normalizeSettings(settings)).toEqual(settings);
@@ -63,6 +66,29 @@ describe("normalizeSettings", () => {
     expect(migrated.temperature).toBe(0.7);
     expect(migrated.restoreClipboard).toBe(false);
     expect(migrated.launchAtLogin).toBe(true);
+  });
+
+  it("defaults persona for settings saved before the field existed", () => {
+    // LEGACY_SETTINGS は persona を持たない。isSettings が全項目を要求するため、
+    // 欠損を補わないと新項目追加のたびに設定全体が既定へ戻ってしまう。
+    const migrated = normalizeSettings(LEGACY_SETTINGS);
+
+    expect(migrated.persona).toBe(DEFAULT_SETTINGS.persona);
+    expect(migrated.apiBaseUrl).toBe("https://api.example.com");
+  });
+
+  it("resets only an invalid persona without discarding other settings", () => {
+    // 型違い・上限超過はその項目だけを直す。関係ない設定まで消さない。
+    expect(normalizeSettings({ ...DEFAULT_SETTINGS, persona: 42 }).persona).toBe(
+      DEFAULT_SETTINGS.persona,
+    );
+    expect(
+      normalizeSettings({ ...DEFAULT_SETTINGS, persona: "あ".repeat(PERSONA_MAX_LENGTH + 1) })
+        .persona,
+    ).toBe(DEFAULT_SETTINGS.persona);
+    expect(normalizeSettings({ ...DEFAULT_SETTINGS, persona: 42 }).shortcut).toBe(
+      DEFAULT_SETTINGS.shortcut,
+    );
   });
 
   it("falls back to the default model when a legacy model is no longer allowed", () => {

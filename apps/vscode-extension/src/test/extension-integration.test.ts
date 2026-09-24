@@ -568,6 +568,49 @@ test("error_recurredの記録で、該当Conceptがconfirmedから外れる", as
   expect(latestProfile().mastery["ts.variable_declaration"]?.status).toBe("learning");
 });
 
+// --- #44: 人格設定（persona）の境界 -------------------------------------------
+
+test("人格設定をChat経由のAIRequestへ載せる", async () => {
+  recordWithDomain(createEmptyProfile("2026-09-21T00:00:00.000Z"));
+  getConfiguration.mockReturnValue({
+    get: (key: string, fallback: string) => (key === "ai.persona" ? "幼馴染" : fallback),
+  });
+  activate(createExtensionContext(true) as never);
+
+  await askAboutSelection();
+
+  expect(askedRequests[0]?.persona).toBe("幼馴染");
+});
+
+test("上限を超える人格設定は適用せず、理由を出力パネルへ記録する", async () => {
+  // settings.json の直接編集では manifest の maxLength を超えた値が来る。
+  recordWithDomain(createEmptyProfile("2026-09-21T00:00:00.000Z"));
+  getConfiguration.mockReturnValue({
+    get: (key: string, fallback: string) => (key === "ai.persona" ? "あ".repeat(501) : fallback),
+  });
+  activate(createExtensionContext(true) as never);
+
+  await askAboutSelection();
+
+  // 黙って切り詰めず、適用をやめて理由を記録する（RULE-004）。
+  expect(askedRequests[0]?.persona).toBeUndefined();
+  expect(outputChannel.appendLine).toHaveBeenCalledWith(expect.stringContaining("人格設定"));
+});
+
+test("文字列でない人格設定は適用せず、理由を出力パネルへ記録する", async () => {
+  // settings.json の直接編集では manifest の型を外れた値が来る。
+  recordWithDomain(createEmptyProfile("2026-09-21T00:00:00.000Z"));
+  getConfiguration.mockReturnValue({
+    get: (key: string, fallback: unknown) => (key === "ai.persona" ? 42 : fallback),
+  });
+  activate(createExtensionContext(true) as never);
+
+  await askAboutSelection();
+
+  expect(askedRequests[0]?.persona).toBeUndefined();
+  expect(outputChannel.appendLine).toHaveBeenCalledWith(expect.stringContaining("人格設定"));
+});
+
 // --- #161: Hint・Information の Diagnostic で Error Explain に切り替えない ------
 
 test("Hintだけが重なる選択ではError ExplainではなくExplainで回答させる", async () => {
