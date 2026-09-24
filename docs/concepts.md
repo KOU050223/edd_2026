@@ -17,25 +17,28 @@ npm run check:concepts   # 表と生成物がズレていないか検査する
 
 ## Concept ID
 
-学習概念には `<language>.<concept>` 形式の ID を付ける。
+学習概念には `<prefix>.<concept>` 形式の ID を付ける。prefix は言語
+（`go` / `ts` / `python` …）か、言語を横断する領域（`git` / `design` / `db` / `http`）を表す。
 
 ```text
 go.pointer_receiver
-go.slice_append
 ts.type_narrowing
+git.rebase
 ```
 
 形式は `^[a-z0-9]+\.[a-z0-9_]+$`（`packages/domain/src/profile.ts` の `CONCEPT_ID_PATTERN`）。
 
-### 言語をフィールドではなく ID に含める理由
+### プレフィックスをフィールドではなく ID に含める理由
 
 ID 単体で一意になるため、学習イベントやログに ID だけを載せれば意味が確定する。
-言語を別フィールドに分けると、イベントを記録するすべての箇所で `conceptId` と
+プレフィックスを別フィールドに分けると、イベントを記録するすべての箇所で `conceptId` と
 `language` を必ずセットで運ぶ必要があり、片方を落とした瞬間に名寄せ不能なデータが残る。
 
 なお `Concept.language` フィールドも別に持つが、これは ID プレフィックスの
 再掲であり、フィルタリング用の冗長な情報である。**ID とプレフィックスが食い違う
 Concept を定義してはならない。**
+領域の Concept でもフィールド名は `language` のままである。改名すると
+`LearnerProfile` の互換性を壊すため、意味の広がりはドキュメントで吸収する。
 
 ### 「学習元」の扱い
 
@@ -76,7 +79,9 @@ roadmap.sh（`nilbuild/developer-roadmap`）の Go ロードマップは、各�
 生成物 `packages/domain/src/concepts.generated.ts` の隣に置き、
 生成の入力と出力を並べて確認できるようにしている。
 
-MVP では Go と TypeScript / JavaScript を対象に、一覧を手で定義している。
+一覧は手で定義する。MVP の主対象は Go と TypeScript / JavaScript で、それ以外の言語
+（Python / Rust / Java / C# / PHP / Ruby）と、言語を横断する領域（Git / 設計 /
+データベース / HTTP）は暫定の一覧を持つ。
 追加するときは次の手順に従う。
 
 ### TypeScript / JavaScript の扱い
@@ -89,6 +94,18 @@ VS Code の `typescript` と `javascript` の languageId は、Concept を検索
 `ts` へ対応付ける。`Concept.language` は ID プレフィックスと一致させるため `ts` のまま保持し、
 言語 ID をそのまま保存しない。TypeScript 固有の型システムも同じ `ts.*` に置く。
 
+それ以外の言語（`python` / `rust` / `java` / `csharp` / `php` / `ruby`）は、
+VS Code の languageId と一致するプレフィックスを使う。対応付けの表を増やさず、
+languageId がそのまま prefix になる。
+
+### 言語以外の領域
+
+`git` / `design` / `db` / `http` のような言語を横断する領域も同じ `<prefix>.<concept>`
+形式で定義する。これらはファイルの languageId に対応付かないため、VS Code 拡張の
+プロンプトでは言語の Concept と別扱いで、languageId の有無に関わらず常に
+「既知の概念一覧」へ載せる。載せる領域の一覧は
+`apps/vscode-extension/src/ai/prompt/index.ts` の `CROSS_DOMAIN_PREFIXES` が持つ。
+
 ---
 
 ## Concept を新規追加する手順
@@ -98,7 +115,8 @@ VS Code の `typescript` と `javascript` の languageId は、Concept を検索
 2. **ID を決める。** `^[a-z0-9]+\.[a-z0-9_]+$` を満たすこと。単数形・スネークケースに揃える。
 3. **`packages/domain/concepts.md` の表に行を追加する。** 前提となる Concept があれば
    `prerequisites` 列に書く。
-   前提は既存 ID のみを指し、循環してはならない。
+   前提は既存 ID のみを指し、循環してはならない。かつ、同じプレフィックスの
+   Concept に限る。プレフィックスをまたぐ辺は Learning Map の木に描かれない。
 4. **`source` は `manual` になる。** 表に `source` 列はなく、
    `packages/domain/scripts/gen-concepts.mjs` が全件を `{ kind: "manual" }` として書き出す。
    MVP では Concept をすべて手で定義するためである。
@@ -109,6 +127,14 @@ VS Code の `typescript` と `javascript` の languageId は、Concept を検索
 6. **PR を出す。** Concept の追加で人が編集するのは `packages/domain/concepts.md` だけであり、
    `packages/domain/src/profile.ts` もこのドキュメントも変更不要
    （`ConceptId` が `string` であるため）。
+
+既存の言語・領域への Concept 追加は上の手順で足りるが、**新しい言語や領域の
+プレフィックスを足すとき**は表示と抽出側にも登録が要る。
+
+- Web のツリー見出し: `apps/web/src/client/routes/_framed/index.tsx` の `languageLabel`
+- 言語ではない領域を追加するとき: `apps/vscode-extension/src/ai/prompt/index.ts` の
+  `CROSS_DOMAIN_PREFIXES`。登録しないとその領域の Concept がプロンプトの
+  一覧に乗らず、拡張から観測されない。
 
 `ConceptId` を literal union にしないのはこの手順のためである。union にすると
 Concept を1つ足すたびに型ファイルが変更され、並行して動いている他の実装 PR と衝突する。
@@ -327,6 +353,16 @@ ID によるタイブレークが無いと、同じイベント集合でも入�
 
 Learner Profile はプロジェクトではなく人に紐づくため、`workspaceState` ではなく
 `globalState` を使う。別端末との同期は行わない（同期は Pro の Cloud Sync 段階の課題）。
+
+### 削除
+
+`Gakushu Sochi: 学習データを削除する` は、この端末の学習データのコピーをすべて消す。
+対象は `gakushuSochi.learnerProfile`・旧キー `codeCompanion.learnerProfile`・
+`gakushuSochi.explainedErrors` の3キー。`gakushuSochi.clientId`（端末の識別子）と
+`gakushuSochi.consent`（同意の記録）、`gakushuSochi.appliedHistoryResetAtMs`（同期状態）は
+学習データではないため残す。
+サーバー側の削除との順序と、他端末への追従は
+[architecture.md](architecture.md)「クライアント側に残るコピー」を参照。
 
 ### 型を JSON serializable に保つ
 

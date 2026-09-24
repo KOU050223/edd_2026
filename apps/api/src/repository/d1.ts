@@ -17,6 +17,8 @@ import type {
   AiUsage,
   AiUsageRepository,
   AppendResult,
+  AuditLogEntry,
+  AuditLogRepository,
   IdentityRepository,
   LearningEventRepository,
   MasteryOverride,
@@ -167,14 +169,16 @@ export class D1LearningEventRepository implements LearningEventRepository {
 
       // 削除より前に受け取ったイベントは、受理したうえで削除に含まれた扱いにする。
       // 重複と答えないのは、既に保存済みだったかのように見せないため。
+      // droppedByReset で区別を返すのは、クライアントが削除への追従後に
+      // このイベントをローカルへ記録し直さないための根拠になるため（Issue #124）。
       if (changes === 0 && reset !== null && reset.reset_at_ms >= input.receivedAtMs) {
-        return { id: input.event.id, duplicate: false };
+        return { id: input.event.id, duplicate: false, droppedByReset: true };
       }
 
       // 書き込まれた行が0なら、同じ ID が既にあったということ。
       // 主キーが (user_id, id) なので、これは常に「このユーザーの再送」を意味し、
       // 他ユーザーの同じ文字列との衝突ではない。
-      return { id: input.event.id, duplicate: changes === 0 };
+      return { id: input.event.id, duplicate: changes === 0, droppedByReset: false };
     });
   }
 
@@ -223,6 +227,14 @@ export class D1LearningEventRepository implements LearningEventRepository {
       throw new Error("D1 delete result has no meta.changes");
     }
     return changes;
+  }
+
+  async latestResetAtMs(userId: string): Promise<number | null> {
+    const row = await this.db
+      .prepare(`SELECT reset_at_ms FROM learning_history_resets WHERE user_id = ?`)
+      .bind(userId)
+      .first<{ reset_at_ms: number }>();
+    return row?.reset_at_ms ?? null;
   }
 }
 
@@ -558,6 +570,34 @@ export class D1AiUsageRepository implements AiUsageRepository {
     if (result.meta.changes === 0) {
       throw new Error(`ai_usage row is missing (user_id=${userId}, month_key=${monthKey})`);
     }
+  }
+}
+
+/**
+ * `AuditLogRepository` の D1 実装（Issue #122）。
+ *
+ * 追記のみ。`user_id` は `users(id)` を参照するため、users 行が無いまま
+ * 書こうとすると FOREIGN KEY constraint failed で落ちる。行が無い利用者を
+ * 記録したい経路では、呼び出し側が先に `ensureUser` で行を用意する。
+ * `ensureUser` と `record` の間に退会（users 行の削除）が割り込む競合窓は
+ * 残るが、狭いうえ失敗は伝播するだけなので、そのままにしてある。
+ */
+export class D1AuditLogRepository implements AuditLogRepository {
+  constructor(private readonly db: D1Database) {}
+
+  async record(entry: AuditLogEntry): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT INTO audit_log (user_id, action, occurred_at_ms, detail)
+         VALUES (?, ?, ?, ?)`,
+      )
+      .bind(
+        entry.userId,
+        entry.action,
+        entry.occurredAtMs,
+        entry.detail === undefined ? null : JSON.stringify(entry.detail),
+      )
+      .run();
   }
 }
 

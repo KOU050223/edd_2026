@@ -1,3 +1,5 @@
+import { PERSONA_MAX_LENGTH } from "@gakushu-sochi/domain";
+
 /**
  * Managed AI の1回あたりの出力上限（tokens）。
  *
@@ -17,6 +19,8 @@ export const MANAGED_AI_MAX_OUTPUT_TOKENS = 2_048;
  */
 export const MANAGED_AI_MODELS = ["gemini-3.6-flash", "gemini-3.8-flash"] as const;
 
+// persona の上限は domain が正本（PERSONA_MAX_LENGTH）。ここを緩めると、
+// 保存できるのに送信すると必ず 400 で弾かれる設定を利用者に作らせることになる。
 export interface DesktopSettings {
   apiBaseUrl: string;
   shortcut: string;
@@ -25,6 +29,8 @@ export interface DesktopSettings {
   maxTokens: number;
   restoreClipboard: boolean;
   launchAtLogin: boolean;
+  /** 応答の人物像・口調（自由記述）。空文字は未設定。 */
+  persona: string;
 }
 
 export const DEFAULT_SETTINGS: DesktopSettings = {
@@ -35,6 +41,7 @@ export const DEFAULT_SETTINGS: DesktopSettings = {
   maxTokens: 1024,
   restoreClipboard: true,
   launchAtLogin: false,
+  persona: "",
 };
 
 /**
@@ -76,6 +83,15 @@ function migrateTightenedPolicies(value: Record<string, unknown>): Record<string
 export function normalizeSettings(value: unknown): DesktopSettings {
   if (typeof value !== "object" || value === null) return { ...DEFAULT_SETTINGS };
   const migrated = migrateTightenedPolicies(value as Record<string, unknown>);
+
+  // persona は後から足した項目。isSettings は全項目を一度に見るため、
+  // ここで欠損を既定値で補わないと、新項目を持たない古い settings.json が
+  // 丸ごと既定値へ戻ってしまう（API URL やショートカットまで消える）。
+  // 型違い・上限超過も同じ理由で、この項目だけを直す。
+  if (typeof migrated.persona !== "string" || migrated.persona.length > PERSONA_MAX_LENGTH) {
+    migrated.persona = DEFAULT_SETTINGS.persona;
+  }
+
   if (!isSettings(migrated)) return { ...DEFAULT_SETTINGS };
   return migrated;
 }
@@ -103,7 +119,9 @@ function isSettings(value: unknown): value is DesktopSettings {
     settings.maxTokens > 0 &&
     settings.maxTokens <= MANAGED_AI_MAX_OUTPUT_TOKENS &&
     typeof settings.restoreClipboard === "boolean" &&
-    typeof settings.launchAtLogin === "boolean"
+    typeof settings.launchAtLogin === "boolean" &&
+    typeof settings.persona === "string" &&
+    settings.persona.length <= PERSONA_MAX_LENGTH
   );
 }
 

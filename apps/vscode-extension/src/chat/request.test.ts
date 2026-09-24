@@ -45,6 +45,21 @@ test("会話履歴を渡すとAIRequestのhistoryへそのまま載る", () => {
   });
 });
 
+test("人格設定をAIRequestのpersonaへ引き継ぐ", () => {
+  const context = {
+    code: "value",
+    source: "editor" as const,
+    contextLevel: 2 as const,
+    surroundingCode: "",
+  };
+
+  expect(createChatAIRequest(context, "なぜですか？", [], [], "  優しい先生  ")).toMatchObject({
+    persona: "優しい先生",
+  });
+  // 空白だけの persona は未設定と同じ意味なので、キー自体を持たせない。
+  expect(createChatAIRequest(context, "なぜですか？", [], [], "   ")).not.toHaveProperty("persona");
+});
+
 test("選択範囲にあるDiagnosticsをAIRequestへ引き継ぐ", () => {
   const context = {
     code: "const value: number = 'text';",

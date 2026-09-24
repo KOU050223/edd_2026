@@ -28,6 +28,7 @@ vi.mock("vscode", () => ({
 
 import { VSCodeLMProvider } from "./vscodeLm";
 import { buildNoModelGuidance } from "./model-selection";
+import { META_MARKER } from "./prompt";
 import * as vscode from "vscode";
 
 /** for-await できる最小限の LanguageModelChatResponse を組む。 */
@@ -116,7 +117,37 @@ test.each(["typescript", "javascript"])(
   },
 );
 
-test("languageIdが無ければConcept一覧を含めない", async () => {
+test("一覧に載せていないConceptのIDは、実在しても受理しない", async () => {
+  const sendRequest = vi
+    .fn()
+    .mockResolvedValue(
+      responseOf(
+        `説明文\n${META_MARKER}\n{"conceptIds": ["python.typing", "ts.closure", "git.commit"], "resolution": "resolved"}`,
+      ),
+    );
+  selectChatModels.mockResolvedValueOnce([
+    { id: "gpt-4o-mini", family: "gpt-4o-mini", vendor: "copilot", sendRequest },
+  ]);
+
+  const response = await new VSCodeLMProvider().ask({
+    mode: "explain",
+    context: {
+      code: "const x: number = 1;",
+      source: "editor",
+      contextLevel: 2,
+      surroundingCode: "",
+      languageId: "typescript",
+    },
+  });
+
+  expect(response.ok).toBe(true);
+  if (!response.ok) throw new Error("expected a success response");
+  // python.typing は実在するが typescript の質問の一覧には載せていないため落とす。
+  // 領域横断の git.commit は一覧に載るので受理される。
+  expect(response.answer.conceptIds).toEqual(["ts.closure", "git.commit"]);
+});
+
+test("languageIdが無くても、言語に依らない領域のConceptは一覧に含める", async () => {
   const sendRequest = vi.fn().mockResolvedValue(responseOf("説明文"));
   selectChatModels.mockResolvedValueOnce([
     { id: "gpt-4o-mini", family: "gpt-4o-mini", vendor: "copilot", sendRequest },
@@ -135,9 +166,13 @@ test("languageIdが無ければConcept一覧を含めない", async () => {
   const messages = sendRequest.mock.calls[0]?.[0] as { text: string }[];
   const prompt = messages.at(-1)?.text ?? "";
 
-  // 一覧の見出しそのものが無いことを見る。「既知の概念一覧が無いため空配列に」という
-  // フォールバック文言自体に同じ語が含まれるため、見出し（--- 付き）で区別する。
-  expect(prompt).not.toContain("--- 既知の概念一覧");
+  // git や db のような領域の Concept は languageId に対応付かないため、
+  // languageId が無い入力（クリップボード経由など）でも一覧へ載せる。
+  // 言語の Concept は当てはめ先が分からないので載せない。
+  expect(prompt).toContain("--- 既知の概念一覧");
+  expect(prompt).toContain("git.commit");
+  expect(prompt).not.toContain("ts.variable_declaration");
+  expect(prompt).not.toContain("conceptIds は空配列にしてください");
 });
 
 /** family 指定に一致するモデルを1つだけ返す selectChatModels を仕込む。 */

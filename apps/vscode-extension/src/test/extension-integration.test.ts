@@ -14,6 +14,9 @@ const {
   askedRequests,
   confirmSend,
   collectFromEditor,
+  deleteServerLearningData,
+  showErrorMessage,
+  showInformationMessage,
   showWarningMessage,
   executeCommand,
   getConfiguration,
@@ -40,6 +43,9 @@ const {
   askedRequests: [] as AIRequest[],
   confirmSend: vi.fn(),
   collectFromEditor: vi.fn(),
+  deleteServerLearningData: vi.fn(),
+  showErrorMessage: vi.fn(),
+  showInformationMessage: vi.fn(),
   showWarningMessage: vi.fn(),
   executeCommand: vi.fn(),
   getConfiguration: vi.fn(),
@@ -64,8 +70,8 @@ vi.mock("vscode", () => ({
   window: {
     activeTextEditor,
     createOutputChannel: vi.fn(() => outputChannel),
-    showErrorMessage: vi.fn(),
-    showInformationMessage: vi.fn(),
+    showErrorMessage,
+    showInformationMessage,
     showInputBox,
     showQuickPick,
     showWarningMessage,
@@ -124,19 +130,23 @@ vi.mock("../context/clipboard", () => ({
 
 vi.mock("../ui/confirm", () => ({ confirmSend }));
 
-// 解説済みエラーの読み書きは実物を使い、再発判定を globalState ごしに確かめる。
+// 解説済みエラーの読み書きとローカルコピーの削除は実物を使い、
+// 再発判定と削除の追従を globalState ごしに確かめる。
 vi.mock("../learning/store", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../learning/store")>();
   return {
     getOrCreateClientId,
     loadProfile,
     recordEvent,
+    clearLocalLearningData: actual.clearLocalLearningData,
+    getAppliedHistoryResetAtMs: actual.getAppliedHistoryResetAtMs,
     loadExplainedErrors: actual.loadExplainedErrors,
+    markHistoryResetApplied: actual.markHistoryResetApplied,
     saveExplainedErrors: actual.saveExplainedErrors,
   };
 });
 
-vi.mock("../learning/sync", () => ({ syncEvent }));
+vi.mock("../learning/sync", () => ({ syncEvent, deleteServerLearningData }));
 
 import { activate } from "../extension";
 import { CONSENT_KEY } from "../consent/consent";
@@ -577,6 +587,49 @@ test("error_recurredの記録で、該当Conceptがconfirmedから外れる", as
   expect(latestProfile().mastery["ts.variable_declaration"]?.status).toBe("learning");
 });
 
+// --- #44: 人格設定（persona）の境界 -------------------------------------------
+
+test("人格設定をChat経由のAIRequestへ載せる", async () => {
+  recordWithDomain(createEmptyProfile("2026-09-21T00:00:00.000Z"));
+  getConfiguration.mockReturnValue({
+    get: (key: string, fallback: string) => (key === "ai.persona" ? "幼馴染" : fallback),
+  });
+  activate(createExtensionContext(true) as never);
+
+  await askAboutSelection();
+
+  expect(askedRequests[0]?.persona).toBe("幼馴染");
+});
+
+test("上限を超える人格設定は適用せず、理由を出力パネルへ記録する", async () => {
+  // settings.json の直接編集では manifest の maxLength を超えた値が来る。
+  recordWithDomain(createEmptyProfile("2026-09-21T00:00:00.000Z"));
+  getConfiguration.mockReturnValue({
+    get: (key: string, fallback: string) => (key === "ai.persona" ? "あ".repeat(501) : fallback),
+  });
+  activate(createExtensionContext(true) as never);
+
+  await askAboutSelection();
+
+  // 黙って切り詰めず、適用をやめて理由を記録する（RULE-004）。
+  expect(askedRequests[0]?.persona).toBeUndefined();
+  expect(outputChannel.appendLine).toHaveBeenCalledWith(expect.stringContaining("人格設定"));
+});
+
+test("文字列でない人格設定は適用せず、理由を出力パネルへ記録する", async () => {
+  // settings.json の直接編集では manifest の型を外れた値が来る。
+  recordWithDomain(createEmptyProfile("2026-09-21T00:00:00.000Z"));
+  getConfiguration.mockReturnValue({
+    get: (key: string, fallback: unknown) => (key === "ai.persona" ? 42 : fallback),
+  });
+  activate(createExtensionContext(true) as never);
+
+  await askAboutSelection();
+
+  expect(askedRequests[0]?.persona).toBeUndefined();
+  expect(outputChannel.appendLine).toHaveBeenCalledWith(expect.stringContaining("人格設定"));
+});
+
 // --- #161: Hint・Information の Diagnostic で Error Explain に切り替えない ------
 
 test("Hintだけが重なる選択ではError ExplainではなくExplainで回答させる", async () => {
@@ -726,4 +779,189 @@ test("ai.provider が byok でもキーが未設定なら、送信せず設定�
   expect(fetchMock).not.toHaveBeenCalled();
   expect(askedRequests).toHaveLength(0);
   expect(response.markdown).toHaveBeenCalledWith(expect.stringContaining("API キーが未設定"));
+});
+
+// --- #124: 学習データの削除 -----------------------------------------------------
+
+const LEARNER_PROFILE_KEY = "gakushuSochi.learnerProfile";
+const APPLIED_RESET_KEY = "gakushuSochi.appliedHistoryResetAtMs";
+
+test("削除コマンドはサーバー削除の成功後にローカルのコピーを消す", async () => {
+  // docs/architecture.md「クライアント側に残るコピー」: サーバー側の成功を
+  // 確かめてから globalState を空にする。
+  showWarningMessage.mockResolvedValueOnce("削除する");
+  deleteServerLearningData.mockResolvedValueOnce({
+    ok: true,
+    deletedCount: 2,
+    resetAtMs: 5_000,
+  });
+  getConfiguration.mockReturnValue({
+    get: (key: string, fallback?: string) =>
+      key === "api.baseUrl" ? "https://api.example.com" : fallback,
+  });
+  loadProfile.mockReturnValueOnce({ events: [], mastery: {} });
+
+  const context = createExtensionContext(true);
+  await context.globalState.update(LEARNER_PROFILE_KEY, {
+    version: 1,
+    events: [{}],
+    mastery: {},
+  });
+  activate(context as never);
+
+  await registeredCommands.get("gakushuSochi.deleteLearningData")?.();
+
+  expect(deleteServerLearningData).toHaveBeenCalledWith({
+    apiBaseUrl: "https://api.example.com",
+    apiToken: expect.any(Function),
+  });
+  expect(context.globalState.get(LEARNER_PROFILE_KEY)).toBeUndefined();
+  // 自分が呼んだ削除を「他端末から見えた削除」として二度処理しないよう記録する。
+  expect(context.globalState.get(APPLIED_RESET_KEY)).toBe(5_000);
+  expect(showInformationMessage).toHaveBeenCalledWith(expect.stringContaining("削除しました"));
+});
+
+test("サーバー側の削除に失敗したらローカルのコピーは残し、失敗を伝える", async () => {
+  // 手元だけ消える「消えたように見える」状態を作らない。
+  showWarningMessage.mockResolvedValueOnce("削除する");
+  deleteServerLearningData.mockResolvedValueOnce({ ok: false, reason: "HTTP 500" });
+  getConfiguration.mockReturnValue({
+    get: (key: string, fallback?: string) =>
+      key === "api.baseUrl" ? "https://api.example.com" : fallback,
+  });
+  loadProfile.mockReturnValueOnce({ events: [], mastery: {} });
+
+  const context = createExtensionContext(true);
+  await context.globalState.update(LEARNER_PROFILE_KEY, {
+    version: 1,
+    events: [{}],
+    mastery: {},
+  });
+  activate(context as never);
+
+  await registeredCommands.get("gakushuSochi.deleteLearningData")?.();
+
+  expect(context.globalState.get(LEARNER_PROFILE_KEY)).toBeDefined();
+  expect(showErrorMessage).toHaveBeenCalledWith(expect.stringContaining("削除できませんでした"));
+});
+
+test("削除の確認でキャンセルしたらサーバーもローカルも触らない", async () => {
+  showWarningMessage.mockResolvedValueOnce(undefined);
+  loadProfile.mockReturnValueOnce({ events: [], mastery: {} });
+
+  const context = createExtensionContext(true);
+  await context.globalState.update(LEARNER_PROFILE_KEY, {
+    version: 1,
+    events: [{}],
+    mastery: {},
+  });
+  activate(context as never);
+
+  await registeredCommands.get("gakushuSochi.deleteLearningData")?.();
+
+  expect(deleteServerLearningData).not.toHaveBeenCalled();
+  expect(context.globalState.get(LEARNER_PROFILE_KEY)).toBeDefined();
+});
+
+test("他端末がサーバー側を削除したら、同期応答の削除時刻でローカルも消える", async () => {
+  // 削除を呼んだのは別の端末。この端末は次回の同期で削除時刻を受け取り、
+  // ローカルのコピーを消す。
+  collectFromEditor.mockResolvedValueOnce(CONTEXT);
+  loadProfile.mockReturnValueOnce(createEmptyProfile("2026-09-21T00:00:00.000Z"));
+  recordEvent.mockImplementation(async (_context, profile: LearnerProfile, event: LearningEvent) =>
+    applyEvent(profile, event),
+  );
+  getOrCreateClientId.mockResolvedValueOnce("client-1");
+  getConfiguration.mockReturnValue({
+    get: (key: string, fallback?: string) =>
+      key === "api.baseUrl" ? "https://api.example.com" : fallback,
+  });
+  syncEvent.mockResolvedValueOnce({
+    ok: true,
+    status: "accepted",
+    historyResetAtMs: 5_000,
+    droppedByReset: false,
+  });
+
+  const context = createExtensionContext(true);
+  await context.globalState.update(LEARNER_PROFILE_KEY, {
+    version: 1,
+    events: [{}],
+    mastery: {},
+  });
+  activate(context as never);
+
+  await askAboutSelection();
+
+  // 削除への追従が記録され、コピーは消えている。
+  expect(context.globalState.get(APPLIED_RESET_KEY)).toBe(5_000);
+  expect(context.globalState.get(LEARNER_PROFILE_KEY)).toBeUndefined();
+  // 直前に受理されたイベントは削除の後にサーバーへ書かれているため、
+  // 消したあとの空のプロファイルへ記録し直して齟齬しないようにする。
+  const lastCall = recordEvent.mock.calls.at(-1);
+  expect((lastCall?.[1] as LearnerProfile).events).toEqual([]);
+});
+
+test("削除境界に吞まれたイベントは、追従しても記録し直さない", async () => {
+  // droppedByReset のイベントはサーバーへ保存されていない。追従後に
+  // 記録し直すと「サーバーが削除境界の内側に倒したイベント」が
+  // ローカルにだけ復活する（Issue #124 レビュー）。
+  collectFromEditor.mockResolvedValueOnce(CONTEXT);
+  loadProfile.mockReturnValueOnce(createEmptyProfile("2026-09-21T00:00:00.000Z"));
+  recordEvent.mockImplementation(async (_context, profile: LearnerProfile, event: LearningEvent) =>
+    applyEvent(profile, event),
+  );
+  getOrCreateClientId.mockResolvedValueOnce("client-1");
+  getConfiguration.mockReturnValue({
+    get: (key: string, fallback?: string) =>
+      key === "api.baseUrl" ? "https://api.example.com" : fallback,
+  });
+  syncEvent.mockResolvedValueOnce({
+    ok: true,
+    status: "accepted",
+    historyResetAtMs: 5_000,
+    droppedByReset: true,
+  });
+
+  const context = createExtensionContext(true);
+  activate(context as never);
+
+  await askAboutSelection();
+
+  // 削除への追従自体は行われる。
+  expect(context.globalState.get(APPLIED_RESET_KEY)).toBe(5_000);
+  // recordEvent は persistEvent 冒頭の1回だけ。追従後の記録し直しは無い。
+  expect(recordEvent).toHaveBeenCalledTimes(1);
+});
+
+test("削除の実行中にコマンドを再度呼んでも二重には走らない", async () => {
+  // RULE-007: 実行中の再入は状態で止める。
+  showWarningMessage.mockResolvedValue("削除する");
+  let resolveDelete: ((outcome: unknown) => void) | undefined;
+  deleteServerLearningData.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        resolveDelete = resolve;
+      }),
+  );
+  getConfiguration.mockReturnValue({
+    get: (key: string, fallback?: string) =>
+      key === "api.baseUrl" ? "https://api.example.com" : fallback,
+  });
+  loadProfile.mockReturnValueOnce({ events: [], mastery: {} });
+
+  const context = createExtensionContext(true);
+  activate(context as never);
+
+  const command = registeredCommands.get("gakushuSochi.deleteLearningData");
+  const first = command?.();
+  // 1回目がサーバー削除の応答を待っている間に2回目を呼ぶ。
+  const second = command?.();
+  await second;
+
+  expect(deleteServerLearningData).toHaveBeenCalledTimes(1);
+  expect(showInformationMessage).toHaveBeenCalledWith(expect.stringContaining("実行中"));
+
+  resolveDelete?.({ ok: true, deletedCount: 0, resetAtMs: 5_000 });
+  await first;
 });

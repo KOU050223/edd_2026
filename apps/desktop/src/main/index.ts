@@ -514,6 +514,9 @@ async function askManagedAI(
       model: settings.model,
       temperature: settings.temperature,
       maxTokens: settings.maxTokens,
+      // 空文字は送らない。サーバーは省略と空文字を同じ「未設定」に正規化するが、
+      // 送る側でも未設定はキー自体を落としておく。
+      ...(settings.persona.trim() ? { persona: settings.persona.trim() } : {}),
     }),
   });
   if (!response.ok || !response.body) {

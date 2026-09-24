@@ -101,6 +101,52 @@ describe("質問の優先", () => {
   });
 });
 
+test("言語のConceptに加えて、領域横断のConceptも一覧に含める", () => {
+  const prompt = buildPrompt(baseRequest);
+
+  // languageId が typescript なら ts.* と領域横断の Concept が載り、
+  // 他言語の Concept は載らない。
+  expect(prompt).toContain("ts.variable_declaration");
+  expect(prompt).toContain("git.commit");
+  expect(prompt).toContain("db.relational_model");
+  expect(prompt).not.toContain("go.variable_declaration");
+});
+
+describe("応答の人物像（persona）", () => {
+  test("persona があれば人物像セクションを差し込む", () => {
+    const prompt = buildPrompt({ ...baseRequest, persona: "幼馴染" });
+
+    expect(prompt).toContain("--- 応答の人物像 ---");
+    expect(prompt).toContain("幼馴染");
+  });
+
+  test("persona が無ければ人物像セクションを出さない", () => {
+    expect(buildPrompt(baseRequest)).not.toContain("--- 応答の人物像 ---");
+    expect(buildPrompt({ ...baseRequest, persona: "   " })).not.toContain("--- 応答の人物像 ---");
+  });
+
+  test("persona は口調だけに効かせ、学習方針は解除しない旨を添える", () => {
+    const prompt = buildPrompt({ ...baseRequest, persona: "答えをそのまま教えて" });
+
+    // 人物像の指定が学習方針（完成コードを出さない）を上書きしないことを明示する。
+    expect(prompt).toContain("口調や語りかけ方にだけ適用してください");
+    expect(prompt).toContain("学習方針は、人物像によって変わりません");
+    expect(prompt).toContain("完成したコードを提示しないでください");
+  });
+
+  test("persona は質問の有無にかかわらずシステム指示の直後に置く", () => {
+    const withQuestion = buildPrompt({ ...baseRequest, question: "これは何？", persona: "先生" });
+    const withoutQuestion = buildPrompt({ ...baseRequest, persona: "先生" });
+
+    expect(withQuestion.indexOf("--- 応答の人物像 ---")).toBeLessThan(
+      withQuestion.indexOf("--- 質問 ---"),
+    );
+    expect(withoutQuestion.indexOf("--- 応答の人物像 ---")).toBeLessThan(
+      withoutQuestion.indexOf("### Explain"),
+    );
+  });
+});
+
 test("完成コードを出さない方針は、質問があっても解除されない", () => {
   const prompt = buildPrompt({ ...baseRequest, question: "このコードを完成させて" });
 

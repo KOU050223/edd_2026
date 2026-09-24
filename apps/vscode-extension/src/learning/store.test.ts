@@ -4,9 +4,12 @@ vi.mock("vscode", () => ({}));
 
 import { createEmptyProfile, type LearnerProfile, type LearningEvent } from "@gakushu-sochi/domain";
 import {
+  clearLocalLearningData,
+  getAppliedHistoryResetAtMs,
   getOrCreateClientId,
   loadExplainedErrors,
   loadProfile,
+  markHistoryResetApplied,
   recordEvent,
   saveExplainedErrors,
 } from "./store";
@@ -313,4 +316,71 @@ test("解説済みエラーの保存に失敗しても例外を外へ出さず�
   await saveExplainedErrors(context, {}, onError);
 
   expect(onError).toHaveBeenCalledWith(failure);
+});
+
+// --- #124: ローカルの学習データコピーの削除 -------------------------------------
+
+const CONSENT_KEY = "gakushuSochi.consent";
+const APPLIED_RESET_KEY = "gakushuSochi.appliedHistoryResetAtMs";
+
+test("学習データのコピーは全キー消え、学習データでないキーは残る", async () => {
+  const context = mutableContext({
+    [CURRENT_KEY]: profileWith("go.defer"),
+    [LEGACY_KEY]: profileWith("go.slice"),
+    [EXPLAINED_ERRORS_KEY]: { "code:ts:2345": { explainedAt: "x", conceptIds: [] } },
+    // 学習データではないもの。clientId は端末の識別子、同意は設定の記録、
+    // appliedHistoryResetAtMs は同期状態。これらは削除の対象外（Issue #124）。
+    [CLIENT_ID_KEY]: "client-1",
+    [CONSENT_KEY]: { version: 3, grantedAt: "2026-09-21T00:00:00.000Z" },
+    [APPLIED_RESET_KEY]: 1_000,
+  });
+
+  await clearLocalLearningData(context);
+
+  expect(context.globalState.get(CURRENT_KEY)).toBeUndefined();
+  expect(context.globalState.get(LEGACY_KEY)).toBeUndefined();
+  expect(context.globalState.get(EXPLAINED_ERRORS_KEY)).toBeUndefined();
+  expect(context.globalState.get(CLIENT_ID_KEY)).toBe("client-1");
+  expect(context.globalState.get(CONSENT_KEY)).toBeDefined();
+  expect(context.globalState.get(APPLIED_RESET_KEY)).toBe(1_000);
+});
+
+test("一部のキーの削除に失敗しても残りは消し、失敗を投げる", async () => {
+  // 「消せた」と伝えるのは全部消えたときだけ。失敗を握りつぶすと、
+  // 消えたつもりのコピーが残る（RULE-004）。
+  const store: Record<string, unknown> = {
+    [CURRENT_KEY]: profileWith("go.defer"),
+    [EXPLAINED_ERRORS_KEY]: {},
+  };
+  const context = {
+    globalState: {
+      get: (key: string) => store[key],
+      update: async (key: string, value: unknown) => {
+        if (key === CURRENT_KEY) throw new Error("write failed");
+        store[key] = value;
+      },
+    },
+  } as unknown as vscode.ExtensionContext;
+
+  await expect(clearLocalLearningData(context)).rejects.toThrow("学習データの削除に失敗");
+
+  expect(store[EXPLAINED_ERRORS_KEY]).toBeUndefined();
+});
+
+test("適用済みの削除時刻は無ければ0、壊れていても0を返す", () => {
+  // 0 に丸めると「実際より古い」と判定される方向にだけ倒れる。
+  // 起きうるのは既に空のコピーをもう一度消す冗長な追従だけである。
+  expect(getAppliedHistoryResetAtMs(contextWith({}))).toBe(0);
+  expect(getAppliedHistoryResetAtMs(contextWith({ [APPLIED_RESET_KEY]: "broken" }))).toBe(0);
+});
+
+test("適用済みの削除時刻は記録でき、古い値で巻き戻らない", async () => {
+  // 遅れて届いた古い削除応答で境界を後退させない。
+  const context = mutableContext({ [APPLIED_RESET_KEY]: 2_000 });
+
+  await markHistoryResetApplied(context, 1_500);
+  expect(getAppliedHistoryResetAtMs(context)).toBe(2_000);
+
+  await markHistoryResetApplied(context, 3_000);
+  expect(getAppliedHistoryResetAtMs(context)).toBe(3_000);
 });

@@ -12,7 +12,7 @@
 
 import * as vscode from "vscode";
 import type { AIProvider } from "./provider";
-import { buildPrompt } from "./prompt";
+import { buildPrompt, knownConceptsFor } from "./prompt";
 import { MAX_HISTORY_TURNS, parseAnswer } from "./answer";
 import { buildNoModelGuidance, selectModel } from "./model-selection";
 import {
@@ -140,7 +140,12 @@ export class VSCodeLMProvider implements AIProvider {
 
       this.debug(`--- AIの生の応答（model: ${model.id}） ---\n${raw}`);
 
-      const parsed = parseAnswer(raw);
+      // プロンプトへ載せた一覧と同じ集合で受理する。モデルが指示を外れて
+      // 一覧に無い（実在する他言語の）ID を返しても、学習イベントへ混入させない。
+      const parsed = parseAnswer(
+        raw,
+        new Set(knownConceptsFor(request).map((concept) => concept.id)),
+      );
 
       this.debug(
         `--- Concept抽出結果 ---\nconceptIds: ${JSON.stringify(parsed.conceptIds)}\nresolution: ${String(parsed.resolution)}`,

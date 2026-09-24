@@ -10,8 +10,10 @@ import type { AuthVariables } from "../auth/middleware.js";
 import { stubAuth } from "../auth/test-auth.js";
 import {
   createInMemoryRepositoryStore,
+  InMemoryAuditLogRepository,
   InMemoryIdentityRepository,
   InMemoryLearningEventRepository,
+  type InMemoryRepositoryStore,
 } from "../repository/memory.js";
 import type { LearningProfileResponse } from "../contract/learning-profile.js";
 import type { SyncResponse } from "../contract/learning-event.js";
@@ -19,6 +21,7 @@ import { createLearningDataRoute, type DeleteLearningEventsResponse } from "./le
 import { createLearningEventsRoute } from "./learning-events.js";
 import { createLearningProfileRoute } from "./learning-profile.js";
 
+let store: InMemoryRepositoryStore;
 let identity: InMemoryIdentityRepository;
 let events: InMemoryLearningEventRepository;
 /** 現在時刻（epoch ミリ秒）。テストの中で進めて、削除の前後を作る。 */
@@ -35,7 +38,7 @@ const TOKENS = { "token-a": "user-a", "token-b": "user-b" };
 beforeEach(() => {
   // D1 と同じく1つのストアを共有させる。退会の CASCADE と同じで、
   // 片方だけ新しく作るとテスト実装だけが実際と違う振る舞いになる。
-  const store = createInMemoryRepositoryStore();
+  store = createInMemoryRepositoryStore();
   identity = new InMemoryIdentityRepository(store);
   events = new InMemoryLearningEventRepository(store);
   clockMs = 1_000;
@@ -48,6 +51,7 @@ beforeEach(() => {
     createLearningDataRoute(() => ({
       identity,
       events,
+      audit: new InMemoryAuditLogRepository(store),
       nowIso: () => NOW,
       nowMs: () => clockMs,
     })),
@@ -142,13 +146,18 @@ test("他人のイベントはエクスポートに含まれない", async () =>
   expect(Object.keys(body.mastery)).toEqual(["go.defer"]);
 });
 
-test("削除は自分のイベントを全件消し、件数を返す", async () => {
+test("削除は自分のイベントを全件消し、件数と削除時刻を返す", async () => {
   await seed("user-a", [event({ id: "e1" }), event({ id: "e2" })]);
 
   const res = await request("/v1/learning-events", "token-a", "DELETE");
 
   expect(res.status).toBe(200);
-  expect((await res.json()) as DeleteLearningEventsResponse).toEqual({ deletedCount: 2 });
+  // resetAtMs は呼んだ端末が「適用済みの削除時刻」として記憶し、
+  // 自分が呼んだ削除を同期応答で再度処理しないためのもの（Issue #124）。
+  expect((await res.json()) as DeleteLearningEventsResponse).toEqual({
+    deletedCount: 2,
+    resetAtMs: 1_000,
+  });
   expect(await events.countByUser("user-a")).toBe(0);
 });
 
@@ -160,7 +169,81 @@ test("削除を再実行しても失敗しない", async () => {
   const res = await request("/v1/learning-events", "token-a", "DELETE");
 
   expect(res.status).toBe(200);
-  expect((await res.json()) as DeleteLearningEventsResponse).toEqual({ deletedCount: 0 });
+  expect((await res.json()) as DeleteLearningEventsResponse).toEqual({
+    deletedCount: 0,
+    resetAtMs: 1_000,
+  });
+});
+
+test("削除を呼んでいない端末は、同期応答の削除時刻で削除を知る", async () => {
+  // 削除を呼んだ端末以外は DELETE を受け取る経路が無い。同期の応答に
+  // 削除時刻を載せて、次回の同期でローカルのコピーを消せるようにする（Issue #124）。
+  const res = await sync("token-a", [event({ id: "before-delete" })]);
+  expect(((await res.json()) as SyncResponse).historyResetAtMs).toBeNull();
+
+  await request("/v1/learning-events", "token-a", "DELETE");
+  clockMs += 1;
+
+  const after = await sync("token-a", [event({ id: "after-delete" })]);
+  expect(((await after.json()) as SyncResponse).historyResetAtMs).toBe(1_000);
+});
+
+test("エクスポートは監査ログに記録される", async () => {
+  await seed("user-a", [event({ id: "e1" }), event({ id: "e2" })]);
+
+  await request("/v1/learning-events:export", "token-a");
+
+  expect(store.auditLog).toEqual([
+    {
+      userId: "user-a",
+      action: "learning_events.exported",
+      occurredAtMs: clockMs,
+      detail: { eventCount: 2 },
+    },
+  ]);
+});
+
+test("一度も同期していない利用者のエクスポートも監査ログに記録される", async () => {
+  // audit_log.user_id は users(id) を参照する。users 行が無いまま記録しようと
+  // すると D1 では外部キー違反で落ちるため、ルート側が先に行を用意する。
+  const res = await request("/v1/learning-events:export", "token-a");
+
+  expect(res.status).toBe(200);
+  expect(identity.users.has("user-a")).toBe(true);
+  expect(store.auditLog).toEqual([
+    {
+      userId: "user-a",
+      action: "learning_events.exported",
+      occurredAtMs: clockMs,
+      detail: { eventCount: 0 },
+    },
+  ]);
+});
+
+test("削除は監査ログに件数とともに記録される", async () => {
+  await seed("user-a", [event({ id: "e1" }), event({ id: "e2" })]);
+
+  await request("/v1/learning-events", "token-a", "DELETE");
+
+  expect(store.auditLog).toEqual([
+    {
+      userId: "user-a",
+      action: "learning_events.deleted",
+      occurredAtMs: clockMs,
+      detail: { deletedCount: 2 },
+    },
+  ]);
+});
+
+test("監査ログは操作した本人の行として記録される", async () => {
+  await seed("user-a", [event({ id: "a1" })]);
+  await seed("user-b", [event({ id: "b1" })]);
+
+  await request("/v1/learning-events", "token-b", "DELETE");
+
+  // user-a の履歴は残り、記録されるのは user-b の操作だけ。
+  expect(await events.countByUser("user-a")).toBe(1);
+  expect(store.auditLog.map((entry) => entry.userId)).toEqual(["user-b"]);
 });
 
 test("削除後、learning-profile の習熟度から消したイベントの寄与が消える", async () => {
@@ -191,7 +274,10 @@ test("削除しても他人のイベントと習熟度は残る", async () => {
 
   const res = await request("/v1/learning-events", "token-a", "DELETE");
 
-  expect((await res.json()) as DeleteLearningEventsResponse).toEqual({ deletedCount: 1 });
+  expect((await res.json()) as DeleteLearningEventsResponse).toEqual({
+    deletedCount: 1,
+    resetAtMs: 1_000,
+  });
   expect(await events.countByUser("user-b")).toBe(2);
   expect(await (await request("/v1/learning-profile", "token-b")).json()).toEqual(beforeB);
 });
@@ -228,9 +314,11 @@ test("削除より前に受け取った同期は、書き込みが削除の後�
 
   // 受理はする。受理したうえで削除に含まれた、という扱い。
   // 重複と答えると、既に保存されていたかのように見える。
+  // droppedByReset で「受理したが書かなかった」を区別する。クライアントは
+  // 追従後にこのイベントをローカルへ記録し直さない（Issue #124）。
   expect(res.status).toBe(200);
   expect(((await res.json()) as SyncResponse).results).toEqual([
-    { index: 0, id: "in-flight", status: "accepted" },
+    { index: 0, id: "in-flight", status: "accepted", droppedByReset: true },
   ]);
   expect(await events.countByUser("user-a")).toBe(0);
 });
@@ -239,13 +327,32 @@ test("まだ一度も同期していない利用者の削除も、並行する�
   // users 行が無いからといって削除時刻の記録を省くと、並行して走っている
   // 初回の同期が削除の後に書き込む。
   const res = await request("/v1/learning-events", "token-a", "DELETE");
-  expect((await res.json()) as DeleteLearningEventsResponse).toEqual({ deletedCount: 0 });
+  expect((await res.json()) as DeleteLearningEventsResponse).toEqual({
+    deletedCount: 0,
+    resetAtMs: 1_000,
+  });
 
   // 削除と同じ時刻に受け取ったイベントは境界の内側（書かない側）に倒す。
   await seed("user-a", [event({ id: "same-ms" })]);
 
   expect(await events.countByUser("user-a")).toBe(0);
   expect(identity.users.has("user-a")).toBe(true);
+});
+
+test("削除応答の削除時刻は、巻き戻らなかった記録後の実効値を返す", async () => {
+  // deleteByUser は既存の削除時刻を巻き戻さない。時計の逆行などで
+  // 既存値のほうが新しい場合、応答も新しい値を返さないと、呼んだ端末が
+  // 古い「適用済み」を記録して次回同期で自分の削除へ二度追従する（Issue #124）。
+  await events.deleteByUser("user-a", 2_000);
+  clockMs = 1_500;
+
+  const res = await request("/v1/learning-events", "token-a", "DELETE");
+
+  expect(res.status).toBe(200);
+  expect((await res.json()) as DeleteLearningEventsResponse).toEqual({
+    deletedCount: 0,
+    resetAtMs: 2_000,
+  });
 });
 
 test("削除時刻は巻き戻らない", async () => {
@@ -270,11 +377,12 @@ test("削除しても他人の同期は塞がない", async () => {
 test.each([
   ["GET", "/v1/learning-events:export"],
   ["DELETE", "/v1/learning-events"],
-])("%s %s は認証が無ければ 401 を返し、何も消さない", async (method, path) => {
+])("%s %s は認証が無ければ 401 を返し、何も消さず監査ログも残さない", async (method, path) => {
   await seed("user-a", [event({ id: "e1" })]);
 
   const res = await app.request(path, { method }, ENV);
 
   expect(res.status).toBe(401);
   expect(await events.countByUser("user-a")).toBe(1);
+  expect(store.auditLog).toEqual([]);
 });

@@ -11,6 +11,8 @@ import type { LearningEvent } from "@gakushu-sochi/domain";
 import { ACCOUNT_DELETION_TOMBSTONE_TTL_MS } from "./types.js";
 import type {
   AppendResult,
+  AuditLogEntry,
+  AuditLogRepository,
   IdentityRepository,
   LearningEventRepository,
   StoredEventInput,
@@ -23,6 +25,8 @@ export interface InMemoryRepositoryStore {
   readonly deletingUsers: Map<string, number>;
   /** userId -> 最後に履歴を削除した時刻。D1 の learning_history_resets に対応する。 */
   readonly historyResets: Map<string, number>;
+  /** D1 の audit_log に対応する。追記のみ。 */
+  readonly auditLog: AuditLogEntry[];
 }
 
 export function createInMemoryRepositoryStore(): InMemoryRepositoryStore {
@@ -32,6 +36,7 @@ export function createInMemoryRepositoryStore(): InMemoryRepositoryStore {
     eventsByUser: new Map(),
     deletingUsers: new Map(),
     historyResets: new Map(),
+    auditLog: [],
   };
 }
 
@@ -62,14 +67,14 @@ export class InMemoryLearningEventRepository implements LearningEventRepository 
     const results = inputs.map(({ event, receivedAtMs }) => {
       // 履歴の削除より前に受け取ったイベントは書かず、受理として返す（D1 実装と同じ）。
       if (resetAtMs !== undefined && resetAtMs >= receivedAtMs) {
-        return { id: event.id, duplicate: false };
+        return { id: event.id, duplicate: false, droppedByReset: true };
       }
       if (events.has(event.id)) {
         // 既存を上書きしない。イベントは追記のみで、あとから書き換えない。
-        return { id: event.id, duplicate: true };
+        return { id: event.id, duplicate: true, droppedByReset: false };
       }
       events.set(event.id, event);
-      return { id: event.id, duplicate: false };
+      return { id: event.id, duplicate: false, droppedByReset: false };
     });
 
     return Promise.resolve(results);
@@ -97,6 +102,10 @@ export class InMemoryLearningEventRepository implements LearningEventRepository 
     const count = this.byUser.get(userId)?.size ?? 0;
     this.byUser.delete(userId);
     return Promise.resolve(count);
+  }
+
+  latestResetAtMs(userId: string): Promise<number | null> {
+    return Promise.resolve(this.store.historyResets.get(userId) ?? null);
   }
 
   deleteUser(userId: string): void {
@@ -181,6 +190,13 @@ export class InMemoryIdentityRepository implements IdentityRepository {
     this.devicesByUser.delete(userId);
     this.store.eventsByUser.delete(userId);
     this.store.historyResets.delete(userId);
+    // D1 の audit_log は users(id) を ON DELETE CASCADE で参照している。
+    // 退会で監査ログも消えるという実際の振る舞いに合わせる。
+    for (let i = this.store.auditLog.length - 1; i >= 0; i--) {
+      if (this.store.auditLog[i]?.userId === userId) {
+        this.store.auditLog.splice(i, 1);
+      }
+    }
     return Promise.resolve();
   }
 
@@ -196,5 +212,20 @@ export class InMemoryIdentityRepository implements IdentityRepository {
       total += devices.size;
     }
     return total;
+  }
+}
+
+/**
+ * `AuditLogRepository` のインメモリ実装。テスト用。
+ *
+ * 記録はストアの `auditLog` に追記される。テストはそこを直接読んで
+ * 「何が記録されたか」を確かめる。
+ */
+export class InMemoryAuditLogRepository implements AuditLogRepository {
+  constructor(private readonly store = createInMemoryRepositoryStore()) {}
+
+  record(entry: AuditLogEntry): Promise<void> {
+    this.store.auditLog.push(entry);
+    return Promise.resolve();
   }
 }

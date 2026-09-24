@@ -60,6 +60,14 @@ test("APIの送信先設定をワークスペースから上書きできない",
   );
 });
 
+test("人格設定をワークスペースから上書きできない", () => {
+  // persona は AI へ送るプロンプトへそのまま載る。開いたリポジトリの
+  // .vscode/settings.json が人物像を仕込める状態にしない（RULE-006 の発想）。
+  expect(manifest.contributes.configuration.properties["gakushuSochi.ai.persona"]?.scope).toBe(
+    "application",
+  );
+});
+
 test("AI の送信経路と BYOK の送信先をワークスペースから上書きできない", () => {
   // 経路・提供元・送信先 URL は、コードと API キーがどこへ出るかを左右する。
   // ワークスペース設定で書き換えられると、開いたリポジトリが送信先を
@@ -111,6 +119,19 @@ test("同意の状態をワークスペース設定から書き換えられな�
     key.toLowerCase().includes("consent"),
   );
   expect(consentSettings).toEqual([]);
+});
+
+test("学習データの削除を利用者がコマンドから実行できる", () => {
+  // #124: サーバー側の削除とローカルコピーの削除をまとめて行う入口。
+  // キーバインドは割り当てない。誤って発火する操作ではないため。
+  expect(manifest.contributes.commands).toEqual(
+    expect.arrayContaining([
+      {
+        command: "gakushuSochi.deleteLearningData",
+        title: "Gakushu Sochi: 学習データを削除する",
+      },
+    ]),
+  );
 });
 
 test("キーボードショートカット設定への導線をコマンドから辿れる", () => {

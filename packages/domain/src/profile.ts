@@ -11,9 +11,11 @@
 // ---------------------------------------------------------------------------
 
 /**
- * 学習概念の識別子。`<language>.<concept>` 形式の文字列。
+ * 学習概念の識別子。`<prefix>.<concept>` 形式の文字列。
+ * prefix は言語（`go` / `ts` / `python` …）か、言語を横断する領域
+ * （`git` / `design` / `db` / `http`）を表す。
  *
- * 例: `go.pointer_receiver` / `go.slice_append`
+ * 例: `go.pointer_receiver` / `ts.type_narrowing` / `git.rebase`
  *
  * literal union にはしない。union にすると未登録の Concept を扱うコードが
  * コンパイルできず、Concept を追加するたびにこのファイルが全 PR の衝突点になる。
@@ -21,7 +23,7 @@
  */
 export type ConceptId = string;
 
-/** {@link ConceptId} の形式。小文字英数の言語プレフィックス + `.` + 小文字英数とアンダースコア。 */
+/** {@link ConceptId} の形式。小文字英数の領域プレフィックス + `.` + 小文字英数とアンダースコア。 */
 export const CONCEPT_ID_PATTERN = /^[a-z0-9]+\.[a-z0-9_]+$/;
 
 /** 文字列が {@link ConceptId} の命名規則を満たすかを判定する。 */
@@ -52,7 +54,7 @@ export interface Concept {
   id: ConceptId;
   /** 表示名。例: `ポインタレシーバ` */
   label: string;
-  /** `id` のプレフィックスと一致する言語識別子。例: `go` */
+  /** `id` のプレフィックスと一致する領域識別子。例: `go` / `git`（プログラミング言語とは限らない） */
   language: string;
   /** 1〜2文の説明。UI での補足表示に使う。 */
   summary?: string;

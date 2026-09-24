@@ -37,6 +37,16 @@ export interface StoredEventInput {
 export interface AppendResult {
   id: string;
   duplicate: boolean;
+  /**
+   * 履歴の削除時刻（`learning_history_resets`）以前に受け取ったため、
+   * 受理したが書かなかったイベントなら true。
+   *
+   * 「受理」には「保存した」と「削除に含まれた」の2通りがある。
+   * クライアントはこの区別で、削除への追従後にそのイベントをローカルへ
+   * 記録し直すかを決める（Issue #124）。区別が無いと、サーバーが境界の
+   * 内側に倒したイベントがローカルにだけ復活する。
+   */
+  droppedByReset: boolean;
 }
 
 /**
@@ -122,6 +132,13 @@ export interface LearningEventRepository {
    * @returns 消した件数。0件でも成功とする（再実行で失敗させない）。
    */
   deleteByUser(userId: string, resetAtMs: number): Promise<number>;
+
+  /**
+   * 最後に学習履歴を削除した時刻（epoch ミリ秒）。削除されていなければ `null`。
+   *
+   * 同期応答へ載せて、削除を呼んでいない他端末へ伝えるために使う（Issue #124）。
+   */
+  latestResetAtMs(userId: string): Promise<number | null>;
 }
 
 export interface MasteryOverride {
@@ -216,4 +233,41 @@ export interface AiUsageRepository {
     tokens: number;
     updatedAt: string;
   }): Promise<void>;
+}
+
+/**
+ * 監査ログへ記録する操作（Issue #122）。
+ *
+ * 対象は利用者の不可逆な操作だけにする。学習イベント本体は `learning_events` が
+ * 正本なので二重に持たない。対象の増減は docs/architecture.md の
+ * 「監視・監査ログ・障害時の再送」と一緒に変える。
+ */
+export type AuditAction = "learning_events.exported" | "learning_events.deleted";
+
+/** 監査ログの1件。 */
+export interface AuditLogEntry {
+  /** 誰が。認証済みの userId（Auth0 の sub）。 */
+  userId: string;
+  /** 何をしたか。 */
+  action: AuditAction;
+  /** いつ。サーバーが処理した時刻（epoch ミリ秒）。 */
+  occurredAtMs: number;
+  /** 操作の補足（消した件数など）。JSON 化して保存する。 */
+  detail?: Record<string, unknown>;
+}
+
+/**
+ * 監査ログの永続化（Issue #122）。
+ *
+ * 追記のみで、あとから書き換えない。読み出す経路は持たない。
+ * 運用者が D1 を直接クエリして読む（`wrangler d1 execute`）。
+ */
+export interface AuditLogRepository {
+  /**
+   * 操作を1件記録する。
+   *
+   * `user_id` は users(id) を参照するため、呼び出し前にユーザー行が必要。
+   * 退会すると users 行と一緒に消える（ON DELETE CASCADE）。
+   */
+  record(entry: AuditLogEntry): Promise<void>;
 }

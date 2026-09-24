@@ -151,6 +151,16 @@ test("空のイベント配列でも成功し、登録は行わない", async ()
   expect(identity.users.size).toBe(0);
 });
 
+test("履歴が削除されていなければ、応答の削除時刻はnullを返す", async () => {
+  // historyResetAtMs は DELETE /v1/learning-events を呼んでいない端末が
+  // 削除へ追従するための手がかり（Issue #124）。削除済みかどうかは
+  // learning-data.test.ts 側で確かめる。
+  const res = await sync({ clientId: "client-1", events: [validEvent("e1")] });
+
+  const body = (await res.json()) as SyncResponse;
+  expect(body.historyResetAtMs).toBeNull();
+});
+
 test("エンベロープが不正なら400にする", async () => {
   const res = await sync({ events: [] });
 

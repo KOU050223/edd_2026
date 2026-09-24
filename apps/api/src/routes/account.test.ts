@@ -4,6 +4,7 @@ import { createAuth, type AuthVariables } from "../auth/middleware.js";
 import type { AuthVerifier } from "../auth/verifier.js";
 import {
   createInMemoryRepositoryStore,
+  InMemoryAuditLogRepository,
   InMemoryIdentityRepository,
   InMemoryLearningEventRepository,
 } from "../repository/memory.js";
@@ -29,6 +30,7 @@ function buildDeps(options: { d1Fails?: boolean; idpFails?: boolean } = {}) {
   // ストアを共有させて初めて同じ形になる。片方だけ新しく作ると、
   // 退会後もイベントが残る差分をテストが見逃す。
   const store = createInMemoryRepositoryStore();
+  const audit = new InMemoryAuditLogRepository(store);
   const identity = new InMemoryIdentityRepository(store);
   const events = new InMemoryLearningEventRepository(store);
   const originalStart = identity.startUserDeletion.bind(identity);
@@ -52,7 +54,7 @@ function buildDeps(options: { d1Fails?: boolean; idpFails?: boolean } = {}) {
     },
   };
 
-  return { calls, identity, events, idp };
+  return { calls, store, identity, events, audit, idp };
 }
 
 function buildApp(deps: { identity: InMemoryIdentityRepository; idp: IdentityProviderUsers }) {
@@ -122,6 +124,39 @@ describe("DELETE /v1/me", () => {
     expect(deps.identity.users.has("auth0|user-a")).toBe(false);
     expect(deps.identity.getDevice("auth0|user-a", "client-1")).toBeUndefined();
     expect(await deps.events.countByUser("auth0|user-a")).toBe(0);
+  });
+
+  it("退会で監査ログも一緒に消える", async () => {
+    // audit_log は users(id) を ON DELETE CASCADE で参照している。
+    // 「退会したのに操作の記録だけ残る」は、アカウントごと全データを消す
+    // 方針に反する（docs/architecture.md「監視・監査ログ・障害時の再送」）。
+    const deps = buildDeps();
+    await deps.identity.ensureUser({ userId: "auth0|user-a", nowMs: 0 });
+    await deps.audit.record({
+      userId: "auth0|user-a",
+      action: "learning_events.deleted",
+      occurredAtMs: 0,
+    });
+
+    const response = await request(buildApp(deps));
+
+    expect(response.status).toBe(204);
+    expect(deps.store.auditLog).toEqual([]);
+  });
+
+  it("退会の完了は構造化ログに残す", async () => {
+    // audit_log は users 行と一緒に消えるため、退会そのものの証跡は
+    // Workers のログで追う（docs/architecture.md「監視・監査ログ・障害時の再送」）。
+    const consoleInfo = vi.spyOn(console, "info").mockImplementation(() => {});
+    const deps = buildDeps();
+    deps.identity.users.set("auth0|user-a", { createdAtMs: 0 });
+
+    const response = await request(buildApp(deps));
+
+    expect(response.status).toBe(204);
+    expect(consoleInfo).toHaveBeenCalledWith("account deleted", { userId: "auth0|user-a" });
+
+    consoleInfo.mockRestore();
   });
 
   it("D1 の削除が失敗したら Auth0 のユーザーを消しに行かない", async () => {

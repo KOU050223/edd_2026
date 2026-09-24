@@ -2,6 +2,7 @@ import { beforeEach, expect, test } from "vitest";
 import type { LearningEvent } from "@gakushu-sochi/domain";
 import {
   createInMemoryRepositoryStore,
+  InMemoryAuditLogRepository,
   InMemoryIdentityRepository,
   InMemoryLearningEventRepository,
 } from "./memory.js";
@@ -28,14 +29,14 @@ function input(id: string, occurredAt: string, clientId = "client-1"): StoredEve
 test("新規イベントを受理する", async () => {
   const results = await repo.append("user-a", [input("e1", "2026-09-05T00:00:01.000Z")]);
 
-  expect(results).toEqual([{ id: "e1", duplicate: false }]);
+  expect(results).toEqual([{ id: "e1", duplicate: false, droppedByReset: false }]);
 });
 
 test("同一ユーザーの同じIDは重複として扱い、上書きしない", async () => {
   await repo.append("user-a", [input("e1", "2026-09-05T00:00:01.000Z")]);
   const results = await repo.append("user-a", [input("e1", "2026-09-05T00:00:09.000Z")]);
 
-  expect(results).toEqual([{ id: "e1", duplicate: true }]);
+  expect(results).toEqual([{ id: "e1", duplicate: true, droppedByReset: false }]);
 
   // 追記のみで書き換えないため、後着の再送で内容は変わらない。
   const events = await repo.listByUser("user-a");
@@ -50,7 +51,7 @@ test("別ユーザーの同じIDは衝突しない", async () => {
   await repo.append("user-a", [input("event-1", "2026-09-05T00:00:01.000Z")]);
   const results = await repo.append("user-b", [input("event-1", "2026-09-05T00:00:02.000Z")]);
 
-  expect(results).toEqual([{ id: "event-1", duplicate: false }]);
+  expect(results).toEqual([{ id: "event-1", duplicate: false, droppedByReset: false }]);
   expect(await repo.countByUser("user-a")).toBe(1);
   expect(await repo.countByUser("user-b")).toBe(1);
 });
@@ -65,10 +66,22 @@ test("結果は入力と同じ順序で返る", async () => {
   ]);
 
   expect(results).toEqual([
-    { id: "e1", duplicate: false },
-    { id: "e2", duplicate: true },
-    { id: "e3", duplicate: false },
+    { id: "e1", duplicate: false, droppedByReset: false },
+    { id: "e2", duplicate: true, droppedByReset: false },
+    { id: "e3", duplicate: false, droppedByReset: false },
   ]);
+});
+
+test("削除時刻以前に受け取ったイベントは受理するが書かず、droppedByReset を返す", async () => {
+  // 「受理」には「保存した」と「削除に含まれた」の2通りがある。
+  // クライアントは追従後に記録し直すかをこの区別で決める（Issue #124）。
+  await repo.deleteByUser("user-a", 1_000);
+
+  // input() の receivedAtMs は 0。削除時刻 1_000 より前なので境界の内側。
+  const results = await repo.append("user-a", [input("e1", "2026-09-05T00:00:01.000Z")]);
+
+  expect(results).toEqual([{ id: "e1", duplicate: false, droppedByReset: true }]);
+  expect(await repo.countByUser("user-a")).toBe(0);
 });
 
 test("発生時刻の昇順で読み出す", async () => {
@@ -182,6 +195,26 @@ test("退会でユーザー、端末、学習イベントを削除し、同期�
   await expect(
     identity.ensureUserAndDevice({ userId: "user-a", clientId: "client-1", nowMs: 300 }),
   ).rejects.toThrow("user deletion is in progress");
+});
+
+test("退会で監査ログも消える", async () => {
+  // D1 では audit_log が users(id) を ON DELETE CASCADE で参照している。
+  // 退会した利用者の操作記録が残り続けると「アカウントごと全データを消す」
+  // 方針に反するため、インメモリ実装でも同じ結果になるよう揃える。
+  const store = createInMemoryRepositoryStore();
+  const identity = new InMemoryIdentityRepository(store);
+  const audit = new InMemoryAuditLogRepository(store);
+
+  await identity.ensureUser({ userId: "user-a", nowMs: 100 });
+  await audit.record({
+    userId: "user-a",
+    action: "learning_events.deleted",
+    occurredAtMs: 200,
+    detail: { deletedCount: 3 },
+  });
+  await identity.deleteUser("user-a");
+
+  expect(store.auditLog).toEqual([]);
 });
 
 test("退会マーカーはアクセストークンの有効期間を過ぎると期限切れになる", async () => {

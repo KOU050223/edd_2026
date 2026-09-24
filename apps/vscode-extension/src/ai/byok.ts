@@ -13,7 +13,7 @@
  */
 
 import type { AIProvider } from "./provider";
-import { buildPrompt } from "./prompt";
+import { buildPrompt, knownConceptsFor } from "./prompt";
 import { MAX_HISTORY_TURNS, parseAnswer } from "./answer";
 import type { AIError, AIRequest, AIResponse } from "./types";
 
@@ -429,7 +429,12 @@ export class BYOKProvider implements AIProvider {
 
       this.debug(`--- AIの生の応答（byok: ${vendor}/${model}） ---\n${text}`);
 
-      const parsed = parseAnswer(text);
+      // プロンプトへ載せた一覧と同じ集合で受理する。一覧に無い（実在する
+      // 他言語の）ID を返しても、学習イベントへ混入させない。
+      const parsed = parseAnswer(
+        text,
+        new Set(knownConceptsFor(request).map((concept) => concept.id)),
+      );
 
       this.debug(
         `--- Concept抽出結果 ---\nconceptIds: ${JSON.stringify(parsed.conceptIds)}\nresolution: ${String(parsed.resolution)}`,
