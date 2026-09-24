@@ -215,3 +215,4 @@ Copilot を先頭に置くのは、運営が AI 利用料を負担しない構�
 | 2026-09-21 | 他拡張・VS Code 本体が登録した BYOK モデルが `selectChatModels()` から見えるかは一次情報で確認できず、実機確認を残した。見えない場合は #55 の BYOK provider 実装が必要になる |
 | 2026-09-21 | 送信先が Copilot 以外へ広がるため、同意の文面へ提供元を明記し `CONSENT_NOTICE_VERSION` を 2 → 3 へ上げて取り直す（PR#137 レビュー P1）                                       |
 | 2026-09-21 | 案内は `vscode.version` で書き分ける。`engines.vscode` が `^1.90.0` のため、1.122 未満のホストへ「Copilot 不要」と案内すると空振りする（PR#137 レビュー P2）                 |
+| 2026-09-25 | Desktop の Managed AI 経路と Web の書き込みを文面へ含め、`CONSENT_NOTICE_VERSION` を 3 → 4 へ上げて同意を取り直す（基盤/11 #174）。全クライアントで既存の同意は無効になる    |

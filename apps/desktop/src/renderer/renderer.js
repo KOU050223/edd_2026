@@ -218,6 +218,21 @@ const ask = async () => {
 };
 send.onclick = ask;
 
+const renderConsentStatus = ({ granted, grantedAt }) => {
+  $("consent-status").textContent = granted
+    ? `同意しています（${new Date(grantedAt).toLocaleString("ja-JP")}）`
+    : "同意していません";
+};
+
+$("consent-review").onclick = async () => {
+  try {
+    // 文面の提示と取り消しは main 側のダイアログが担う。ここでは結果の状態だけ反映する。
+    renderConsentStatus(await window.desktop.reviewConsent());
+  } catch (e) {
+    showError(e instanceof Error ? e.message : String(e));
+  }
+};
+
 const openSettings = async () => {
   const s = await window.desktop.getSettings();
   ["api-base-url", "shortcut", "model", "temperature", "max-tokens", "persona"].forEach((id) => {
@@ -226,6 +241,7 @@ const openSettings = async () => {
   $("restore").checked = s.restoreClipboard;
   $("login").checked = s.launchAtLogin;
   setAuthState(s.hasRefreshToken);
+  renderConsentStatus(await window.desktop.getConsentStatus());
   form.hidden = false;
   // モーダルの背後へ Tab で抜けさせない（inert は form の祖先には置けないため兄弟に置く）。
   backdrop.forEach((element) => element.setAttribute("inert", ""));

@@ -484,6 +484,13 @@ footer {
   color: #475569;
   margin-top: 16px;
 }
+/* 同意の文面は改行を持つ長文。pre のままだと横にはみ出すので折り返す。 */
+.consent-detail pre {
+  white-space: pre-wrap;
+  font: inherit;
+  color: #475569;
+  margin: 8px 0 0;
+}
 .settings h2 {
   font-size: 1.1rem;
   margin: 0 0 16px;

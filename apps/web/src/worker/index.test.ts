@@ -1,4 +1,5 @@
 import { expect, test } from "vitest";
+import { CONSENT_NOTICE_VERSION } from "@gakushu-sochi/domain";
 import { createWebApp } from "./index.js";
 import { createSession, readSession } from "./session.js";
 
@@ -681,4 +682,265 @@ test("既定の fetch は Cloudflare Workers のグローバルコンテキス�
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("/consent はセッションが無いと 401 を返す", async () => {
+  const sessions = new MemoryKv();
+  const app = createWebApp({
+    fetch: async () => {
+      throw new Error("must not fetch");
+    },
+  });
+  const env = envWith(sessions);
+
+  const response = await app.request("https://web.example.test/consent", {}, env);
+
+  expect(response.status).toBe(401);
+  await expect(response.json()).resolves.toEqual({ error: "session_expired" });
+});
+
+test("同意を記録すると現在の版と時刻が保存され、読み出せる", async () => {
+  const sessions = new MemoryKv();
+  const token = await createSession(kvOf(sessions), { refreshToken: "rt-1", sub: "auth0|a" });
+  const app = createWebApp({
+    fetch: async () => {
+      throw new Error("must not fetch");
+    },
+    now: () => new Date("2026-09-25T03:00:00.000Z").getTime(),
+  });
+  const env = envWith(sessions);
+  const cookie = `session=${token}`;
+
+  const before = await app.request(
+    "https://web.example.test/consent",
+    { headers: { cookie } },
+    env,
+  );
+  expect(await before.json()).toEqual({ granted: false });
+
+  const granted = await app.request(
+    "https://web.example.test/consent",
+    {
+      method: "PUT",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ version: CONSENT_NOTICE_VERSION }),
+    },
+    env,
+  );
+  expect(granted.status).toBe(200);
+  expect(await granted.json()).toEqual({
+    granted: true,
+    grantedAt: "2026-09-25T03:00:00.000Z",
+  });
+  // セッションではなくユーザーに紐づく。ログアウト・再ログインを跨いでも効く。
+  expect(JSON.parse(sessions.values.get("consent:auth0|a") ?? "")).toEqual({
+    version: CONSENT_NOTICE_VERSION,
+    grantedAt: "2026-09-25T03:00:00.000Z",
+  });
+});
+
+test("見せた文面と違う版への同意は記録しない", async () => {
+  const sessions = new MemoryKv();
+  const token = await createSession(kvOf(sessions), { refreshToken: "rt-1", sub: "auth0|a" });
+  const app = createWebApp({
+    fetch: async () => {
+      throw new Error("must not fetch");
+    },
+  });
+  const env = envWith(sessions);
+  const cookie = `session=${token}`;
+
+  const response = await app.request(
+    "https://web.example.test/consent",
+    {
+      method: "PUT",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ version: CONSENT_NOTICE_VERSION - 1 }),
+    },
+    env,
+  );
+
+  expect(response.status).toBe(409);
+  await expect(response.json()).resolves.toEqual({ error: "consent_notice_outdated" });
+  expect(sessions.values.has("consent:auth0|a")).toBe(false);
+});
+
+test("同意を取り消すと以降の書き込みは止まる", async () => {
+  const sessions = new MemoryKv();
+  const token = await createSession(kvOf(sessions), { refreshToken: "rt-1", sub: "auth0|a" });
+  let apiCalls = 0;
+  const app = createWebApp({
+    fetch: async (input) => {
+      const request = new Request(input);
+      if (request.url.startsWith("https://idp.example.test"))
+        return Response.json({ access_token: "at-1", expires_in: 900 });
+      apiCalls += 1;
+      return Response.json({});
+    },
+  });
+  const env = envWith(sessions);
+  const cookie = `session=${token}`;
+  await app.request(
+    "https://web.example.test/consent",
+    {
+      method: "PUT",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ version: CONSENT_NOTICE_VERSION }),
+    },
+    env,
+  );
+
+  const revoked = await app.request(
+    "https://web.example.test/consent",
+    { method: "DELETE", headers: { cookie } },
+    env,
+  );
+  expect(await revoked.json()).toEqual({ granted: false });
+
+  const write = await app.request(
+    "https://web.example.test/api/v1/user-settings",
+    { method: "PUT", headers: { cookie }, body: "{}" },
+    env,
+  );
+  expect(write.status).toBe(403);
+  expect(apiCalls).toBe(0);
+});
+
+test("同意の記録が無いと /api への書き込みは中継されない", async () => {
+  const sessions = new MemoryKv();
+  const token = await createSession(kvOf(sessions), { refreshToken: "rt-1", sub: "auth0|a" });
+  let apiCalls = 0;
+  const app = createWebApp({
+    fetch: async (input) => {
+      const request = new Request(input);
+      if (request.url.startsWith("https://idp.example.test"))
+        return Response.json({ access_token: "at-1", expires_in: 900 });
+      apiCalls += 1;
+      return Response.json({});
+    },
+  });
+
+  const response = await app.request(
+    "https://web.example.test/api/v1/mastery-overrides",
+    { method: "PUT", headers: { cookie: `session=${token}` }, body: "{}" },
+    envWith(sessions),
+  );
+
+  expect(response.status).toBe(403);
+  await expect(response.json()).resolves.toEqual({ error: "consent_required" });
+  // 上流へも IdP へも出ていない。同意の無い送信は発生しない。
+  expect(apiCalls).toBe(0);
+});
+
+test("同意があれば /api への書き込みは中継される", async () => {
+  const sessions = new MemoryKv();
+  const token = await createSession(kvOf(sessions), { refreshToken: "rt-1", sub: "auth0|a" });
+  const received: string[] = [];
+  const app = createWebApp({
+    fetch: async (input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url.startsWith("https://idp.example.test"))
+        return Response.json({ access_token: "at-1", expires_in: 900 });
+      received.push(url);
+      // 中継元が渡す body は読み切る。読み残すと応答を返しても未消費の
+      // ストリームが残る（実 Worker では upstream が読む役目）。
+      if (init?.body instanceof ReadableStream) await init.body.cancel();
+      return Response.json({ ok: true });
+    },
+  });
+  const env = envWith(sessions);
+  const cookie = `session=${token}`;
+  await app.request(
+    "https://web.example.test/consent",
+    {
+      method: "PUT",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ version: CONSENT_NOTICE_VERSION }),
+    },
+    env,
+  );
+
+  const response = await app.request(
+    "https://web.example.test/api/v1/mastery-overrides",
+    { method: "PUT", headers: { cookie }, body: "{}" },
+    env,
+  );
+
+  expect(response.status).toBe(200);
+  expect(received[0]).toBe("https://api.example.test/v1/mastery-overrides");
+});
+
+test("版が古い・壊れた同意の記録では書き込みを中継しない", async () => {
+  const sessions = new MemoryKv();
+  const token = await createSession(kvOf(sessions), { refreshToken: "rt-1", sub: "auth0|a" });
+  let apiCalls = 0;
+  const app = createWebApp({
+    fetch: async (input) => {
+      const request = new Request(input);
+      if (request.url.startsWith("https://idp.example.test"))
+        return Response.json({ access_token: "at-1", expires_in: 900 });
+      apiCalls += 1;
+      return Response.json({});
+    },
+  });
+  const env = envWith(sessions);
+
+  for (const stored of [
+    JSON.stringify({ version: CONSENT_NOTICE_VERSION - 1, grantedAt: "2026-09-01T00:00:00.000Z" }),
+    "not-json{",
+  ]) {
+    sessions.values.set("consent:auth0|a", stored);
+    const response = await app.request(
+      "https://web.example.test/api/v1/user-settings",
+      { method: "PUT", headers: { cookie: `session=${token}` }, body: "{}" },
+      env,
+    );
+    expect(response.status).toBe(403);
+  }
+  expect(apiCalls).toBe(0);
+});
+
+test("削除は同意が無くても中継される（取り消し後でも消せる）", async () => {
+  const sessions = new MemoryKv();
+  const token = await createSession(kvOf(sessions), { refreshToken: "rt-1", sub: "auth0|a" });
+  const received: string[] = [];
+  const app = createWebApp({
+    fetch: async (input) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url.startsWith("https://idp.example.test"))
+        return Response.json({ access_token: "at-1", expires_in: 900 });
+      received.push(url);
+      return Response.json({ deletedCount: 3, resetAtMs: 0 });
+    },
+  });
+
+  const response = await app.request(
+    "https://web.example.test/api/v1/learning-events",
+    { method: "DELETE", headers: { cookie: `session=${token}` } },
+    envWith(sessions),
+  );
+
+  expect(response.status).toBe(200);
+  expect(received[0]).toBe("https://api.example.test/v1/learning-events");
+});
+
+test("読み取りは同意が無くても中継される", async () => {
+  const sessions = new MemoryKv();
+  const token = await createSession(kvOf(sessions), { refreshToken: "rt-1", sub: "auth0|a" });
+  const app = createWebApp({
+    fetch: async (input) => {
+      const request = new Request(input);
+      if (request.url.startsWith("https://idp.example.test"))
+        return Response.json({ access_token: "at-1", expires_in: 900 });
+      return Response.json({ concepts: [] });
+    },
+  });
+
+  const response = await app.request(
+    "https://web.example.test/api/v1/learning-profile",
+    { headers: { cookie: `session=${token}` } },
+    envWith(sessions),
+  );
+
+  expect(response.status).toBe(200);
 });

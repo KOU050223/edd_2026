@@ -1,6 +1,8 @@
 import { Hono, type Context } from "hono";
 import { HTTPException } from "hono/http-exception";
+import { CONSENT_NOTICE_VERSION } from "@gakushu-sochi/domain";
 import { createAccessTokenProvider, type AccessTokenProvider } from "./access-token.js";
+import { deleteConsent, readConsent, writeConsent } from "./consent.js";
 import {
   buildAuthorizationUrl,
   createPkcePair,
@@ -153,6 +155,8 @@ export function createWebApp(
   }),
 ) {
   const app = new Hono<{ Bindings: WebBindings }>();
+  // テストが時刻を固定できるよう、実時計は注入に置き換えられる（docs/testing-guide.md §6）。
+  const now = deps.now ?? (() => Date.now());
 
   app.onError((error, c) => {
     if (error instanceof HTTPException) return c.json({ error: error.message }, error.status);
@@ -310,12 +314,83 @@ export function createWebApp(
   });
 
   /**
+   * 同意の記録の読み出し（#174）。
+   *
+   * 記録は `consent:{sub}` として KV に置く（worker/consent.ts）。この経路は
+   * `/api/*` の中継ではなく Worker 自身の endpoint で、**同意が無くても
+   * 呼べる必要がある**（同意状態を知る手段が同意で止まると先へ進めない）。
+   */
+  app.get("/consent", async (c) => {
+    const session = await readSession(
+      c.env.SESSIONS,
+      cookieValue(c.req.header("cookie"), "session"),
+    );
+    if (!session) return sessionExpired(c);
+    const record = await readConsent(c.env.SESSIONS, session.sub);
+    return c.json(
+      { granted: record !== undefined, ...(record ? { grantedAt: record.grantedAt } : {}) },
+      200,
+      { "cache-control": "no-store" },
+    );
+  });
+
+  /**
+   * 同意の記録。**利用者が実際に見た文面の版を本文で受け取り**、Worker の版と
+   * 一致するときだけ記録する。古い同梱の文面へ同意した人へ新しい版の同意を
+   * 記録しないためである（同意は「その文面」への合意）。
+   */
+  app.put("/consent", async (c) => {
+    const session = await readSession(
+      c.env.SESSIONS,
+      cookieValue(c.req.header("cookie"), "session"),
+    );
+    if (!session) return sessionExpired(c);
+    const body = (await c.req.json().catch(() => ({}))) as { version?: unknown };
+    if (body.version !== CONSENT_NOTICE_VERSION) {
+      return c.json({ error: "consent_notice_outdated" }, 409, {
+        "cache-control": "no-store",
+      });
+    }
+    const record = await writeConsent(c.env.SESSIONS, session.sub, new Date(now()).toISOString());
+    return c.json({ granted: true, grantedAt: record.grantedAt }, 200, {
+      "cache-control": "no-store",
+    });
+  });
+
+  /**
+   * 同意の取り消し。以降の書き込みは止まる。**既に送ったデータは消えない**
+   * （削除は `DELETE /v1/learning-events` が持つ）。
+   */
+  app.delete("/consent", async (c) => {
+    const session = await readSession(
+      c.env.SESSIONS,
+      cookieValue(c.req.header("cookie"), "session"),
+    );
+    if (!session) return sessionExpired(c);
+    await deleteConsent(c.env.SESSIONS, session.sub);
+    return c.json({ granted: false }, 200, { "cache-control": "no-store" });
+  });
+
+  /**
    * API への中継。**共有トークンではなく、セッションに紐づくユーザーの AT を注入する。**
    */
   app.all("/api/*", async (c) => {
     const sessionToken = cookieValue(c.req.header("cookie"), "session");
     const session = await readSession(c.env.SESSIONS, sessionToken);
     if (!sessionToken || !session) return sessionExpired(c);
+
+    // #174: 書き込み系の要求は、同意の記録があるときだけ上流へ中継する。
+    // 版が古い・壊れた記録は同意なしとして扱う（readConsent の仕様）。
+    // GET/HEAD の閲覧と DELETE は利用者の本文を送らないので対象外。
+    // 特に削除は「同意を取り消したあとにも使える別操作」なので、同意で
+    // 止めると取り消した人が自分のデータを消せなくなる。ログインや
+    // `/consent` 自体など同意の前に必要な経路を止めないためでもある。
+    if (c.req.method !== "GET" && c.req.method !== "HEAD" && c.req.method !== "DELETE") {
+      const consent = await readConsent(c.env.SESSIONS, session.sub);
+      if (!consent) {
+        return c.json({ error: "consent_required" }, 403, { "cache-control": "no-store" });
+      }
+    }
 
     const origin = apiOrigin(c.env.API_ORIGIN);
     const token = await accessTokens.get(c.env.SESSIONS, sessionToken, session, oauthConfig(c.env));
