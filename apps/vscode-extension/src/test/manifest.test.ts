@@ -60,6 +60,41 @@ test("APIの送信先設定をワークスペースから上書きできない",
   );
 });
 
+test("AI の送信経路と BYOK の送信先をワークスペースから上書きできない", () => {
+  // 経路・提供元・送信先 URL は、コードと API キーがどこへ出るかを左右する。
+  // ワークスペース設定で書き換えられると、開いたリポジトリが送信先を
+  // すり替えられる（RULE-006）。
+  for (const key of [
+    "gakushuSochi.ai.provider",
+    "gakushuSochi.byok.vendor",
+    "gakushuSochi.byok.model",
+    "gakushuSochi.byok.baseUrl",
+  ]) {
+    expect(manifest.contributes.configuration.properties[key]?.scope).toBe("machine");
+  }
+});
+
+test("BYOK の API キーを設定・削除するコマンドがある", () => {
+  expect(manifest.contributes.commands).toEqual(
+    expect.arrayContaining([
+      { command: "gakushuSochi.setByokApiKey", title: "Gakushu Sochi: BYOK の API キーを設定する" },
+      {
+        command: "gakushuSochi.clearByokApiKey",
+        title: "Gakushu Sochi: BYOK の API キーを削除する",
+      },
+    ]),
+  );
+});
+
+test("API キーは設定項目として持たない", () => {
+  // キーを contributes.configuration に置くと平文の settings.json に載り、
+  // 設定同期で他のマシンへ配られる。SecretStorage 専用にする（RULE-006）。
+  const secretSettings = Object.keys(manifest.contributes.configuration.properties).filter((key) =>
+    /key|secret|token/i.test(key),
+  );
+  expect(secretSettings).toEqual([]);
+});
+
 test("同意の確認と取り消しを利用者がコマンドから行える", () => {
   expect(manifest.contributes.commands).toEqual(
     expect.arrayContaining([

@@ -3,6 +3,7 @@ import * as vscode from "vscode";
 import type { CodeContext, ConversationTurn, LearningEvent } from "@gakushu-sochi/domain";
 import type { AIProvider } from "./ai/provider";
 import { VSCodeLMProvider } from "./ai/vscodeLm";
+import { BYOKProvider, byokSecretKey, isByokVendor, type ByokVendor } from "./ai/byok";
 import { CONSUMED_CONTEXT_MESSAGE, describePendingContext } from "./chat/context-summary";
 import { openGakushuSochiChat } from "./chat/open";
 import { PendingChatContext } from "./chat/pending-context";
@@ -129,12 +130,60 @@ export function activate(context: vscode.ExtensionContext): void {
       vscode.window.showInformationMessage("Gakushu Sochi からログアウトしました");
     }),
   );
-  // ユーザー自身の Copilot 契約を使って回答を生成する。
+  // ユーザー自身の Copilot 契約を使って回答を生成する既定経路。
   // onDebug: Concept抽出（AI/03 #12）の切り分け用。モデルの生の応答を出力チャンネルへ流す。
-  const provider: AIProvider = new VSCodeLMProvider(
+  const vscodeLmProvider: AIProvider = new VSCodeLMProvider(
     (message) => channel.appendLine(message),
     () => hasConsent(context),
   );
+
+  /**
+   * 質問ごとに、設定で選ばれた経路の provider を返す（AI/04 #55）。
+   *
+   * 設定は質問のたびに読み直す。起動時に読んで持ち回ると、
+   * 経路の切り替えや API キーの設定し直しが次回起動まで効かない。
+   */
+  async function currentProvider(): Promise<AIProvider> {
+    const config = vscode.workspace.getConfiguration("gakushuSochi");
+    const selected = config.get<string>("ai.provider", "vscode-lm");
+
+    if (selected === "vscode-lm") {
+      return vscodeLmProvider;
+    }
+
+    if (selected !== "byok") {
+      // 認識できない経路を黙って Copilot へ落とさない。利用者は別の送信先を
+      // 指定したつもりでいるため、送らずに失敗として見せる（RULE-004）。
+      return {
+        id: "unavailable",
+        ask: async () => ({
+          ok: false as const,
+          error: {
+            reason: "model-unavailable" as const,
+            detail:
+              `gakushuSochi.ai.provider の値 "${selected}" は未対応です。` +
+              "vscode-lm / byok のいずれかを設定してください。",
+          },
+        }),
+      };
+    }
+
+    const vendor = config.get<string>("byok.vendor", "anthropic");
+    // API キーは SecretStorage から読む。設定ファイルへは置かない（RULE-006）。
+    const apiKey = isByokVendor(vendor)
+      ? await context.secrets.get(byokSecretKey(vendor))
+      : undefined;
+    return new BYOKProvider(
+      {
+        vendor,
+        apiKey,
+        model: config.get<string>("byok.model", ""),
+        baseUrl: config.get<string>("byok.baseUrl", ""),
+      },
+      (message) => channel.appendLine(message),
+      () => hasConsent(context),
+    );
+  }
 
   // MVP/02 (#23): 学習フィードバックをローカル保存する。
   // メモリ上に持ち、イベントのたびに globalState へ反映する
@@ -299,6 +348,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
       response.progress("Gakushu Sochi が考えています...");
       const history = toConversationTurns(_chatContext.history);
+      const provider = await currentProvider();
       const aiResponse = await provider.ask(
         createChatAIRequest(codeContext, question, history, diagnostics),
       );
@@ -474,6 +524,73 @@ export function activate(context: vscode.ExtensionContext): void {
     },
   );
 
+  /** BYOK の API キーを設定する提供元を選ばせる。 */
+  async function pickByokVendor(): Promise<ByokVendor | undefined> {
+    const picked = await vscode.window.showQuickPick(
+      [
+        { label: "anthropic", description: "Claude（api.anthropic.com）" },
+        { label: "openai", description: "OpenAI および OpenAI 互換エンドポイント" },
+      ],
+      { title: "API キーを設定する提供元を選んでください", ignoreFocusOut: true },
+    );
+    return picked && isByokVendor(picked.label) ? picked.label : undefined;
+  }
+
+  // BYOK の API キーは SecretStorage へ保存する（RULE-006）。通常の設定項目に
+  // すると平文 JSON に載り、設定同期で他のマシンへ配られてしまう。
+  const setByokApiKeyCommand = vscode.commands.registerCommand(
+    "gakushuSochi.setByokApiKey",
+    async () => {
+      const vendor = await pickByokVendor();
+      if (!vendor) {
+        return;
+      }
+      const apiKey = await vscode.window.showInputBox({
+        title: `${vendor} の API キー`,
+        prompt: "キーはこの端末にだけ保存され、Gakushu Sochi のサーバーへは送られません。",
+        password: true,
+        ignoreFocusOut: true,
+        validateInput: (value) => (value.trim() ? undefined : "API キーを入力してください"),
+      });
+      if (apiKey === undefined) {
+        return;
+      }
+      try {
+        await context.secrets.store(byokSecretKey(vendor), apiKey.trim());
+      } catch (error) {
+        channel.appendLine(`API キーの保存に失敗しました: ${String(error)}`);
+        vscode.window.showErrorMessage(`API キーを保存できませんでした: ${String(error)}`);
+        return;
+      }
+      vscode.window.showInformationMessage(
+        `${vendor} の API キーを保存しました。` +
+          `設定 gakushuSochi.ai.provider を "byok" にするとこの経路が使われます。`,
+      );
+    },
+  );
+
+  const clearByokApiKeyCommand = vscode.commands.registerCommand(
+    "gakushuSochi.clearByokApiKey",
+    async () => {
+      const vendor = await pickByokVendor();
+      if (!vendor) {
+        return;
+      }
+      try {
+        if (!(await context.secrets.get(byokSecretKey(vendor)))) {
+          vscode.window.showInformationMessage(`${vendor} の API キーは設定されていません。`);
+          return;
+        }
+        await context.secrets.delete(byokSecretKey(vendor));
+      } catch (error) {
+        channel.appendLine(`API キーの削除に失敗しました: ${String(error)}`);
+        vscode.window.showErrorMessage(`API キーを削除できませんでした: ${String(error)}`);
+        return;
+      }
+      vscode.window.showInformationMessage(`${vendor} の API キーを削除しました。`);
+    },
+  );
+
   context.subscriptions.push(
     askSelection,
     askTerminalSelection,
@@ -481,6 +598,8 @@ export function activate(context: vscode.ExtensionContext): void {
     reviewConsentCommand,
     revokeConsentCommand,
     openKeybindingsCommand,
+    setByokApiKeyCommand,
+    clearByokApiKeyCommand,
   );
 }
 

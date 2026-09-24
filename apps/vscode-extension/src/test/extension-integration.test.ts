@@ -146,7 +146,7 @@ import {
  * globalState を持たせるのは、#119 の同意がここに記録されるため。
  * 同意の有無で送信が止まることを、実際の保存先ごしに確かめる。
  */
-function createExtensionContext(consented: boolean) {
+function createExtensionContext(consented: boolean, secrets: Map<string, string> = new Map()) {
   const state = new Map<string, unknown>();
   if (consented) {
     state.set(CONSENT_KEY, {
@@ -161,6 +161,15 @@ function createExtensionContext(consented: boolean) {
       update: async (key: string, value: unknown) => {
         if (value === undefined) state.delete(key);
         else state.set(key, value);
+      },
+    },
+    secrets: {
+      get: async (key: string) => secrets.get(key),
+      store: async (key: string, value: string) => {
+        secrets.set(key, value);
+      },
+      delete: async (key: string) => {
+        secrets.delete(key);
       },
     },
   };
@@ -180,6 +189,7 @@ const CONTEXT: CodeContext = {
 
 afterEach(() => {
   vi.clearAllMocks();
+  vi.unstubAllGlobals();
   getDiagnostics.mockImplementation(() => []);
   registeredCommands.clear();
   participantHandlers.length = 0;
@@ -257,7 +267,8 @@ test("回答に含まれるConceptをAPI同期内容へ引き継ぐ", async () =
   });
   getOrCreateClientId.mockResolvedValueOnce("client-1");
   getConfiguration.mockReturnValue({
-    get: (key: string) => (key === "api.baseUrl" ? "https://api.example.com" : "api-token"),
+    get: (key: string, fallback?: string) =>
+      key === "api.baseUrl" ? "https://api.example.com" : fallback,
   });
   syncEvent.mockResolvedValueOnce({ ok: true, status: "accepted" });
 
@@ -403,7 +414,8 @@ test("同意を取り消すと、学習イベントをAPIへ同期しない", as
     mastery: {},
   }));
   getConfiguration.mockReturnValue({
-    get: (key: string) => (key === "api.baseUrl" ? "https://api.example.com" : "api-token"),
+    get: (key: string, fallback?: string) =>
+      key === "api.baseUrl" ? "https://api.example.com" : fallback,
   });
 
   const context = createExtensionContext(true);
@@ -584,4 +596,78 @@ test("Errorが重なる選択では従来どおりError Explainで回答させ�
   const prompt = buildPrompt(askedRequests[0] as AIRequest);
   expect(prompt).toContain("### Error Explain");
   expect(prompt).toContain("Argument of type 'string' is not assignable to 'number'.");
+});
+
+// --- AI/04 #55: BYOK 経路への切り替え -----------------------------------------
+
+/** BYOK 経路で質問し、Chat の応答オブジェクトを返す。 */
+async function askByok(): Promise<ChatResponse> {
+  collectFromEditor.mockResolvedValueOnce(CONTEXT);
+  executeCommand.mockClear();
+  await registeredCommands.get("gakushuSochi.askSelection")?.();
+  const chatOpen = executeCommand.mock.calls.find(
+    ([command]) => command === "workbench.action.chat.open",
+  );
+  const response = { markdown: vi.fn(), progress: vi.fn() };
+  await participantHandlers[0]?.(
+    { prompt: `${chatOpen?.[1].query.replace("@gakushu-sochi ", "")}このコードは？` },
+    { history: [] },
+    response,
+  );
+  return response;
+}
+
+/** ai.provider=byok の設定を持つ getConfiguration の偽物。 */
+function byokConfiguration() {
+  return {
+    get: (key: string, fallback?: string) => {
+      if (key === "ai.provider") return "byok";
+      if (key === "api.baseUrl") return "";
+      return fallback;
+    },
+  };
+}
+
+test("ai.provider が byok なら、SecretStorage のキーで直接 AI 提供元を呼ぶ", async () => {
+  loadProfile.mockReturnValueOnce({ events: [], mastery: {} });
+  recordEvent.mockImplementation(async (_context, _profile, event: LearningEvent) => ({
+    events: [event],
+    mastery: {},
+  }));
+  getConfiguration.mockReturnValue(byokConfiguration());
+  const fetchCalls: { url: string; init?: RequestInit }[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, init?: RequestInit) => {
+      fetchCalls.push({ url, init });
+      return new Response(JSON.stringify({ content: [{ type: "text", text: "BYOK の回答" }] }), {
+        status: 200,
+      });
+    }),
+  );
+
+  const secrets = new Map([["gakushuSochi.byok.apiKey.anthropic", "sk-ant-test"]]);
+  activate(createExtensionContext(true, secrets) as never);
+  const response = await askByok();
+
+  // vscode.lm（偽の VSCodeLMProvider）ではなく、BYOK の HTTP 経路へ行く。
+  expect(askedRequests).toHaveLength(0);
+  expect(fetchCalls).toHaveLength(1);
+  expect(fetchCalls[0]?.url).toBe("https://api.anthropic.com/v1/messages");
+  expect((fetchCalls[0]?.init?.headers as Record<string, string>)["x-api-key"]).toBe("sk-ant-test");
+  expect(response.markdown).toHaveBeenCalledWith("BYOK の回答");
+});
+
+test("ai.provider が byok でもキーが未設定なら、送信せず設定コマンドへ案内する", async () => {
+  loadProfile.mockReturnValueOnce({ events: [], mastery: {} });
+  getConfiguration.mockReturnValue(byokConfiguration());
+  const fetchMock = vi.fn();
+  vi.stubGlobal("fetch", fetchMock);
+
+  activate(createExtensionContext(true) as never);
+  const response = await askByok();
+
+  expect(fetchMock).not.toHaveBeenCalled();
+  expect(askedRequests).toHaveLength(0);
+  expect(response.markdown).toHaveBeenCalledWith(expect.stringContaining("API キーが未設定"));
 });

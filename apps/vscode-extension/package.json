@@ -56,6 +56,14 @@
       {
         "command": "gakushuSochi.openKeybindings",
         "title": "Gakushu Sochi: キーボードショートカットを変更する"
+      },
+      {
+        "command": "gakushuSochi.setByokApiKey",
+        "title": "Gakushu Sochi: BYOK の API キーを設定する"
+      },
+      {
+        "command": "gakushuSochi.clearByokApiKey",
+        "title": "Gakushu Sochi: BYOK の API キーを削除する"
       }
     ],
     "keybindings": [
@@ -85,6 +93,38 @@
           "scope": "machine",
           "default": "https://gakushu-sochi-api.uozumi05.workers.dev",
           "description": "学習イベントを同期するAPIサーバーのURL。空にすると同期を行わずローカル保存のみになる。"
+        },
+        "gakushuSochi.ai.provider": {
+          "type": "string",
+          "enum": [
+            "vscode-lm",
+            "byok"
+          ],
+          "scope": "machine",
+          "default": "vscode-lm",
+          "description": "AI への送信経路。vscode-lm は VS Code に登録済みのモデル（Copilot など）を使う。byok はこの拡張に登録した自分の API キーで直接 AI 提供元を呼ぶ。送信先を左右する設定のためワークスペースからは上書きできない。"
+        },
+        "gakushuSochi.byok.vendor": {
+          "type": "string",
+          "enum": [
+            "anthropic",
+            "openai"
+          ],
+          "scope": "machine",
+          "default": "anthropic",
+          "description": "ai.provider が byok のときに使う AI 提供元。"
+        },
+        "gakushuSochi.byok.model": {
+          "type": "string",
+          "scope": "machine",
+          "default": "",
+          "description": "ai.provider が byok のときに使うモデル名。空にすると提供元ごとの既定モデルになる。"
+        },
+        "gakushuSochi.byok.baseUrl": {
+          "type": "string",
+          "scope": "machine",
+          "default": "",
+          "description": "ai.provider が byok のときの送信先 URL。空にすると提供元の公式エンドポイントになる。OpenAI 互換エンドポイントやローカルモデルに向ける場合に使う。https のみ（localhost などのループバックは http も可）。"
         }
       }
     }
