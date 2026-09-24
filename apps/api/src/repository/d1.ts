@@ -224,6 +224,14 @@ export class D1LearningEventRepository implements LearningEventRepository {
     }
     return changes;
   }
+
+  async latestResetAtMs(userId: string): Promise<number | null> {
+    const row = await this.db
+      .prepare(`SELECT reset_at_ms FROM learning_history_resets WHERE user_id = ?`)
+      .bind(userId)
+      .first<{ reset_at_ms: number }>();
+    return row?.reset_at_ms ?? null;
+  }
 }
 
 /** `IdentityRepository` の D1 実装。 */

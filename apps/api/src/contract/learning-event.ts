@@ -154,4 +154,15 @@ export interface SyncResponse {
   results: SyncEventResult[];
   /** 件数の内訳。クライアントがログへ残す際に results を数え直さずに済む。 */
   summary: Record<SyncResultStatus, number>;
+  /**
+   * このユーザーの学習履歴が最後に削除された時刻（epoch ミリ秒）。
+   * 削除されたことが無ければ `null`。
+   *
+   * `DELETE /v1/learning-events` は呼んだ端末のローカルコピーしか消せない。
+   * 他の端末はこの値を前回同期時のものと比較し、新しければローカルに残る
+   * コピーを消すことで削除へ追従する（Issue #124）。
+   * `learning_history_resets` に記録された値そのものであり、
+   * 削除を知らせるためだけの追加の履歴は持たない。
+   */
+  historyResetAtMs: number | null;
 }

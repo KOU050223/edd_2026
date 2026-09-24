@@ -99,6 +99,10 @@ export class InMemoryLearningEventRepository implements LearningEventRepository 
     return Promise.resolve(count);
   }
 
+  latestResetAtMs(userId: string): Promise<number | null> {
+    return Promise.resolve(this.store.historyResets.get(userId) ?? null);
+  }
+
   deleteUser(userId: string): void {
     this.byUser.delete(userId);
   }

@@ -36,6 +36,14 @@ export type LearningDataDepsResolver = (env: CloudflareBindings) => LearningData
 export interface DeleteLearningEventsResponse {
   /** 消したイベントの件数。既に空なら 0。 */
   deletedCount: number;
+  /**
+   * `learning_history_resets` へ記録した削除時刻（epoch ミリ秒）。
+   *
+   * 呼んだ端末はこの値を「適用済みの削除時刻」として記憶する。同期応答の
+   * `historyResetAtMs` と比較して、自分が呼んだ削除を「他端末から見えた削除」
+   * として二重に処理しないためである（Issue #124）。
+   */
+  resetAtMs: number;
 }
 
 export function createLearningDataRoute(resolve: LearningDataDepsResolver) {
@@ -70,9 +78,10 @@ export function createLearningDataRoute(resolve: LearningDataDepsResolver) {
 
     // 時刻は ensureUser の後で取り直す。Workers の Date.now() は I/O を挟むまで進まないため、
     // 先に取った値を使うと、その間に受け取った同期を境界の外へ取りこぼす。
-    const deletedCount = await deps.events.deleteByUser(userId, deps.nowMs());
+    const resetAtMs = deps.nowMs();
+    const deletedCount = await deps.events.deleteByUser(userId, resetAtMs);
 
-    const body: DeleteLearningEventsResponse = { deletedCount };
+    const body: DeleteLearningEventsResponse = { deletedCount, resetAtMs };
     return c.json(body);
   });
 

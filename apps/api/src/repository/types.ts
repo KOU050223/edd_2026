@@ -122,6 +122,13 @@ export interface LearningEventRepository {
    * @returns 消した件数。0件でも成功とする（再実行で失敗させない）。
    */
   deleteByUser(userId: string, resetAtMs: number): Promise<number>;
+
+  /**
+   * 最後に学習履歴を削除した時刻（epoch ミリ秒）。削除されていなければ `null`。
+   *
+   * 同期応答へ載せて、削除を呼んでいない他端末へ伝えるために使う（Issue #124）。
+   */
+  latestResetAtMs(userId: string): Promise<number | null>;
 }
 
 export interface MasteryOverride {
