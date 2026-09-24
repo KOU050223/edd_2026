@@ -89,6 +89,13 @@
           "scope": "machine",
           "default": "https://gakushu-sochi-api.uozumi05.workers.dev",
           "description": "学習イベントを同期するAPIサーバーのURL。空にすると同期を行わずローカル保存のみになる。"
+        },
+        "gakushuSochi.ai.persona": {
+          "type": "string",
+          "scope": "application",
+          "default": "",
+          "maxLength": 500,
+          "description": "AI の応答に求める人物像・口調（例: 優しい先生、幼馴染）。空にすると通常の口調で回答する。ワークスペースからは設定できない。"
         }
       }
     }

@@ -386,8 +386,13 @@ export function activate(context: vscode.ExtensionContext): void {
 
       response.progress("Gakushu Sochi が考えています...");
       const history = toConversationTurns(_chatContext.history);
+      // 人格設定は送る直前に読む。起動時の値を使い回すと、変更が再起動まで効かない。
+      // scope が application のためワークスペースの settings.json からは書き換えられない。
+      const persona = vscode.workspace
+        .getConfiguration("gakushuSochi")
+        .get<string>("ai.persona", "");
       const aiResponse = await provider.ask(
-        createChatAIRequest(codeContext, question, history, diagnostics),
+        createChatAIRequest(codeContext, question, history, diagnostics, persona),
       );
 
       if (!aiResponse.ok) {

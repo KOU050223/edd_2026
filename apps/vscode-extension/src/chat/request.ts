@@ -13,7 +13,9 @@ export function createChatAIRequest(
   question: string,
   history: ConversationTurn[] = [],
   diagnostics: string[] = [],
+  persona?: string,
 ): AIRequest {
+  const trimmedPersona = persona?.trim();
   return {
     mode: "explain",
     question,
@@ -22,5 +24,7 @@ export function createChatAIRequest(
     // 空配列を持たせるとテストの期待値やログが history: [] で埋まり続けるため、
     // 無い場合はキー自体を省略する。
     ...(history.length > 0 ? { history } : {}),
+    // 空白だけの persona は未設定と同じ意味なのでキー自体を省略する。
+    ...(trimmedPersona ? { persona: trimmedPersona } : {}),
   };
 }

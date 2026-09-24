@@ -36,9 +36,20 @@ import {
 } from "../contract/ai-usage.js";
 import type { AiUsageRepository, IdentityRepository } from "../repository/types.js";
 
+/**
+ * 人格設定（persona）の最大長。応答の口調・人物像を利用者が自由記述で指定する。
+ *
+ * 上限を置くのは、入力トークンの見積もり上限（`AI_USAGE_LIMITS.inputTokensPerRequest`）
+ * を persona が食い潰さないため、また1回あたりの単価の前提を崩さないため。
+ * desktop の設定画面も同じ上限で入力を弾く（apps/desktop/src/main/settings.ts の
+ * `PERSONA_MAX_LENGTH`）。**ここを動かすときは向こうも一緒に動かす。**
+ */
+export const PERSONA_MAX_LENGTH = 500;
+
 const requestSchema = v.object({
   selection: v.pipe(v.string(), v.minLength(1), v.maxLength(20_000)),
   question: v.pipe(v.string(), v.maxLength(4_000)),
+  persona: v.optional(v.pipe(v.string(), v.maxLength(PERSONA_MAX_LENGTH))),
   model: v.optional(v.pipe(v.string(), v.minLength(1), v.maxLength(200))),
   temperature: v.optional(v.pipe(v.number(), v.minValue(0), v.maxValue(2))),
   // `maxTokens` の上限は政策値に揃える。スキーマで弾けるものをハンドラまで
@@ -147,8 +158,11 @@ export function createAiRoute(resolve: AiDepsResolver) {
       model: requestedModel,
       temperature,
       maxTokens,
+      persona,
     } = c.req.valid("json");
     const normalizedQuestion = question.trim() || DEFAULT_EXPLANATION_QUESTION;
+    // 空白だけの persona は未設定と同じ意味なので未指定へ寄せる。
+    const normalizedPersona = persona?.trim() || undefined;
     const deps = resolve(c.env);
     if (!deps.apiKey) {
       // 設定漏れは利用者の失敗ではなく運営側の障害である。503 の応答だけでは
@@ -177,7 +191,13 @@ export function createAiRoute(resolve: AiDepsResolver) {
     // 入力の超過は切り捨てず拒否する。黙って切ると、利用者から見て AI が文脈を
     // 読み落とした状態になり、原因が分からない（RULE-004 / docs/architecture.md）。
     const prompt = `選択テキスト:\n${selection}\n\n質問:\n${normalizedQuestion}`;
-    const estimatedInputTokens = estimateInputTokens(prompt);
+    // persona は contents と分けて systemInstruction へ載せる。「どう答えるか」の
+    // 口調・人物像であり、本文の質問と混ぜない。
+    // 上流へ送る入力に含まれるため、見積もりの対象にも入れる。
+    const systemInstruction = normalizedPersona
+      ? `あなたは次の人物像・口調で回答してください。\n${normalizedPersona}`
+      : undefined;
+    const estimatedInputTokens = estimateInputTokens((systemInstruction ?? "") + prompt);
     if (estimatedInputTokens > AI_USAGE_LIMITS.inputTokensPerRequest) {
       return c.json(
         {
@@ -261,6 +281,9 @@ export function createAiRoute(resolve: AiDepsResolver) {
           // 資格情報が意図しない相手に渡る（.agents/rules/rules.md RULE-002）。
           redirect: "error",
           body: JSON.stringify({
+            ...(systemInstruction === undefined
+              ? {}
+              : { systemInstruction: { parts: [{ text: systemInstruction }] } }),
             contents: [{ parts: [{ text: prompt }] }],
             generationConfig: {
               ...(temperature === undefined ? {} : { temperature }),

@@ -220,7 +220,7 @@ send.onclick = ask;
 
 const openSettings = async () => {
   const s = await window.desktop.getSettings();
-  ["api-base-url", "shortcut", "model", "temperature", "max-tokens"].forEach((id) => {
+  ["api-base-url", "shortcut", "model", "temperature", "max-tokens", "persona"].forEach((id) => {
     $(id).value = s[id === "api-base-url" ? "apiBaseUrl" : id === "max-tokens" ? "maxTokens" : id];
   });
   $("restore").checked = s.restoreClipboard;
@@ -258,6 +258,7 @@ form.onsubmit = async (event) => {
       maxTokens: Number($("max-tokens").value),
       restoreClipboard: $("restore").checked,
       launchAtLogin: $("login").checked,
+      persona: $("persona").value,
     });
     closeSettings();
     showNotice("設定を保存しました。");

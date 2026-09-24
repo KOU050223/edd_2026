@@ -24,6 +24,11 @@ export interface AIRequest {
   diagnostics?: string[];
   profile?: ProfileSummary;
   history?: ConversationTurn[];
+  /**
+   * 利用者が選んだ応答の人物像・口調（自由記述）。未設定はキー自体を省略する。
+   * 「何に答えるか」ではなく「どう答えるか」の口調にだけ効かせる。
+   */
+  persona?: string;
 }
 
 /** AI リクエストが失敗した理由。 */

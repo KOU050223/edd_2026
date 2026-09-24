@@ -60,6 +60,14 @@ test("APIの送信先設定をワークスペースから上書きできない",
   );
 });
 
+test("人格設定をワークスペースから上書きできない", () => {
+  // persona は AI へ送るプロンプトへそのまま載る。開いたリポジトリの
+  // .vscode/settings.json が人物像を仕込める状態にしない（RULE-006 の発想）。
+  expect(manifest.contributes.configuration.properties["gakushuSochi.ai.persona"]?.scope).toBe(
+    "application",
+  );
+});
+
 test("同意の確認と取り消しを利用者がコマンドから行える", () => {
   expect(manifest.contributes.commands).toEqual(
     expect.arrayContaining([

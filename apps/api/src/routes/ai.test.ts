@@ -269,6 +269,87 @@ describe("POST /v1/ai/responses", () => {
     vi.unstubAllGlobals();
   });
 
+  describe("persona（応答の人物像）", () => {
+    it("persona を systemInstruction として上流へ送る", async () => {
+      const fetchMock = stubUpstream(SSE_WITH_USAGE);
+      const harness = buildApp();
+      const { ctx, settled } = createExecutionContext();
+
+      const response = await ask(
+        harness,
+        { selection: "code", question: "explain", persona: "優しい先生" },
+        ctx,
+      );
+
+      expect(response.status).toBe(200);
+      await response.text();
+      await settled();
+      const [, init] = fetchMock.mock.calls[0] ?? [];
+      const sent = JSON.parse(String((init as RequestInit | undefined)?.body)) as {
+        systemInstruction?: { parts: { text: string }[] };
+        contents: { parts: { text: string }[] }[];
+      };
+      // contents と分けて載せる。口調の指定を本文の質問と混ぜない。
+      expect(sent.systemInstruction?.parts[0]?.text).toContain("優しい先生");
+      expect(sent.contents[0]?.parts[0]?.text).not.toContain("優しい先生");
+      vi.unstubAllGlobals();
+    });
+
+    it("persona 未指定なら systemInstruction を送らない", async () => {
+      const fetchMock = stubUpstream(SSE_WITH_USAGE);
+      const harness = buildApp();
+      const { ctx, settled } = createExecutionContext();
+
+      const response = await ask(harness, { selection: "code", question: "explain" }, ctx);
+      await response.text();
+      await settled();
+
+      const [, init] = fetchMock.mock.calls[0] ?? [];
+      const sent = JSON.parse(String((init as RequestInit | undefined)?.body)) as {
+        systemInstruction?: unknown;
+      };
+      expect(sent.systemInstruction).toBeUndefined();
+      vi.unstubAllGlobals();
+    });
+
+    it("空白だけの persona は未設定として扱う", async () => {
+      const fetchMock = stubUpstream(SSE_WITH_USAGE);
+      const harness = buildApp();
+      const { ctx, settled } = createExecutionContext();
+
+      const response = await ask(
+        harness,
+        { selection: "code", question: "explain", persona: "   " },
+        ctx,
+      );
+      await response.text();
+      await settled();
+
+      const [, init] = fetchMock.mock.calls[0] ?? [];
+      const sent = JSON.parse(String((init as RequestInit | undefined)?.body)) as {
+        systemInstruction?: unknown;
+      };
+      expect(sent.systemInstruction).toBeUndefined();
+      vi.unstubAllGlobals();
+    });
+
+    it("上限を超える persona は上流を呼ばずに拒否する", async () => {
+      const fetchMock = stubUpstream(SSE_WITH_USAGE);
+      const harness = buildApp();
+      const { ctx } = createExecutionContext();
+
+      const response = await ask(
+        harness,
+        { selection: "code", question: "explain", persona: "あ".repeat(501) },
+        ctx,
+      );
+
+      expect(response.status).toBe(400);
+      expect(fetchMock).not.toHaveBeenCalled();
+      vi.unstubAllGlobals();
+    });
+  });
+
   describe("モデルの allowlist（docs/auth.md §10.1）", () => {
     it("許可外のモデルを拒否し、上流を呼ばない", async () => {
       const fetchMock = stubUpstream(SSE_WITH_USAGE);
