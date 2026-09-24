@@ -28,6 +28,7 @@ vi.mock("vscode", () => ({
 
 import { VSCodeLMProvider } from "./vscodeLm";
 import { buildNoModelGuidance } from "./model-selection";
+import { META_MARKER } from "./prompt";
 import * as vscode from "vscode";
 
 /** for-await できる最小限の LanguageModelChatResponse を組む。 */
@@ -115,6 +116,36 @@ test.each(["typescript", "javascript"])(
     expect(prompt).not.toContain("conceptIds は空配列にしてください");
   },
 );
+
+test("一覧に載せていないConceptのIDは、実在しても受理しない", async () => {
+  const sendRequest = vi
+    .fn()
+    .mockResolvedValue(
+      responseOf(
+        `説明文\n${META_MARKER}\n{"conceptIds": ["python.typing", "ts.closure", "git.commit"], "resolution": "resolved"}`,
+      ),
+    );
+  selectChatModels.mockResolvedValueOnce([
+    { id: "gpt-4o-mini", family: "gpt-4o-mini", vendor: "copilot", sendRequest },
+  ]);
+
+  const response = await new VSCodeLMProvider().ask({
+    mode: "explain",
+    context: {
+      code: "const x: number = 1;",
+      source: "editor",
+      contextLevel: 2,
+      surroundingCode: "",
+      languageId: "typescript",
+    },
+  });
+
+  expect(response.ok).toBe(true);
+  if (!response.ok) throw new Error("expected a success response");
+  // python.typing は実在するが typescript の質問の一覧には載せていないため落とす。
+  // 領域横断の git.commit は一覧に載るので受理される。
+  expect(response.answer.conceptIds).toEqual(["ts.closure", "git.commit"]);
+});
 
 test("languageIdが無くても、言語に依らない領域のConceptは一覧に含める", async () => {
   const sendRequest = vi.fn().mockResolvedValue(responseOf("説明文"));
