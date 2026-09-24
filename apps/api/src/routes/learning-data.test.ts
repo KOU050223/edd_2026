@@ -8,12 +8,21 @@ import {
 } from "@gakushu-sochi/domain";
 import type { AuthVariables } from "../auth/middleware.js";
 import { stubAuth } from "../auth/test-auth.js";
-import { InMemoryLearningEventRepository } from "../repository/memory.js";
+import {
+  createInMemoryRepositoryStore,
+  InMemoryIdentityRepository,
+  InMemoryLearningEventRepository,
+} from "../repository/memory.js";
 import type { LearningProfileResponse } from "../contract/learning-profile.js";
+import type { SyncResponse } from "../contract/learning-event.js";
 import { createLearningDataRoute, type DeleteLearningEventsResponse } from "./learning-data.js";
+import { createLearningEventsRoute } from "./learning-events.js";
 import { createLearningProfileRoute } from "./learning-profile.js";
 
+let identity: InMemoryIdentityRepository;
 let events: InMemoryLearningEventRepository;
+/** 現在時刻（epoch ミリ秒）。テストの中で進めて、削除の前後を作る。 */
+let clockMs: number;
 let app: Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>;
 
 /** 認証は `stubAuth` が担うので、env に資格情報は要らない。 */
@@ -24,14 +33,29 @@ const NOW = "2026-09-23T00:00:00.000Z";
 const TOKENS = { "token-a": "user-a", "token-b": "user-b" };
 
 beforeEach(() => {
-  events = new InMemoryLearningEventRepository();
+  // D1 と同じく1つのストアを共有させる。退会の CASCADE と同じで、
+  // 片方だけ新しく作るとテスト実装だけが実際と違う振る舞いになる。
+  const store = createInMemoryRepositoryStore();
+  identity = new InMemoryIdentityRepository(store);
+  events = new InMemoryLearningEventRepository(store);
+  clockMs = 1_000;
   app = new Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>();
   app.use("/v1/*", stubAuth(TOKENS));
   // Profile と同じリポジトリを共有させる。削除が習熟度の導出へ反映されることを
   // 実際の GET /v1/learning-profile で確かめるため。
   app.route(
     "/v1",
-    createLearningDataRoute(() => ({ events, nowIso: () => NOW })),
+    createLearningDataRoute(() => ({
+      identity,
+      events,
+      nowIso: () => NOW,
+      nowMs: () => clockMs,
+    })),
+  );
+  // 同期との競合を実際のルート同士で再現するため、同期も同じアプリへ載せる。
+  app.route(
+    "/v1",
+    createLearningEventsRoute(() => ({ identity, events, now: () => clockMs })),
   );
   app.route(
     "/v1",
@@ -52,7 +76,19 @@ function event(partial: Partial<LearningEvent> & { id: string }): LearningEvent 
 async function seed(userId: string, list: LearningEvent[]) {
   await events.append(
     userId,
-    list.map((e) => ({ event: e, clientId: "client-1", receivedAtMs: 0 })),
+    list.map((e) => ({ event: e, clientId: "client-1", receivedAtMs: clockMs })),
+  );
+}
+
+function sync(token: string, list: LearningEvent[]) {
+  return app.request(
+    "/v1/learning-events:sync",
+    {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ clientId: "client-1", events: list }),
+    },
+    ENV,
   );
 }
 
@@ -165,12 +201,70 @@ test("削除後に同期し直したイベントは新しい履歴として扱�
   // 永続的に保持することになり、「消した」ことにならない。
   await seed("user-a", [event({ id: "e1" })]);
   await request("/v1/learning-events", "token-a", "DELETE");
+  clockMs += 1;
 
-  const [result] = await events.append("user-a", [
-    { event: event({ id: "e1" }), clientId: "client-1", receivedAtMs: 0 },
+  const res = await sync("token-a", [event({ id: "e1" })]);
+
+  expect(((await res.json()) as SyncResponse).results).toEqual([
+    { index: 0, id: "e1", status: "accepted" },
   ]);
+  expect(await events.countByUser("user-a")).toBe(1);
+});
 
-  expect(result).toEqual({ id: "e1", duplicate: false });
+test("削除より前に受け取った同期は、書き込みが削除の後になっても履歴に残らない", async () => {
+  // 同期は受信時刻を決めてから、ユーザー行の用意（I/O）を挟んで書き込む。
+  // その隙間に削除が割り込むと、削除前に受け取ったイベントが削除後に INSERT される。
+  // 利用者には「消した」と返した後で過去の履歴が残るので、これを塞ぐ。
+  await seed("user-a", [event({ id: "old" })]);
+  const original = identity.ensureUserAndDevice.bind(identity);
+  identity.ensureUserAndDevice = async (params) => {
+    await original(params);
+    clockMs += 10;
+    const res = await request("/v1/learning-events", "token-a", "DELETE");
+    expect(res.status).toBe(200);
+  };
+
+  const res = await sync("token-a", [event({ id: "in-flight" })]);
+
+  // 受理はする。受理したうえで削除に含まれた、という扱い。
+  // 重複と答えると、既に保存されていたかのように見える。
+  expect(res.status).toBe(200);
+  expect(((await res.json()) as SyncResponse).results).toEqual([
+    { index: 0, id: "in-flight", status: "accepted" },
+  ]);
+  expect(await events.countByUser("user-a")).toBe(0);
+});
+
+test("まだ一度も同期していない利用者の削除も、並行する初回の同期を塞ぐ", async () => {
+  // users 行が無いからといって削除時刻の記録を省くと、並行して走っている
+  // 初回の同期が削除の後に書き込む。
+  const res = await request("/v1/learning-events", "token-a", "DELETE");
+  expect((await res.json()) as DeleteLearningEventsResponse).toEqual({ deletedCount: 0 });
+
+  // 削除と同じ時刻に受け取ったイベントは境界の内側（書かない側）に倒す。
+  await seed("user-a", [event({ id: "same-ms" })]);
+
+  expect(await events.countByUser("user-a")).toBe(0);
+  expect(identity.users.has("user-a")).toBe(true);
+});
+
+test("削除時刻は巻き戻らない", async () => {
+  // 遅れて届いた古い削除要求で境界を後退させると、その間に受け取ったイベントが通る。
+  await events.deleteByUser("user-a", 2_000);
+  await events.deleteByUser("user-a", 1_500);
+  clockMs = 1_800;
+
+  await seed("user-a", [event({ id: "between" })]);
+
+  expect(await events.countByUser("user-a")).toBe(0);
+});
+
+test("削除しても他人の同期は塞がない", async () => {
+  await request("/v1/learning-events", "token-a", "DELETE");
+
+  await seed("user-b", [event({ id: "b1" })]);
+
+  expect(await events.countByUser("user-b")).toBe(1);
 });
 
 test.each([

@@ -86,6 +86,10 @@ export interface LearningEventRepository {
    * `duplicate: true` を返す。追記のみで、あとから書き換えないため
    * （docs/architecture.md）、後着の再送で内容が変わることは無い。
    *
+   * `receivedAtMs` が履歴の削除時刻（`deleteByUser`）以前のイベントは書かず、
+   * `duplicate: false`（受理）を返す。削除より前に受け取ったイベントであり、
+   * 受理したうえで削除に含まれた、という扱いになる。
+   *
    * @returns 入力と同じ順序の結果。
    */
   append(userId: string, inputs: readonly StoredEventInput[]): Promise<AppendResult[]>;
@@ -109,9 +113,15 @@ export interface LearningEventRepository {
    * 行ごと消すのは退会（`IdentityRepository.deleteUser`）の責務である。
    * 習熟度は保存値を持たずイベントから導出するため、これだけで習熟度も消える。
    *
+   * **並行する同期との競合を塞ぐため、削除した時刻も記録する。** 以後の `append` は
+   * `receivedAtMs` がこの時刻以前のイベントを書かない。これが無いと、削除より前に
+   * 受け取った同期リクエストの INSERT が DELETE の後に実行され、消したはずの履歴が残る。
+   * 呼び出し前に `users` 行が存在している必要がある（D1 では外部キーで参照する）。
+   *
+   * @param resetAtMs 削除した時刻（epoch ミリ秒）。
    * @returns 消した件数。0件でも成功とする（再実行で失敗させない）。
    */
-  deleteByUser(userId: string): Promise<number>;
+  deleteByUser(userId: string, resetAtMs: number): Promise<number>;
 }
 
 export interface MasteryOverride {

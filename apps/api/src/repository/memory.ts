@@ -21,6 +21,8 @@ export interface InMemoryRepositoryStore {
   readonly devicesByUser: Map<string, Map<string, { lastSeenAtMs: number }>>;
   readonly eventsByUser: Map<string, Map<string, LearningEvent>>;
   readonly deletingUsers: Map<string, number>;
+  /** userId -> 最後に履歴を削除した時刻。D1 の learning_history_resets に対応する。 */
+  readonly historyResets: Map<string, number>;
 }
 
 export function createInMemoryRepositoryStore(): InMemoryRepositoryStore {
@@ -29,6 +31,7 @@ export function createInMemoryRepositoryStore(): InMemoryRepositoryStore {
     devicesByUser: new Map(),
     eventsByUser: new Map(),
     deletingUsers: new Map(),
+    historyResets: new Map(),
   };
 }
 
@@ -55,7 +58,12 @@ export class InMemoryLearningEventRepository implements LearningEventRepository 
       this.byUser.set(userId, events);
     }
 
-    const results = inputs.map(({ event }) => {
+    const resetAtMs = this.store.historyResets.get(userId);
+    const results = inputs.map(({ event, receivedAtMs }) => {
+      // 履歴の削除より前に受け取ったイベントは書かず、受理として返す（D1 実装と同じ）。
+      if (resetAtMs !== undefined && resetAtMs >= receivedAtMs) {
+        return { id: event.id, duplicate: false };
+      }
       if (events.has(event.id)) {
         // 既存を上書きしない。イベントは追記のみで、あとから書き換えない。
         return { id: event.id, duplicate: true };
@@ -83,7 +91,9 @@ export class InMemoryLearningEventRepository implements LearningEventRepository 
     return Promise.resolve(this.byUser.get(userId)?.size ?? 0);
   }
 
-  deleteByUser(userId: string): Promise<number> {
+  deleteByUser(userId: string, resetAtMs: number): Promise<number> {
+    const previous = this.store.historyResets.get(userId);
+    this.store.historyResets.set(userId, Math.max(previous ?? resetAtMs, resetAtMs));
     const count = this.byUser.get(userId)?.size ?? 0;
     this.byUser.delete(userId);
     return Promise.resolve(count);
@@ -170,6 +180,7 @@ export class InMemoryIdentityRepository implements IdentityRepository {
     this.users.delete(userId);
     this.devicesByUser.delete(userId);
     this.store.eventsByUser.delete(userId);
+    this.store.historyResets.delete(userId);
     return Promise.resolve();
   }
 

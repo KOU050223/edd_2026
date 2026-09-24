@@ -160,8 +160,10 @@ app.route(
 app.route(
   "/v1",
   createLearningDataRoute((env) => ({
+    identity: new D1IdentityRepository(env.DB),
     events: new D1LearningEventRepository(env.DB),
     nowIso: () => new Date().toISOString(),
+    nowMs: () => Date.now(),
   })),
 );
 
