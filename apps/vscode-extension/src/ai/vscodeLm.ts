@@ -12,10 +12,9 @@
 
 import * as vscode from "vscode";
 import type { AIProvider } from "./provider";
-import { buildPrompt, META_MARKER } from "./prompt";
+import { buildPrompt, knownConceptsFor, META_MARKER } from "./prompt";
 import { buildNoModelGuidance, selectModel } from "./model-selection";
 import {
-  CONCEPTS,
   type AIError,
   type AIErrorReason,
   type AIRequest,
@@ -32,14 +31,6 @@ import {
  * 直近 {@link MAX_HISTORY_TURNS} 件だけを残す（古いものは切り捨てる）。
  */
 const MAX_HISTORY_TURNS = 10;
-
-/**
- * 応答本文の末尾に付けさせるメタ情報の開始マーカー。
- *
- * ユーザーへ表示する前にここで切り離すため、Markdownとして自然に読める記号は避け、
- * 通常の説明文には出てこない専用の文字列にする。
- */
-const KNOWN_CONCEPT_IDS = new Set(CONCEPTS.map((concept) => concept.id));
 
 /** AIRequest を LanguageModelChatMessage の配列へ変換する。 */
 function toMessages(request: AIRequest): vscode.LanguageModelChatMessage[] {
@@ -71,7 +62,7 @@ interface ParsedAnswer {
  * conceptIds は空配列、resolution は省略にする。出力形式は保証されないため、
  * ここでの失敗が質問フロー自体を止めてはならない。
  */
-function parseAnswer(raw: string): ParsedAnswer {
+function parseAnswer(raw: string, allowedConceptIds: ReadonlySet<ConceptId>): ParsedAnswer {
   const markerIndex = raw.indexOf(META_MARKER);
 
   if (markerIndex === -1) {
@@ -95,7 +86,7 @@ function parseAnswer(raw: string): ParsedAnswer {
     const rawConceptIds = (parsed as { conceptIds?: unknown }).conceptIds;
     const conceptIds = Array.isArray(rawConceptIds)
       ? rawConceptIds.filter(
-          (id): id is ConceptId => typeof id === "string" && KNOWN_CONCEPT_IDS.has(id),
+          (id): id is ConceptId => typeof id === "string" && allowedConceptIds.has(id),
         )
       : [];
 
@@ -210,7 +201,12 @@ export class VSCodeLMProvider implements AIProvider {
 
       this.debug(`--- AIの生の応答（model: ${model.id}） ---\n${raw}`);
 
-      const parsed = parseAnswer(raw);
+      // プロンプトへ載せた一覧と同じ集合で受理する。モデルが指示を外れて
+      // 一覧に無い（実在する他言語の）ID を返しても、学習イベントへ混入させない。
+      const parsed = parseAnswer(
+        raw,
+        new Set(knownConceptsFor(request).map((concept) => concept.id)),
+      );
 
       this.debug(
         `--- Concept抽出結果 ---\nconceptIds: ${JSON.stringify(parsed.conceptIds)}\nresolution: ${String(parsed.resolution)}`,

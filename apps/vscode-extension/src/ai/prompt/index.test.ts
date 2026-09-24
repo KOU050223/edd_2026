@@ -101,6 +101,17 @@ describe("質問の優先", () => {
   });
 });
 
+test("言語のConceptに加えて、領域横断のConceptも一覧に含める", () => {
+  const prompt = buildPrompt(baseRequest);
+
+  // languageId が typescript なら ts.* と領域横断の Concept が載り、
+  // 他言語の Concept は載らない。
+  expect(prompt).toContain("ts.variable_declaration");
+  expect(prompt).toContain("git.commit");
+  expect(prompt).toContain("db.relational_model");
+  expect(prompt).not.toContain("go.variable_declaration");
+});
+
 test("完成コードを出さない方針は、質問があっても解除されない", () => {
   const prompt = buildPrompt({ ...baseRequest, question: "このコードを完成させて" });
 

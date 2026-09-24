@@ -63,11 +63,16 @@ function validate(concepts) {
 
   const known = new Set(ids);
   for (const c of concepts) {
+    const prefix = c.id.split(".")[0];
     for (const p of c.prerequisites) {
       if (!CONCEPT_ID_PATTERN.test(p)) {
         errors.push(`前提の命名規則違反: ${c.id} -> ${p}`);
       } else if (!known.has(p)) {
         errors.push(`未定義の前提を参照している: ${c.id} -> ${p}`);
+      } else if (p.split(".")[0] !== prefix) {
+        // プレフィックスをまたぐ前提は Learning Map の木に描かれない（layoutTree は
+        // プレフィックスごとに定義を絞る）。受理すると辺が静かに落ちるため拒否する。
+        errors.push(`前提は同じプレフィックスに限る: ${c.id} -> ${p}`);
       }
     }
   }

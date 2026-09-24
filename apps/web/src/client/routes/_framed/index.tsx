@@ -76,7 +76,21 @@ function MasteryPicker({
   );
 }
 
-const languageLabel: Record<string, string> = { go: "Go", ts: "TypeScript" };
+// キーは Concept ID のプレフィックス（言語とは限らない。docs/concepts.md）。
+const languageLabel: Record<string, string> = {
+  go: "Go",
+  ts: "TypeScript",
+  python: "Python",
+  rust: "Rust",
+  java: "Java",
+  csharp: "C#",
+  php: "PHP",
+  ruby: "Ruby",
+  git: "Git",
+  design: "設計",
+  db: "データベース",
+  http: "HTTP",
+};
 
 // 地図の寸法（px）。ノードは固定の大きさの箱で、列は前提の段数、行は木の葉の順。
 const NODE_WIDTH = 150;
@@ -92,7 +106,7 @@ const NARROW_LAYOUT = "(max-width: 600px)";
 const nameOf = (concept: OverlaidConcept) => concept.label ?? concept.conceptId;
 const percent = (score: number | null) => (score === null ? "—" : `${Math.round(score * 100)}%`);
 
-/** 1 言語ぶんの Skill Tree。Map 内には Concept 名と状態だけを出し、詳細は右のパネルへ回す。 */
+/** 1 領域ぶんの Skill Tree。Map 内には Concept 名と状態だけを出し、詳細は右のパネルへ回す。 */
 function SkillTree({
   tree,
   concepts,
