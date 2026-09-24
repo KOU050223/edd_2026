@@ -3,7 +3,13 @@ import { expect, test, vi } from "vitest";
 vi.mock("vscode", () => ({}));
 
 import { createEmptyProfile, type LearnerProfile, type LearningEvent } from "@gakushu-sochi/domain";
-import { getOrCreateClientId, loadProfile, recordEvent } from "./store";
+import {
+  getOrCreateClientId,
+  loadExplainedErrors,
+  loadProfile,
+  recordEvent,
+  saveExplainedErrors,
+} from "./store";
 import type * as vscode from "vscode";
 
 const CURRENT_KEY = "gakushuSochi.learnerProfile";
@@ -253,4 +259,58 @@ test("保存に失敗しても例外を外へ出さず、更新後のプロフ�
   // 失敗を握りつぶさず onError へ通知したうえで、今セッション分は反映された値を返す。
   expect(onError).toHaveBeenCalledWith(failure);
   expect(updated.events).toHaveLength(1);
+});
+
+// --- 解説済みエラー（診断/02 #76） ----------------------------------------------
+
+const EXPLAINED_ERRORS_KEY = "gakushuSochi.explainedErrors";
+
+test("保存した解説済みエラーを読み直せる", async () => {
+  const context = mutableContext();
+  const explained = {
+    "code:ts:2345": {
+      explainedAt: "2026-09-21T00:00:00.000Z",
+      conceptIds: ["ts.type_annotation"],
+    },
+  };
+
+  await saveExplainedErrors(context, explained);
+
+  expect(loadExplainedErrors(context)).toEqual(explained);
+});
+
+test("解説済みエラーが無ければ空を返し、失敗として通知しない", () => {
+  const onError = vi.fn();
+
+  expect(loadExplainedErrors(contextWith({}), onError)).toEqual({});
+  expect(onError).not.toHaveBeenCalled();
+});
+
+test("解説済みエラーが壊れていれば空から始め、黙って捨てずに通知する", () => {
+  const onError = vi.fn();
+
+  const loaded = loadExplainedErrors(
+    contextWith({ [EXPLAINED_ERRORS_KEY]: { "code:ts:2345": { explainedAt: "broken" } } }),
+    onError,
+  );
+
+  expect(loaded).toEqual({});
+  expect(onError).toHaveBeenCalledWith(expect.any(TypeError));
+});
+
+test("解説済みエラーの保存に失敗しても例外を外へ出さず通知する", async () => {
+  const failure = new Error("globalState への書き込みに失敗しました");
+  const context = {
+    globalState: {
+      get: () => undefined,
+      update: async () => {
+        throw failure;
+      },
+    },
+  } as unknown as vscode.ExtensionContext;
+  const onError = vi.fn();
+
+  await saveExplainedErrors(context, {}, onError);
+
+  expect(onError).toHaveBeenCalledWith(failure);
 });

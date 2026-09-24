@@ -111,9 +111,11 @@ test("選択時に取得したDiagnosticsを同じChatリクエストまで保�
   };
   const diagnostics = ["Type 'string' is not assignable to type 'number'."];
 
-  const id = pending.set(context, diagnostics);
+  const errorKeys = ["code:ts:2322"];
 
-  expect(pending.take(id)).toEqual({ context, diagnostics });
+  const id = pending.set(context, diagnostics, errorKeys);
+
+  expect(pending.take(id)).toEqual({ context, diagnostics, errorKeys });
 });
 
 test("送信されない文脈は有効期限が切れると解放される", () => {

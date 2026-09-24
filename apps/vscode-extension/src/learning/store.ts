@@ -15,6 +15,7 @@ import {
   type LearnerProfile,
   type LearningEvent,
 } from "@gakushu-sochi/domain";
+import { isExplainedErrors, type ExplainedErrors } from "./recurrence";
 
 /** globalState 上のキー。docs/concepts.md の「保存」を参照。 */
 const PROFILE_KEY = "gakushuSochi.learnerProfile";
@@ -138,4 +139,44 @@ export async function getOrCreateClientId(context: vscode.ExtensionContext): Pro
   const clientId = randomUUID();
   await context.globalState.update(CLIENT_ID_KEY, clientId);
   return clientId;
+}
+
+/** 解説済みエラー（再発判定の入力）を保存するキー。docs/concepts.md の「保存」を参照。 */
+const EXPLAINED_ERRORS_KEY = "gakushuSochi.explainedErrors";
+
+/**
+ * 解説済みエラーを読み込む。無ければ空を返す。
+ *
+ * 壊れた値は使わずに空から始めるが、黙って捨てない。`onError` へ通知する。
+ * 失うのは再発判定の記憶だけで、LearnerProfile は影響を受けない。
+ */
+export function loadExplainedErrors(
+  context: vscode.ExtensionContext,
+  onError?: (error: unknown) => void,
+): ExplainedErrors {
+  const stored = context.globalState.get<unknown>(EXPLAINED_ERRORS_KEY);
+  if (stored === undefined) {
+    return {};
+  }
+  if (!isExplainedErrors(stored)) {
+    onError?.(new TypeError(`${EXPLAINED_ERRORS_KEY} の保存値が壊れているため読み捨てました`));
+    return {};
+  }
+  return stored;
+}
+
+/**
+ * 解説済みエラーを保存する。`saveProfile` と同じく、失敗しても例外を投げず
+ * `onError` へ通知する。再発判定の記録が質問フローを止めてはならない。
+ */
+export async function saveExplainedErrors(
+  context: vscode.ExtensionContext,
+  explained: ExplainedErrors,
+  onError?: (error: unknown) => void,
+): Promise<void> {
+  try {
+    await context.globalState.update(EXPLAINED_ERRORS_KEY, explained);
+  } catch (error) {
+    onError?.(error);
+  }
 }

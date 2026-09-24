@@ -11,8 +11,15 @@ import { readClipboard, readTerminalSelection } from "./context/clipboard";
 import { openGakushuSochiKeybindings } from "./keybindings/open";
 import { ensureConsent, hasConsent, revokeConsent, reviewConsent } from "./consent/consent";
 import { collectFromEditor, collectFromText } from "./context/collector";
-import { rangesOverlap } from "./context/diagnostics";
-import { getOrCreateClientId, loadProfile, recordEvent } from "./learning/store";
+import { diagnosticCodeOfKey, errorKeyOf, rangesOverlap } from "./context/diagnostics";
+import {
+  getOrCreateClientId,
+  loadExplainedErrors,
+  loadProfile,
+  recordEvent,
+  saveExplainedErrors,
+} from "./learning/store";
+import { findRecurred, markExplained } from "./learning/recurrence";
 import { DeviceAuth } from "./learning/device-auth";
 import { shouldRecordSolvedIndependently } from "./learning/resolution";
 import { syncEvent } from "./learning/sync";
@@ -65,16 +72,26 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
-/** 選択した範囲に重なる Diagnostics だけを、回答用に短い文字列として取り出す。 */
-function diagnosticsForSelection(documentUri: vscode.Uri, selection: vscode.Selection): string[] {
-  return vscode.languages
+/**
+ * 選択した範囲に重なる Diagnostics を取り出す。
+ *
+ * `messages` は回答用に AI へ渡す短い文字列、`errorKeys` は再発判定用の識別キー
+ * （診断/02 #76）。
+ */
+function diagnosticsForSelection(
+  documentUri: vscode.Uri,
+  selection: vscode.Selection,
+): { messages: string[]; errorKeys: string[] } {
+  const overlapping = vscode.languages
     .getDiagnostics()
     .filter(([uri]) => uri.toString() === documentUri.toString())
     .flatMap(([, diagnostics]) =>
-      diagnostics
-        .filter((diagnostic) => rangesOverlap(diagnostic.range, selection))
-        .map((diagnostic) => diagnostic.message),
+      diagnostics.filter((diagnostic) => rangesOverlap(diagnostic.range, selection)),
     );
+  return {
+    messages: overlapping.map((diagnostic) => diagnostic.message),
+    errorKeys: overlapping.map(errorKeyOf),
+  };
 }
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -113,6 +130,12 @@ export function activate(context: vscode.ExtensionContext): void {
   // メモリ上に持ち、イベントのたびに globalState へ反映する
   // （globalState自体をキャッシュとして毎回読み直さない）。
   let profile = loadProfile(context);
+
+  // 診断/02 (#76): 解説したエラーを覚えておき、同じエラーの再発を検知する。
+  // LearnerProfile と同じく、メモリ上に持ってイベントのたびに globalState へ反映する。
+  let explainedErrors = loadExplainedErrors(context, (error) => {
+    channel.appendLine(`解説済みエラーの読み込みに失敗しました: ${String(error)}`);
+  });
 
   /** 学習イベントを1件記録する。保存に失敗しても質問フローは止めない。 */
   async function persistEvent(event: LearningEvent): Promise<void> {
@@ -161,13 +184,62 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   }
 
+  /**
+   * 再発したエラーを `error_recurred` として記録し、今回解説したエラーを覚える。
+   *
+   * 判定や保存で例外が出ても質問フローは止めない。`persistEvent` と同じく
+   * ログに残すだけにする（回答はすでに表示済みである）。
+   */
+  async function recordRecurrences(
+    errorKeys: readonly string[],
+    conceptIds: readonly string[],
+    meta: Pick<LearningEvent, "language" | "sessionId">,
+  ): Promise<void> {
+    if (errorKeys.length === 0) {
+      return;
+    }
+
+    try {
+      const now = new Date();
+      const recurred = findRecurred(explainedErrors, errorKeys, conceptIds, now);
+      explainedErrors = markExplained(explainedErrors, errorKeys, conceptIds, now);
+      await saveExplainedErrors(context, explainedErrors, (error) => {
+        channel.appendLine(`解説済みエラーの保存に失敗しました: ${String(error)}`);
+      });
+
+      for (const { key, conceptIds: recurredConceptIds } of recurred) {
+        // Concept に紐付かない再発は習熟度へ反映されない。記録しても
+        // mastery は動かないので、イベントを増やさずログにだけ残す。
+        if (recurredConceptIds.length === 0) {
+          channel.appendLine(
+            `エラーの再発を検知しましたが、Concept が無いため記録しません: ${key}`,
+          );
+          continue;
+        }
+        const diagnosticCode = diagnosticCodeOfKey(key);
+        await persistEvent({
+          id: randomUUID(),
+          occurredAt: now.toISOString(),
+          type: "error_recurred",
+          origin: "vscode",
+          conceptIds: recurredConceptIds,
+          ...meta,
+          ...(diagnosticCode ? { diagnosticCode } : {}),
+        });
+      }
+    } catch (error) {
+      channel.appendLine(`エラーの再発判定に失敗しました: ${String(error)}`);
+    }
+  }
+
   /** 文脈を保持して、最初の質問を入力済みの Gakushu Sochi Chat を開く。 */
 
   async function openChatForContext(
     codeContext: CodeContext,
     diagnostics: string[] = [],
+    errorKeys: string[] = [],
   ): Promise<void> {
-    const contextId = pendingChatContext.set(codeContext, diagnostics);
+    const contextId = pendingChatContext.set(codeContext, diagnostics, errorKeys);
     logContext(codeContext.source);
 
     try {
@@ -203,7 +275,7 @@ export function activate(context: vscode.ExtensionContext): void {
         response.markdown(CONSUMED_CONTEXT_MESSAGE);
         return;
       }
-      const { context: codeContext, diagnostics } = pendingRequest;
+      const { context: codeContext, diagnostics, errorKeys } = pendingRequest;
 
       // #119: 文脈を積んだ後に同意が取り消されることがある。ここで見ないと、
       // 取り消し済みの状態で最後の1回だけ AI へ送ってしまう。
@@ -242,6 +314,14 @@ export function activate(context: vscode.ExtensionContext): void {
       // MVP/02 (#23): 自己申告ではなく、行動と結果から習熟度を組み立てる。
       // ここでは「質問に答えた」事実を記録する。ヒントか解説かで種別を分ける。
       const sessionId = randomUUID();
+
+      // 診断/02 (#76): 時間窓の内に解説したエラーが再び解説対象になったら、
+      // 前回の理解が定着していなかった根拠として記録する。
+      await recordRecurrences(errorKeys, aiResponse.answer.conceptIds, {
+        language: codeContext.languageId,
+        sessionId,
+      });
+
       await persistEvent({
         id: randomUUID(),
         occurredAt: nowIso(),
@@ -293,9 +373,9 @@ export function activate(context: vscode.ExtensionContext): void {
     }
 
     const codeContext = await collectFromEditor(editor);
-    const diagnostics = diagnosticsForSelection(editor.document.uri, selection);
+    const { messages, errorKeys } = diagnosticsForSelection(editor.document.uri, selection);
 
-    await openChatForContext(codeContext, diagnostics);
+    await openChatForContext(codeContext, messages, errorKeys);
   });
 
   const askTerminalSelection = vscode.commands.registerCommand(
