@@ -220,7 +220,10 @@ function openaiRequest(
       "content-type": "application/json",
       ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}),
     },
-    body: { model, messages },
+    // 上限なしだと長い応答を全量生成して課金・待ち時間が伸びるため cap する。
+    // OpenAI 互換エンドポイント（Ollama 等）では max_completion_tokens より
+    // max_tokens のほうが通る範囲が広い。
+    body: { model, messages, max_tokens: MAX_OUTPUT_TOKENS },
   };
 }
 
@@ -241,14 +244,16 @@ function extractText(vendor: ByokVendor, body: unknown): string | undefined {
       )
       .map((part) => part.text)
       .join("");
-    return text ? text : undefined;
+    // 空白だけの応答は parseAnswer で空になる。回答なしの成功として
+    // 記録させないため、構造的に欠落した場合と同じく失敗として扱う。
+    return text.trim() ? text : undefined;
   }
 
   const choices = (body as { choices?: unknown }).choices;
   if (!Array.isArray(choices)) return undefined;
   const message = (choices[0] as { message?: unknown } | undefined)?.message;
   const text = (message as { content?: unknown } | undefined)?.content;
-  return typeof text === "string" && text ? text : undefined;
+  return typeof text === "string" && text.trim() ? text : undefined;
 }
 
 /** エラー応答の本文から、提供元が返したメッセージを取り出す。 */
@@ -296,6 +301,18 @@ function classifyHttpError(status: number, body: unknown): AIError {
     };
   }
   if (status === 429) {
+    const error = (body as { error?: unknown } | null)?.error as
+      { code?: unknown; type?: unknown } | undefined;
+    // OpenAI の insufficient_quota はクレジット・請求枠の枯渇で、
+    // 待っても解消しない。再試行の案内と分けて伝える。
+    if (error?.code === "insufficient_quota" || error?.type === "insufficient_quota") {
+      return {
+        reason: "rate-limited",
+        detail:
+          `提供元の利用枠（クレジット・請求上限）を使い切っています（HTTP 429${suffix}）。` +
+          "再試行では解消しません。提供元の請求設定を確認してください。",
+      };
+    }
     return {
       reason: "rate-limited",
       detail: `提供元のレート制限に達しました（HTTP 429${suffix}）。しばらくしてから試してください。`,
@@ -319,12 +336,16 @@ export class BYOKProvider implements AIProvider {
     private readonly canSend: () => boolean = () => true,
   ) {}
 
-  /** onDebug の失敗を質問処理へ波及させない（vscodeLm.ts と同じ方針）。 */
+  /**
+   * onDebug の失敗を質問処理へ波及させない（vscodeLm.ts と同じ方針）。
+   * ただし握りつぶさず（RULE-004）、別系統の出力先である拡張ホストの
+   * コンソールへ理由を残す。
+   */
   private debug(message: string): void {
     try {
       this.onDebug?.(message);
-    } catch {
-      // 出力先が壊れている場合に報告する手段が無いため、ここは握って続行する。
+    } catch (error) {
+      console.error("BYOK のデバッグ出力に失敗しました", error);
     }
   }
 

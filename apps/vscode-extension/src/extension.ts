@@ -583,9 +583,16 @@ export function activate(context: vscode.ExtensionContext): void {
       // machine スコープの設定なのでユーザー設定（Global）へ書く。
       let vendorNote = `gakushuSochi.byok.vendor を "${vendor}" に設定しました。`;
       try {
-        await vscode.workspace
-          .getConfiguration("gakushuSochi")
-          .update("byok.vendor", vendor, vscode.ConfigurationTarget.Global);
+        const config = vscode.workspace.getConfiguration("gakushuSochi");
+        const previousVendor = config.get<string>("byok.vendor", "anthropic");
+        await config.update("byok.vendor", vendor, vscode.ConfigurationTarget.Global);
+        if (previousVendor !== vendor) {
+          // baseUrl / model は提供元ごとの値。切り替え後に残すと、新しい提供元の
+          // API キーを前の提供元のエンドポイントへ送ってしまうため既定へ戻す。
+          await config.update("byok.baseUrl", undefined, vscode.ConfigurationTarget.Global);
+          await config.update("byok.model", undefined, vscode.ConfigurationTarget.Global);
+          vendorNote += "提供元が変わったため byok.baseUrl / byok.model は既定に戻しました。";
+        }
       } catch (error) {
         channel.appendLine(`byok.vendor の更新に失敗しました: ${String(error)}`);
         vendorNote = `gakushuSochi.byok.vendor を "${vendor}" に設定してください。`;

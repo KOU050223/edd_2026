@@ -24,6 +24,8 @@ const {
   readClipboard,
   recordEvent,
   registeredCommands,
+  showInputBox,
+  showQuickPick,
   syncEvent,
   outputChannel,
 } = vi.hoisted(() => ({
@@ -48,6 +50,8 @@ const {
   readClipboard: vi.fn(),
   recordEvent: vi.fn(),
   registeredCommands: new Map<string, () => Promise<void>>(),
+  showInputBox: vi.fn(),
+  showQuickPick: vi.fn(),
   syncEvent: vi.fn(),
   outputChannel: {
     appendLine: vi.fn(),
@@ -62,8 +66,11 @@ vi.mock("vscode", () => ({
     createOutputChannel: vi.fn(() => outputChannel),
     showErrorMessage: vi.fn(),
     showInformationMessage: vi.fn(),
+    showInputBox,
+    showQuickPick,
     showWarningMessage,
   },
+  ConfigurationTarget: { Global: 1, Workspace: 2, WorkspaceFolder: 3 },
   commands: {
     executeCommand,
     registerCommand: vi.fn((name: string, command: () => Promise<void>) => {
@@ -676,6 +683,35 @@ test("SecretStorage が読めないときも、例外を投げず失敗を案内
   expect(fetchMock).not.toHaveBeenCalled();
   expect(askedRequests).toHaveLength(0);
   expect(response.markdown).toHaveBeenCalledWith(expect.stringContaining("資格情報ストア"));
+});
+
+test("BYOK のキー保存で提供元を切り替えると、前の提供元の上書き設定を既定へ戻す", async () => {
+  // OpenAI 互換の baseUrl を残したまま anthropic のキーを保存すると、
+  // そのキーが前の提供元の URL へ送られてしまう。切り替え時に戻すのが正しい。
+  loadProfile.mockReturnValueOnce({ events: [], mastery: {} });
+  const updates: [string, unknown][] = [];
+  getConfiguration.mockReturnValue({
+    get: (key: string, fallback?: string) => {
+      if (key === "byok.vendor") return "openai";
+      if (key === "byok.baseUrl") return "https://openrouter.ai/api";
+      if (key === "api.baseUrl") return "";
+      return fallback;
+    },
+    update: async (key: string, value: unknown) => {
+      updates.push([key, value]);
+    },
+  });
+  showQuickPick.mockResolvedValueOnce({ label: "anthropic" });
+  showInputBox.mockResolvedValueOnce("sk-ant-new");
+
+  const secrets = new Map<string, string>();
+  activate(createExtensionContext(true, secrets) as never);
+  await registeredCommands.get("gakushuSochi.setByokApiKey")?.();
+
+  expect(secrets.get("gakushuSochi.byok.apiKey.anthropic")).toBe("sk-ant-new");
+  expect(updates).toContainEqual(["byok.vendor", "anthropic"]);
+  expect(updates).toContainEqual(["byok.baseUrl", undefined]);
+  expect(updates).toContainEqual(["byok.model", undefined]);
 });
 
 test("ai.provider が byok でもキーが未設定なら、送信せず設定コマンドへ案内する", async () => {

@@ -238,6 +238,43 @@ test("コンテキスト長超過のエラーは context-too-long として返�
   }
 });
 
+test("OpenAI 経路の要求には出力トークンの上限を付ける", async () => {
+  // 上限なしだと長い応答を全量生成し、課金と待ち時間が伸びる。
+  const calls = stubFetch({ choices: [{ message: { content: "ok" } }] });
+
+  await new BYOKProvider({ vendor: "openai", apiKey: "k" }).ask(REQUEST);
+
+  const body = JSON.parse(calls[0]?.init?.body as string);
+  expect(body.max_tokens).toBe(4096);
+});
+
+test("空白だけの応答本文は成功として扱わない", async () => {
+  // "   " は真だが parseAnswer で空になり、回答なしのまま
+  // answer_viewed が記録されてしまう。構造欠落と同じく失敗にする。
+  stubFetch({ choices: [{ message: { content: "   " } }] });
+
+  const response = await new BYOKProvider({ vendor: "openai", apiKey: "k" }).ask(REQUEST);
+
+  expect(response.ok).toBe(false);
+  if (!response.ok) {
+    expect(response.error.reason).toBe("unknown");
+  }
+});
+
+test("429 insufficient_quota は再試行ではなく請求設定の確認を案内する", async () => {
+  // クレジット・請求枠の枯渇は待っても解消しないため、レート制限と分ける。
+  stubFetch({ error: { code: "insufficient_quota", message: "quota exceeded" } }, 429);
+
+  const response = await new BYOKProvider({ vendor: "openai", apiKey: "k" }).ask(REQUEST);
+
+  expect(response.ok).toBe(false);
+  if (!response.ok) {
+    expect(response.error.reason).toBe("rate-limited");
+    expect(response.error.detail).toContain("請求");
+    expect(response.error.detail).not.toContain("しばらくしてから");
+  }
+});
+
 test("2xx でも本文の解析に失敗したら失敗として扱う", async () => {
   stubFetch("not-json", 200);
 

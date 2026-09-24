@@ -90,8 +90,10 @@ export class VSCodeLMProvider implements AIProvider {
   private debug(message: string): void {
     try {
       this.onDebug?.(message);
-    } catch {
-      // 出力先が壊れている場合に報告する手段が無いため、ここは握って続行する。
+    } catch (error) {
+      // 出力先が壊れていても回答自体は続ける。別系統の出力先である
+      // 拡張ホストのコンソールへ理由を残し、失敗を握りつぶさない（RULE-004）。
+      console.error("デバッグ出力に失敗しました", error);
     }
   }
 
