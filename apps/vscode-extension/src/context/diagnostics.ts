@@ -17,12 +17,31 @@ function comparePositions(left: PositionLike, right: PositionLike): number {
   return left.character - right.character;
 }
 
+function isEmptyRange(range: RangeLike): boolean {
+  return comparePositions(range.start, range.end) === 0;
+}
+
+function containsPosition(range: RangeLike, position: PositionLike): boolean {
+  return comparePositions(range.start, position) <= 0 && comparePositions(position, range.end) <= 0;
+}
+
 /**
  * 2つの範囲に空でない共通部分があるか判定する。
  *
  * 終端だけが接する場合は、ユーザーがそのDiagnosticを選択していないため false にする。
+ *
+ * 長さ0の範囲（位置だけを指すDiagnostic）は共通部分を持ちえないので、
+ * その位置がもう一方の範囲に含まれるかで判定する。両端も含める。
+ * 文字と文字の間を指す位置なので、端にあっても選択の外にははみ出さない。
+ * 行末の「; が必要」のような位置は選択の終端に来やすく、落とすと拾えない。
  */
 export function rangesOverlap(left: RangeLike, right: RangeLike): boolean {
+  if (isEmptyRange(left)) {
+    return containsPosition(right, left.start);
+  }
+  if (isEmptyRange(right)) {
+    return containsPosition(left, right.start);
+  }
   return comparePositions(left.start, right.end) < 0 && comparePositions(right.start, left.end) < 0;
 }
 

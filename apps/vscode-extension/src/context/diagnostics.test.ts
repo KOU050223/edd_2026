@@ -24,6 +24,29 @@ test("選択範囲と実際に重なるDiagnosticsだけを採用する", () => 
   expect(rangesOverlap(selection, range(9, 0, 11, 0))).toBe(true);
 });
 
+test("長さ0のDiagnosticは、その位置が選択範囲の内側にあれば採用する", () => {
+  const selection = range(10, 3, 10, 8);
+
+  expect(rangesOverlap(range(10, 5, 10, 5), selection)).toBe(true);
+  expect(rangesOverlap(selection, range(10, 5, 10, 5))).toBe(true);
+});
+
+test("長さ0のDiagnosticは、選択範囲の外にあれば採用しない", () => {
+  const selection = range(10, 3, 10, 8);
+
+  expect(rangesOverlap(range(10, 2, 10, 2), selection)).toBe(false);
+  expect(rangesOverlap(range(10, 9, 10, 9), selection)).toBe(false);
+  expect(rangesOverlap(range(11, 0, 11, 0), selection)).toBe(false);
+});
+
+test("長さ0のDiagnosticは、選択範囲の両端にあっても採用する", () => {
+  // 行末の「; が必要」のような位置は、選択の終端にちょうど来やすい。
+  const selection = range(10, 3, 10, 8);
+
+  expect(rangesOverlap(range(10, 3, 10, 3), selection)).toBe(true);
+  expect(rangesOverlap(range(10, 8, 10, 8), selection)).toBe(true);
+});
+
 test("codeがあればsourceと組にして識別し、メッセージの違いは無視する", () => {
   const first = errorKeyOf({
     source: "ts",
