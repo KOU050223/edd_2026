@@ -8,6 +8,8 @@ contextBridge.exposeInMainWorld("desktop", {
   retrySelection: () => ipcRenderer.invoke("selection:retry"),
   ask: (selection: string, question: string) =>
     ipcRenderer.invoke("answer:ask", selection, question),
+  getConsentStatus: () => ipcRenderer.invoke("consent:status"),
+  reviewConsent: () => ipcRenderer.invoke("consent:review"),
   close: () => ipcRenderer.invoke("window:close"),
   minimize: () => ipcRenderer.invoke("window:minimize"),
   openExternalLink: (url: string) => ipcRenderer.invoke("external-link:open", url),

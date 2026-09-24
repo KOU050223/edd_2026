@@ -1,5 +1,6 @@
 import { createFileRoute, useRouter } from "@tanstack/react-router";
 import { useRef, useState } from "react";
+import { CONSENT_NOTICE_DETAIL, CONSENT_NOTICE_TITLE } from "@gakushu-sochi/domain";
 import {
   ApiError,
   createOperationQueue,
@@ -7,6 +8,12 @@ import {
   putJson,
   requestJson,
 } from "../../../api.js";
+import {
+  fetchConsentStatus,
+  grantConsent,
+  revokeConsent,
+  type ConsentStatus,
+} from "../../../consent.js";
 import {
   DISPLAY_NAME_MAX_LENGTH,
   ACTIVITY_PERIOD_DAYS,
@@ -29,7 +36,7 @@ const SETTINGS_PATH = "/api/v1/user-settings";
  * そのまま不具合の報告になる。項目が増えるのは、それを尊重する側が動いてからでよい。
  */
 function Settings() {
-  const loaded = Route.useLoaderData();
+  const { settings: loaded, consent: loadedConsent } = Route.useLoaderData();
   const router = useRouter();
   // 保存済みの値と編集中の値の2つだけを持つ。項目ごとに state を増やすと、
   // 差分の判定と「読み込んだ値を入力欄へ戻す」処理が項目の数だけ散らばり、
@@ -43,6 +50,35 @@ function Settings() {
   const [saving, setSaving] = useState(false);
   const submitGuard = useRef(createSubmitGuard());
   const queue = useRef(createOperationQueue());
+  // 送信の同意はユーザー設定とは別の記録（Worker の KV）なので、別の state で持つ。
+  const [consent, setConsent] = useState<ConsentStatus>(loadedConsent);
+  const [consentError, setConsentError] = useState<string>();
+  const [consentBusy, setConsentBusy] = useState(false);
+
+  const runConsent = (action: () => Promise<ConsentStatus>) => {
+    // 入口で弾く（RULE-007）。同意と取り消しの連打で記録が交錯しないようにする。
+    if (submitGuard.current.isRunning("consent")) return;
+    setConsentError(undefined);
+    setConsentBusy(true);
+    void submitGuard.current
+      .run("consent", async () => {
+        try {
+          const next = await action();
+          setConsent(next);
+          // loader のキャッシュを捨てて、同意状態の読み直しを他画面へも伝える。
+          await router.invalidate();
+        } catch (value: unknown) {
+          if (value instanceof ApiError && value.kind === "session_expired") {
+            window.location.href = "/login";
+            return;
+          }
+          setConsentError(toErrorText(value));
+        }
+      })
+      .finally(() => {
+        setConsentBusy(false);
+      });
+  };
 
   const save = (current: SettingsDraft) => {
     // 入口で弾く（RULE-007）。`disabled` は見た目でしかなく、
@@ -162,11 +198,60 @@ function Settings() {
           ? `最終更新 ${new Date(saved.updatedAt).toLocaleString("ja-JP")}`
           : "まだ保存していません"}
       </p>
+
+      <fieldset className="field">
+        <legend>送信の同意</legend>
+        {consent.granted ? (
+          <small>
+            {consent.grantedAt
+              ? `${new Date(consent.grantedAt).toLocaleString("ja-JP")} に同意しています。`
+              : "同意しています。"}
+          </small>
+        ) : (
+          <small>同意していません。AI への送信と学習データの書き込みは止まっています。</small>
+        )}
+        <details className="consent-detail">
+          <summary>{CONSENT_NOTICE_TITLE}</summary>
+          <pre>{CONSENT_NOTICE_DETAIL}</pre>
+        </details>
+        {consentError && (
+          <p className="message error" role="alert">
+            {consentError}
+          </p>
+        )}
+        <div className="actions">
+          {consent.granted ? (
+            <button
+              type="button"
+              disabled={consentBusy}
+              onClick={() => runConsent(() => revokeConsent())}
+            >
+              {consentBusy ? "処理中…" : "同意を取り消す"}
+            </button>
+          ) : (
+            <button
+              type="button"
+              disabled={consentBusy}
+              onClick={() => runConsent(() => grantConsent())}
+            >
+              {consentBusy ? "処理中…" : "同意する"}
+            </button>
+          )}
+        </div>
+        <small>取り消すと以降の送信は止まります。すでに送信済みのデータの削除は含みません。</small>
+      </fieldset>
     </section>
   );
 }
 
 export const Route = createFileRoute("/_framed/settings/")({
-  loader: () => requestJson<UserSettings>(SETTINGS_PATH, fetch, takeLoginRetry()),
+  loader: async () => {
+    const retry = takeLoginRetry();
+    const [settings, consent] = await Promise.all([
+      requestJson<UserSettings>(SETTINGS_PATH, fetch, retry),
+      fetchConsentStatus(fetch, retry),
+    ]);
+    return { settings, consent };
+  },
   component: Settings,
 });

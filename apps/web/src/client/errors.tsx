@@ -13,6 +13,10 @@ const errorText: Record<ApiError["kind"], string> = {
   session_expired: "ログインの有効期限が切れました",
   auth_unavailable: "認証サーバーへ一時的に接続できません。少し待って再試行してください。",
   rate_limited: "短時間に要求が多すぎます。しばらく待って再読み込みしてください。",
+  consent_required:
+    "送信の同意がありません。設定画面の「送信の同意」で内容を確認して同意してください。",
+  consent_outdated:
+    "同意の文面が更新されました。ページを再読み込みして、最新の内容を確認してください。",
   unavailable: "学習データの取得に失敗しました",
 };
 

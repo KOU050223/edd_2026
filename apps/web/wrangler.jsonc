@@ -15,7 +15,8 @@
     // **認可コードの交換が Worker に届かないまま静かに失敗する**
     // （docs/web-viewer.md の警告 / docs/auth.md §5.3）。
     // `/login` は IdP へのリダイレクト開始点として Worker 側に残る。
-    "run_worker_first": ["/api/*", "/login", "/callback", "/logout"],
+    // `/consent` は同意記録の読み書きを Worker が担う（#174）。
+    "run_worker_first": ["/api/*", "/login", "/callback", "/logout", "/consent"],
   },
   "vars": {
     "API_ORIGIN": "https://gakushu-sochi-api.uozumi05.workers.dev",

@@ -48,7 +48,8 @@ import {
 } from "./oauth.js";
 import { describeApiFailure } from "./api-error.js";
 import { AuthOperationState } from "./auth-operation.js";
-import { CONCEPTS } from "@gakushu-sochi/domain";
+import { createConsentStore } from "./consent.js";
+import { CONCEPTS, CONSENT_NOTICE_DETAIL, CONSENT_NOTICE_TITLE } from "@gakushu-sochi/domain";
 
 const execFileAsync = promisify(execFile);
 const SERVICE_NAME = "Gakushu Sochi";
@@ -124,6 +125,96 @@ function credentialStore(fileName: string) {
 
 function refreshTokenStore() {
   return credentialStore("refresh-token.enc");
+}
+
+/**
+ * 同意の記録は `userData` 直下の専用ファイルへ置く。settings.json に混ぜると
+ * `settings:save` の経路から同意を偽装できてしまう（RULE-006 / consent.ts）。
+ */
+function consentStore() {
+  const filePath = path.join(app.getPath("userData"), "consent.json");
+  return createConsentStore({
+    read: () => (existsSync(filePath) ? readFileSync(filePath, "utf8") : ""),
+    write: (value) => writeFileSync(filePath, value, { encoding: "utf8", mode: 0o600 }),
+  });
+}
+
+/**
+ * 同意済みであることを確かめる。未同意なら文面を提示して同意を求める。
+ *
+ * @returns 送信してよいか。false のとき、呼び出し側は送信せずに戻ること。
+ *          記録の保存に失敗した場合は例外を投げ、送信を中止させる。
+ */
+async function ensureConsent(): Promise<boolean> {
+  if (consentStore().has()) return true;
+
+  const options = {
+    type: "warning" as const,
+    title: CONSENT_NOTICE_TITLE,
+    message: CONSENT_NOTICE_TITLE,
+    detail: CONSENT_NOTICE_DETAIL,
+    buttons: ["同意して続ける", "同意しない"],
+    defaultId: 0,
+    cancelId: 1,
+    noLink: true,
+  };
+  const result = popup
+    ? await dialog.showMessageBox(popup, options)
+    : await dialog.showMessageBox(options);
+  if (result.response !== 0) return false;
+
+  // 記録できないまま送ると、同意の証跡が無いまま送信を続けることになる。
+  // 失敗は呼び出し側へ投げて、今回は送らない（RULE-004）。
+  consentStore().grant(new Date().toISOString());
+  return true;
+}
+
+/**
+ * 同意の状態と文面を利用者が読み返せるようにする。同意済みなら取り消せる。
+ *
+ * すでに送ったデータの削除はここでは行わない。止まるのは「これから送るもの」
+ * だけであることを利用者へ明示する。
+ */
+async function reviewConsent(): Promise<void> {
+  if (!consentStore().has()) {
+    await ensureConsent();
+    return;
+  }
+
+  const options = {
+    type: "info" as const,
+    title: CONSENT_NOTICE_TITLE,
+    message: CONSENT_NOTICE_TITLE,
+    detail: `${CONSENT_NOTICE_DETAIL}\n\n現在、送信に同意しています。`,
+    buttons: ["同意を取り消す", "閉じる"],
+    defaultId: 1,
+    cancelId: 1,
+    noLink: true,
+  };
+  const result = popup
+    ? await dialog.showMessageBox(popup, options)
+    : await dialog.showMessageBox(options);
+  if (result.response !== 0) return;
+
+  try {
+    consentStore().revoke();
+  } catch (error) {
+    // 取り消せていないのに「取り消しました」と伝えると、送信が続いていることに
+    // 利用者が気付けない。黙って飲み込まず、失敗として伝える（RULE-004）。
+    console.error("同意の取り消しに失敗しました", error);
+    dialog.showErrorBox(
+      "同意を取り消せませんでした",
+      "送信は停止していません。もう一度お試しください。",
+    );
+    return;
+  }
+  await dialog.showMessageBox({
+    type: "info",
+    message: "送信の同意を取り消しました。",
+    detail: "以降の送信は行いません。すでに送信済みのデータの削除は含みません。",
+    buttons: ["閉じる"],
+    noLink: true,
+  });
 }
 
 async function loginWithBrowser(): Promise<void> {
@@ -431,6 +522,16 @@ function createTray(): void {
         },
       },
       { label: "設定", click: () => showPopup("") },
+      {
+        label: "送信内容の同意",
+        click: () => {
+          // showPopup("") は表示中の選択テキストを消してしまうため、
+          // ウィンドウを出すだけにして文面はダイアログで見せる。
+          popup ??= createPopup();
+          activatePopup(app, popup);
+          void reviewConsent();
+        },
+      },
       ...(process.platform === "darwin"
         ? [
             {
@@ -586,9 +687,23 @@ app
     ipcMain.handle("selection:retry", openForSelection);
     ipcMain.handle("answer:ask", async (event, selection: string, question: string) => {
       if (!selection.trim()) throw new Error("選択テキストを取得できませんでした。");
+      // #174: 同意の記録があるときだけ送る。選択テキストと質問文が
+      // Managed AI 経由で端末の外へ出る唯一の経路なので、ここで止める。
+      if (!(await ensureConsent())) {
+        throw new Error("送信の同意が得られなかったため、送信を中止しました。");
+      }
       await askManagedAI(selection, normalizeQuestion(question), (delta) =>
         event.sender.send("answer:delta", delta),
       );
+    });
+    ipcMain.handle("consent:status", () => {
+      const store = consentStore();
+      return { granted: store.has(), grantedAt: store.grantedAt() };
+    });
+    ipcMain.handle("consent:review", async () => {
+      await reviewConsent();
+      const store = consentStore();
+      return { granted: store.has(), grantedAt: store.grantedAt() };
     });
     // Concept 一覧は packages/domain が正典。習熟度は API 側で導出されるため、
     // ここでは一覧だけを渡し、status は未取得を表す "unobserved" を既定にする。
