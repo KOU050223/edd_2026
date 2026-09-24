@@ -2,6 +2,7 @@ import { beforeEach, expect, test } from "vitest";
 import type { LearningEvent } from "@gakushu-sochi/domain";
 import {
   createInMemoryRepositoryStore,
+  InMemoryAuditLogRepository,
   InMemoryIdentityRepository,
   InMemoryLearningEventRepository,
 } from "./memory.js";
@@ -194,6 +195,26 @@ test("退会でユーザー、端末、学習イベントを削除し、同期�
   await expect(
     identity.ensureUserAndDevice({ userId: "user-a", clientId: "client-1", nowMs: 300 }),
   ).rejects.toThrow("user deletion is in progress");
+});
+
+test("退会で監査ログも消える", async () => {
+  // D1 では audit_log が users(id) を ON DELETE CASCADE で参照している。
+  // 退会した利用者の操作記録が残り続けると「アカウントごと全データを消す」
+  // 方針に反するため、インメモリ実装でも同じ結果になるよう揃える。
+  const store = createInMemoryRepositoryStore();
+  const identity = new InMemoryIdentityRepository(store);
+  const audit = new InMemoryAuditLogRepository(store);
+
+  await identity.ensureUser({ userId: "user-a", nowMs: 100 });
+  await audit.record({
+    userId: "user-a",
+    action: "learning_events.deleted",
+    occurredAtMs: 200,
+    detail: { deletedCount: 3 },
+  });
+  await identity.deleteUser("user-a");
+
+  expect(store.auditLog).toEqual([]);
 });
 
 test("退会マーカーはアクセストークンの有効期間を過ぎると期限切れになる", async () => {

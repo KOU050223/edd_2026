@@ -17,6 +17,8 @@ import type {
   AiUsage,
   AiUsageRepository,
   AppendResult,
+  AuditLogEntry,
+  AuditLogRepository,
   IdentityRepository,
   LearningEventRepository,
   MasteryOverride,
@@ -568,6 +570,32 @@ export class D1AiUsageRepository implements AiUsageRepository {
     if (result.meta.changes === 0) {
       throw new Error(`ai_usage row is missing (user_id=${userId}, month_key=${monthKey})`);
     }
+  }
+}
+
+/**
+ * `AuditLogRepository` の D1 実装（Issue #122）。
+ *
+ * 追記のみ。`user_id` は `users(id)` を参照するため、users 行が無いまま
+ * 書こうとすると FOREIGN KEY constraint failed で落ちる。行が無い利用者を
+ * 記録したい経路では、呼び出し側が先に `ensureUser` で行を用意する。
+ */
+export class D1AuditLogRepository implements AuditLogRepository {
+  constructor(private readonly db: D1Database) {}
+
+  async record(entry: AuditLogEntry): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT INTO audit_log (user_id, action, occurred_at_ms, detail)
+         VALUES (?, ?, ?, ?)`,
+      )
+      .bind(
+        entry.userId,
+        entry.action,
+        entry.occurredAtMs,
+        entry.detail === undefined ? null : JSON.stringify(entry.detail),
+      )
+      .run();
   }
 }
 

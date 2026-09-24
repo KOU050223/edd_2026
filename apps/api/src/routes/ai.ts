@@ -150,7 +150,13 @@ export function createAiRoute(resolve: AiDepsResolver) {
     } = c.req.valid("json");
     const normalizedQuestion = question.trim() || DEFAULT_EXPLANATION_QUESTION;
     const deps = resolve(c.env);
-    if (!deps.apiKey) return c.json({ error: "AI service is not configured" }, 503);
+    if (!deps.apiKey) {
+      // 設定漏れは利用者の失敗ではなく運営側の障害である。503 の応答だけでは
+      // Workers のログから区別できないため残す
+      // （docs/architecture.md「監視・監査ログ・障害時の再送」）。
+      console.error("ai service is not configured", { path: c.req.path });
+      return c.json({ error: "AI service is not configured" }, 503);
+    }
 
     // モデルを allowlist で絞る。未指定時に `GEMINI_MODEL` を使う挙動は変えないが、
     // 設定値であっても検証は通す。設定の誤りが「単価の高いモデルを既定にする」
@@ -265,6 +271,14 @@ export function createAiRoute(resolve: AiDepsResolver) {
     );
 
     if (!upstream.ok || !upstream.body) {
+      // 上流の失敗は 502 を返すだけだと AI 経路のエラー率を追えない。
+      // ステータスは残すが、上流の本文（エラーメッセージ）は読まずに捨てる。
+      // 中身を持ち回すとプロバイダ由来の文字列がログへ流れ込む。
+      console.error("ai upstream request failed", {
+        userId,
+        model,
+        status: upstream.status,
+      });
       return c.json({ error: "AI upstream request failed" }, 502);
     }
 

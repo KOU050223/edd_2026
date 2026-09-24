@@ -11,6 +11,8 @@ import type { LearningEvent } from "@gakushu-sochi/domain";
 import { ACCOUNT_DELETION_TOMBSTONE_TTL_MS } from "./types.js";
 import type {
   AppendResult,
+  AuditLogEntry,
+  AuditLogRepository,
   IdentityRepository,
   LearningEventRepository,
   StoredEventInput,
@@ -23,6 +25,8 @@ export interface InMemoryRepositoryStore {
   readonly deletingUsers: Map<string, number>;
   /** userId -> 最後に履歴を削除した時刻。D1 の learning_history_resets に対応する。 */
   readonly historyResets: Map<string, number>;
+  /** D1 の audit_log に対応する。追記のみ。 */
+  readonly auditLog: AuditLogEntry[];
 }
 
 export function createInMemoryRepositoryStore(): InMemoryRepositoryStore {
@@ -32,6 +36,7 @@ export function createInMemoryRepositoryStore(): InMemoryRepositoryStore {
     eventsByUser: new Map(),
     deletingUsers: new Map(),
     historyResets: new Map(),
+    auditLog: [],
   };
 }
 
@@ -185,6 +190,13 @@ export class InMemoryIdentityRepository implements IdentityRepository {
     this.devicesByUser.delete(userId);
     this.store.eventsByUser.delete(userId);
     this.store.historyResets.delete(userId);
+    // D1 の audit_log は users(id) を ON DELETE CASCADE で参照している。
+    // 退会で監査ログも消えるという実際の振る舞いに合わせる。
+    for (let i = this.store.auditLog.length - 1; i >= 0; i--) {
+      if (this.store.auditLog[i]?.userId === userId) {
+        this.store.auditLog.splice(i, 1);
+      }
+    }
     return Promise.resolve();
   }
 
@@ -200,5 +212,20 @@ export class InMemoryIdentityRepository implements IdentityRepository {
       total += devices.size;
     }
     return total;
+  }
+}
+
+/**
+ * `AuditLogRepository` のインメモリ実装。テスト用。
+ *
+ * 記録はストアの `auditLog` に追記される。テストはそこを直接読んで
+ * 「何が記録されたか」を確かめる。
+ */
+export class InMemoryAuditLogRepository implements AuditLogRepository {
+  constructor(private readonly store = createInMemoryRepositoryStore()) {}
+
+  record(entry: AuditLogEntry): Promise<void> {
+    this.store.auditLog.push(entry);
+    return Promise.resolve();
   }
 }

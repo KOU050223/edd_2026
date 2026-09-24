@@ -1,4 +1,4 @@
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { Hono } from "hono";
 import { type AuthVariables } from "./middleware.js";
 import { AUTHORIZED_HEADERS, stubAuth } from "./test-auth.js";
@@ -69,10 +69,29 @@ test("上限内のリクエストは通す", async () => {
 test("上限を超えたら429にする", async () => {
   const { limiter } = fakeLimiter(1);
   const request = buildApp(limiter);
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
   await request();
 
   expect((await request()).status).toBe(429);
+  warn.mockRestore();
+});
+
+test("上限への到達はどの経路で誰が止まったかをログに残す", async () => {
+  // レート制限到達数は監視指標の1つ（docs/architecture.md）。
+  // 429 の応答だけではダッシュボードから経路と利用者が読めない。
+  const { limiter } = fakeLimiter(1);
+  const request = buildApp(limiter);
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+  await request();
+  await request();
+
+  expect(warn).toHaveBeenCalledWith("rate limit reached", {
+    path: "/limited",
+    userId: "user-a",
+  });
+  warn.mockRestore();
 });
 
 test("認証済みのuserIdを単位として数える", async () => {
