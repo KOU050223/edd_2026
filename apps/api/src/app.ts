@@ -12,6 +12,7 @@ import {
 } from "./repository/d1.js";
 import { createLearningEventsRoute } from "./routes/learning-events.js";
 import { createLearningProfileRoute } from "./routes/learning-profile.js";
+import { createLearningDataRoute } from "./routes/learning-data.js";
 import { createLearningActivityRoute } from "./routes/learning-activity.js";
 import { createAiRoute } from "./routes/ai.js";
 import { createAccountRoute } from "./routes/account.js";
@@ -80,6 +81,17 @@ app.use(
   "/v1/learning-profile",
   rateLimit((env) => env.PROFILE_RATE_LIMITER),
 );
+// 学習データのエクスポートと削除（#79）。どちらも利用者の明示的な操作でしか
+// 呼ばれず、頻度の想定は Profile より低い。エクスポートは全件を読むため、
+// 叩き放題にすると D1 の読み取りを食い潰せる。
+app.use(
+  "/v1/learning-events:export",
+  rateLimit((env) => env.PROFILE_RATE_LIMITER),
+);
+app.use(
+  "/v1/learning-events",
+  rateLimit((env) => env.PROFILE_RATE_LIMITER),
+);
 app.use(
   "/v1/learning-activity",
   rateLimit((env) => env.PROFILE_RATE_LIMITER),
@@ -142,6 +154,16 @@ app.route(
   createLearningProfileRoute((env) => ({
     events: new D1LearningEventRepository(env.DB),
     nowIso: () => new Date().toISOString(),
+  })),
+);
+
+app.route(
+  "/v1",
+  createLearningDataRoute((env) => ({
+    identity: new D1IdentityRepository(env.DB),
+    events: new D1LearningEventRepository(env.DB),
+    nowIso: () => new Date().toISOString(),
+    nowMs: () => Date.now(),
   })),
 );
 

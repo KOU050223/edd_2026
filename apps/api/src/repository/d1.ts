@@ -103,6 +103,12 @@ export class D1LearningEventRepository implements LearningEventRepository {
          SELECT 1 FROM account_deletions
          WHERE user_id = ? AND started_at_ms > ?
        )
+       -- 履歴の削除より前に受け取ったイベントは書かない。同じ文の中で判定するので、
+       -- 読んでから書くまでの間に DELETE が割り込む隙間が無い。
+       AND NOT EXISTS (
+         SELECT 1 FROM learning_history_resets
+         WHERE user_id = ? AND reset_at_ms >= ?
+       )
        ON CONFLICT (user_id, id) DO NOTHING`,
     );
 
@@ -123,6 +129,8 @@ export class D1LearningEventRepository implements LearningEventRepository {
         receivedAtMs,
         userId,
         nowMs - ACCOUNT_DELETION_TOMBSTONE_TTL_MS,
+        userId,
+        receivedAtMs,
       ),
     );
 
@@ -138,6 +146,13 @@ export class D1LearningEventRepository implements LearningEventRepository {
       throw new Error("user deletion is in progress");
     }
 
+    // 書かれなかった行が「重複」なのか「履歴の削除に含まれた」なのかを分けるために読む。
+    // バッチの後に読むので、バッチ中に割り込んだ削除も拾える。
+    const reset = await this.db
+      .prepare(`SELECT reset_at_ms FROM learning_history_resets WHERE user_id = ?`)
+      .bind(userId)
+      .first<{ reset_at_ms: number }>();
+
     return inputs.map((input, index) => {
       const changes = results[index]?.meta?.changes;
 
@@ -148,6 +163,12 @@ export class D1LearningEventRepository implements LearningEventRepository {
         throw new Error(
           `D1 batch result has no meta.changes (index=${index}, id=${input.event.id})`,
         );
+      }
+
+      // 削除より前に受け取ったイベントは、受理したうえで削除に含まれた扱いにする。
+      // 重複と答えないのは、既に保存済みだったかのように見せないため。
+      if (changes === 0 && reset !== null && reset.reset_at_ms >= input.receivedAtMs) {
+        return { id: input.event.id, duplicate: false };
       }
 
       // 書き込まれた行が0なら、同じ ID が既にあったということ。
@@ -178,6 +199,30 @@ export class D1LearningEventRepository implements LearningEventRepository {
       .first<{ count: number }>();
 
     return row?.count ?? 0;
+  }
+
+  async deleteByUser(userId: string, resetAtMs: number): Promise<number> {
+    // 削除時刻の記録とイベントの削除を1つのトランザクションにする。
+    // 片方だけ成功すると、競合を塞げないか、塞いだのに消えていないかのどちらかになる。
+    // 時刻は巻き戻さない。遅れて届いた古い削除要求で境界を後退させないため。
+    const [, result] = await this.db.batch([
+      this.db
+        .prepare(
+          `INSERT INTO learning_history_resets (user_id, reset_at_ms) VALUES (?, ?)
+           ON CONFLICT (user_id) DO UPDATE
+           SET reset_at_ms = MAX(reset_at_ms, excluded.reset_at_ms)`,
+        )
+        .bind(userId, resetAtMs),
+      this.db.prepare(`DELETE FROM learning_events WHERE user_id = ?`).bind(userId),
+    ]);
+
+    // 件数が取れなければ既定値で埋めない。0 と答えると「消すものが無かった」と
+    // 「消せたか分からない」の区別が消える（RULE-004）。
+    const changes = result?.meta?.changes;
+    if (typeof changes !== "number") {
+      throw new Error("D1 delete result has no meta.changes");
+    }
+    return changes;
   }
 }
 

@@ -492,4 +492,6 @@ CI で型のずれが出るとしたらこの経路である。`test/package-scr
 - ~~ユーザー設定の編集。~~ Web/06（#123）で `/settings` として実装した。
   設定は D1 の `user_settings` に置く。1ユーザー1行の上書きで、退会の
   `DELETE FROM users` が `ON DELETE CASCADE` で一緒に消す。
-- データのエクスポート / 削除（architecture.md「本番化前に明確化する事項」）。
+- データのエクスポート / 削除の画面。API は #79 で実装した
+  （`GET /v1/learning-events:export` / `DELETE /v1/learning-events`、
+  architecture.md「保存期間と削除」）。Web にはボタンがまだ無い。
