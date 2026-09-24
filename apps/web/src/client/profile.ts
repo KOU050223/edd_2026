@@ -3,7 +3,12 @@ export interface Concept {
   label?: string;
   status: "confirmed" | "learning" | "unobserved";
   score: number;
-  evidence: { solvedIndependentlyCount: number; hintUsedCount: number };
+  evidence: {
+    solvedIndependentlyCount: number;
+    hintUsedCount: number;
+    /** 直近で観測したイベントの時刻。ISO 8601。現在地の判定に使う。 */
+    lastObservedAt?: string;
+  };
 }
 
 export function summarizeConcepts<T extends Pick<Concept, "conceptId" | "status">>(
