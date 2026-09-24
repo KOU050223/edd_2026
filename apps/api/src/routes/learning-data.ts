@@ -18,11 +18,17 @@ import {
   type LearnerProfile,
 } from "@gakushu-sochi/domain";
 import type { AuthVariables } from "../auth/middleware.js";
-import type { IdentityRepository, LearningEventRepository } from "../repository/types.js";
+import type {
+  AuditLogRepository,
+  IdentityRepository,
+  LearningEventRepository,
+} from "../repository/types.js";
 
 export interface LearningDataDeps {
   identity: IdentityRepository;
   events: LearningEventRepository;
+  /** 監査ログ（Issue #122）。エクスポートと削除を「誰がいつ何をしたか」として残す。 */
+  audit: AuditLogRepository;
   /** 現在時刻を ISO 8601 で返す。テストで固定できるよう注入する。 */
   nowIso: () => string;
   /** 現在時刻（epoch ミリ秒）。削除時刻の記録に使う。テストで固定できるよう注入する。 */
@@ -52,6 +58,13 @@ export function createLearningDataRoute(resolve: LearningDataDepsResolver) {
   app.get("/learning-events:export", async (c) => {
     const userId = c.get("user").userId;
     const deps = resolve(c.env);
+
+    // 監査ログの audit_log.user_id は users(id) を参照する。まだ一度も
+    // 同期していない利用者でも記録できるよう、先に行を用意する。
+    // 退会のトゥームストーンが残っている間は ensureUser が失敗し 500 になる。
+    // 退会済みアカウントのエクスポートが拒否されるのは意図した挙動である
+    // （docs/architecture.md「監視・監査ログ・障害時の再送」）。
+    await deps.identity.ensureUser({ userId, nowMs: deps.nowMs() });
     const events = await deps.events.listByUser(userId);
 
     // 独自形式を作らず、VS Code 拡張が globalState に持つ `LearnerProfile` と
@@ -63,6 +76,12 @@ export function createLearningDataRoute(resolve: LearningDataDepsResolver) {
       mastery: deriveMasteryFromEvents(events),
       events,
     };
+    await deps.audit.record({
+      userId,
+      action: "learning_events.exported",
+      occurredAtMs: deps.nowMs(),
+      detail: { eventCount: events.length },
+    });
     // 学習履歴を中間のキャッシュに残さない。
     return c.json(body, 200, { "cache-control": "no-store" });
   });
@@ -79,6 +98,13 @@ export function createLearningDataRoute(resolve: LearningDataDepsResolver) {
     // 時刻は ensureUser の後で取り直す。Workers の Date.now() は I/O を挟むまで進まないため、
     // 先に取った値を使うと、その間に受け取った同期を境界の外へ取りこぼす。
     const deletedCount = await deps.events.deleteByUser(userId, deps.nowMs());
+
+    await deps.audit.record({
+      userId,
+      action: "learning_events.deleted",
+      occurredAtMs: deps.nowMs(),
+      detail: { deletedCount },
+    });
 
     // 応答には記録後の実効値を返す。deleteByUser は既存の削除時刻を
     // 巻き戻さない（MAX を取る）ため、時計の逆行などで要求時刻より新しい値が

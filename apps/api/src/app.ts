@@ -5,6 +5,7 @@ import { requireAuth, type AuthVariables } from "./auth/middleware.js";
 import { rateLimit } from "./auth/rate-limit.js";
 import {
   D1AiUsageRepository,
+  D1AuditLogRepository,
   D1IdentityRepository,
   D1LearningEventRepository,
   D1MasteryOverrideRepository,
@@ -168,6 +169,7 @@ app.route(
   createLearningDataRoute((env) => ({
     identity: new D1IdentityRepository(env.DB),
     events: new D1LearningEventRepository(env.DB),
+    audit: new D1AuditLogRepository(env.DB),
     nowIso: () => new Date().toISOString(),
     nowMs: () => Date.now(),
   })),

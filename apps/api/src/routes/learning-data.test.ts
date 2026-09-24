@@ -10,8 +10,10 @@ import type { AuthVariables } from "../auth/middleware.js";
 import { stubAuth } from "../auth/test-auth.js";
 import {
   createInMemoryRepositoryStore,
+  InMemoryAuditLogRepository,
   InMemoryIdentityRepository,
   InMemoryLearningEventRepository,
+  type InMemoryRepositoryStore,
 } from "../repository/memory.js";
 import type { LearningProfileResponse } from "../contract/learning-profile.js";
 import type { SyncResponse } from "../contract/learning-event.js";
@@ -19,6 +21,7 @@ import { createLearningDataRoute, type DeleteLearningEventsResponse } from "./le
 import { createLearningEventsRoute } from "./learning-events.js";
 import { createLearningProfileRoute } from "./learning-profile.js";
 
+let store: InMemoryRepositoryStore;
 let identity: InMemoryIdentityRepository;
 let events: InMemoryLearningEventRepository;
 /** 現在時刻（epoch ミリ秒）。テストの中で進めて、削除の前後を作る。 */
@@ -35,7 +38,7 @@ const TOKENS = { "token-a": "user-a", "token-b": "user-b" };
 beforeEach(() => {
   // D1 と同じく1つのストアを共有させる。退会の CASCADE と同じで、
   // 片方だけ新しく作るとテスト実装だけが実際と違う振る舞いになる。
-  const store = createInMemoryRepositoryStore();
+  store = createInMemoryRepositoryStore();
   identity = new InMemoryIdentityRepository(store);
   events = new InMemoryLearningEventRepository(store);
   clockMs = 1_000;
@@ -48,6 +51,7 @@ beforeEach(() => {
     createLearningDataRoute(() => ({
       identity,
       events,
+      audit: new InMemoryAuditLogRepository(store),
       nowIso: () => NOW,
       nowMs: () => clockMs,
     })),
@@ -184,6 +188,64 @@ test("削除を呼んでいない端末は、同期応答の削除時刻で削�
   expect(((await after.json()) as SyncResponse).historyResetAtMs).toBe(1_000);
 });
 
+test("エクスポートは監査ログに記録される", async () => {
+  await seed("user-a", [event({ id: "e1" }), event({ id: "e2" })]);
+
+  await request("/v1/learning-events:export", "token-a");
+
+  expect(store.auditLog).toEqual([
+    {
+      userId: "user-a",
+      action: "learning_events.exported",
+      occurredAtMs: clockMs,
+      detail: { eventCount: 2 },
+    },
+  ]);
+});
+
+test("一度も同期していない利用者のエクスポートも監査ログに記録される", async () => {
+  // audit_log.user_id は users(id) を参照する。users 行が無いまま記録しようと
+  // すると D1 では外部キー違反で落ちるため、ルート側が先に行を用意する。
+  const res = await request("/v1/learning-events:export", "token-a");
+
+  expect(res.status).toBe(200);
+  expect(identity.users.has("user-a")).toBe(true);
+  expect(store.auditLog).toEqual([
+    {
+      userId: "user-a",
+      action: "learning_events.exported",
+      occurredAtMs: clockMs,
+      detail: { eventCount: 0 },
+    },
+  ]);
+});
+
+test("削除は監査ログに件数とともに記録される", async () => {
+  await seed("user-a", [event({ id: "e1" }), event({ id: "e2" })]);
+
+  await request("/v1/learning-events", "token-a", "DELETE");
+
+  expect(store.auditLog).toEqual([
+    {
+      userId: "user-a",
+      action: "learning_events.deleted",
+      occurredAtMs: clockMs,
+      detail: { deletedCount: 2 },
+    },
+  ]);
+});
+
+test("監査ログは操作した本人の行として記録される", async () => {
+  await seed("user-a", [event({ id: "a1" })]);
+  await seed("user-b", [event({ id: "b1" })]);
+
+  await request("/v1/learning-events", "token-b", "DELETE");
+
+  // user-a の履歴は残り、記録されるのは user-b の操作だけ。
+  expect(await events.countByUser("user-a")).toBe(1);
+  expect(store.auditLog.map((entry) => entry.userId)).toEqual(["user-b"]);
+});
+
 test("削除後、learning-profile の習熟度から消したイベントの寄与が消える", async () => {
   await seed("user-a", [
     event({ id: "e1", conceptIds: ["go.defer"] }),
@@ -315,11 +377,12 @@ test("削除しても他人の同期は塞がない", async () => {
 test.each([
   ["GET", "/v1/learning-events:export"],
   ["DELETE", "/v1/learning-events"],
-])("%s %s は認証が無ければ 401 を返し、何も消さない", async (method, path) => {
+])("%s %s は認証が無ければ 401 を返し、何も消さず監査ログも残さない", async (method, path) => {
   await seed("user-a", [event({ id: "e1" })]);
 
   const res = await app.request(path, { method }, ENV);
 
   expect(res.status).toBe(401);
   expect(await events.countByUser("user-a")).toBe(1);
+  expect(store.auditLog).toEqual([]);
 });

@@ -34,6 +34,13 @@ export function rateLimit(selectLimiter: (env: CloudflareBindings) => RateLimit)
 
     const { success } = await limiter.limit({ key: c.get("user").userId });
     if (!success) {
+      // 到達数は監視指標の1つ（docs/architecture.md「監視・監査ログ・障害時の再送」）。
+      // 429 の応答だけではどの経路で誰が止まったかがダッシュボードから読めないため、
+      // 構造化ログへ残す。
+      console.warn("rate limit reached", {
+        path: c.req.path,
+        userId: c.get("user").userId,
+      });
       throw new HTTPException(429, { message: "too many requests" });
     }
 

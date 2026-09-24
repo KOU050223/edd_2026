@@ -234,3 +234,40 @@ export interface AiUsageRepository {
     updatedAt: string;
   }): Promise<void>;
 }
+
+/**
+ * 監査ログへ記録する操作（Issue #122）。
+ *
+ * 対象は利用者の不可逆な操作だけにする。学習イベント本体は `learning_events` が
+ * 正本なので二重に持たない。対象の増減は docs/architecture.md の
+ * 「監視・監査ログ・障害時の再送」と一緒に変える。
+ */
+export type AuditAction = "learning_events.exported" | "learning_events.deleted";
+
+/** 監査ログの1件。 */
+export interface AuditLogEntry {
+  /** 誰が。認証済みの userId（Auth0 の sub）。 */
+  userId: string;
+  /** 何をしたか。 */
+  action: AuditAction;
+  /** いつ。サーバーが処理した時刻（epoch ミリ秒）。 */
+  occurredAtMs: number;
+  /** 操作の補足（消した件数など）。JSON 化して保存する。 */
+  detail?: Record<string, unknown>;
+}
+
+/**
+ * 監査ログの永続化（Issue #122）。
+ *
+ * 追記のみで、あとから書き換えない。読み出す経路は持たない。
+ * 運用者が D1 を直接クエリして読む（`wrangler d1 execute`）。
+ */
+export interface AuditLogRepository {
+  /**
+   * 操作を1件記録する。
+   *
+   * `user_id` は users(id) を参照するため、呼び出し前にユーザー行が必要。
+   * 退会すると users 行と一緒に消える（ON DELETE CASCADE）。
+   */
+  record(entry: AuditLogEntry): Promise<void>;
+}
