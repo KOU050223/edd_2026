@@ -579,6 +579,8 @@ export class D1AiUsageRepository implements AiUsageRepository {
  * 追記のみ。`user_id` は `users(id)` を参照するため、users 行が無いまま
  * 書こうとすると FOREIGN KEY constraint failed で落ちる。行が無い利用者を
  * 記録したい経路では、呼び出し側が先に `ensureUser` で行を用意する。
+ * `ensureUser` と `record` の間に退会（users 行の削除）が割り込む競合窓は
+ * 残るが、狭いうえ失敗は伝播するだけなので、そのままにしてある。
  */
 export class D1AuditLogRepository implements AuditLogRepository {
   constructor(private readonly db: D1Database) {}

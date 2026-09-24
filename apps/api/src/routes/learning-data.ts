@@ -61,6 +61,9 @@ export function createLearningDataRoute(resolve: LearningDataDepsResolver) {
 
     // 監査ログの audit_log.user_id は users(id) を参照する。まだ一度も
     // 同期していない利用者でも記録できるよう、先に行を用意する。
+    // 退会のトゥームストーンが残っている間は ensureUser が失敗し 500 になる。
+    // 退会済みアカウントのエクスポートが拒否されるのは意図した挙動である
+    // （docs/architecture.md「監視・監査ログ・障害時の再送」）。
     await deps.identity.ensureUser({ userId, nowMs: deps.nowMs() });
     const events = await deps.events.listByUser(userId);
 

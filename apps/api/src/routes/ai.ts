@@ -250,25 +250,34 @@ export function createAiRoute(resolve: AiDepsResolver) {
       return c.json(limitReached(kind, now), 429);
     }
 
-    const upstream = await deps.fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`,
-      {
-        method: "POST",
-        headers: { "x-goog-api-key": deps.apiKey, "Content-Type": "application/json" },
-        // リダイレクトを自動追跡しない。転送先へ API キーごと送られると、
-        // 資格情報が意図しない相手に渡る（.agents/rules/rules.md RULE-002）。
-        redirect: "error",
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: {
-            ...(temperature === undefined ? {} : { temperature }),
-            // 出力上限は常に送る。クライアントが指定しなかったときに
-            // 上流の既定値（上限なし）で走らせると、1回あたりの単価が決まらない。
-            maxOutputTokens: maxTokens ?? AI_USAGE_LIMITS.outputTokensPerRequest,
-          },
-        }),
-      },
-    );
+    let upstream: Response;
+    try {
+      upstream = await deps.fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`,
+        {
+          method: "POST",
+          headers: { "x-goog-api-key": deps.apiKey, "Content-Type": "application/json" },
+          // リダイレクトを自動追跡しない。転送先へ API キーごと送られると、
+          // 資格情報が意図しない相手に渡る（.agents/rules/rules.md RULE-002）。
+          redirect: "error",
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: {
+              ...(temperature === undefined ? {} : { temperature }),
+              // 出力上限は常に送る。クライアントが指定しなかったときに
+              // 上流の既定値（上限なし）で走らせると、1回あたりの単価が決まらない。
+              maxOutputTokens: maxTokens ?? AI_USAGE_LIMITS.outputTokensPerRequest,
+            },
+          }),
+        },
+      );
+    } catch (cause) {
+      // fetch の拒否（ネットワーク断、`redirect: "error"` の拒否）は下の
+      // !ok 分岐に届かない。AI 経路の失敗として数えられるよう、応答を返す
+      // 前に構造化ログを出す（docs/architecture.md「監視・監査ログ・障害時の再送」）。
+      console.error("ai upstream request failed", { userId, model, cause });
+      return c.json({ error: "AI upstream request failed" }, 502);
+    }
 
     if (!upstream.ok || !upstream.body) {
       // 上流の失敗は 502 を返すだけだと AI 経路のエラー率を追えない。

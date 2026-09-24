@@ -218,6 +218,31 @@ describe("POST /v1/ai/responses", () => {
     vi.unstubAllGlobals();
   });
 
+  it("fetch が拒否されても 502 を返し、AI 経路のエラーとしてログに残す", async () => {
+    // ネットワーク断や redirect: "error" の拒否は !ok の分岐に届かない。
+    // この経路でも監視指標のログが出ることを固定する。
+    const cause = new Error("network unreachable");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.reject(cause)),
+    );
+    const harness = buildApp();
+    const { ctx } = createExecutionContext();
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const response = await ask(harness, { selection: "code", question: "explain" }, ctx);
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toEqual({ error: "AI upstream request failed" });
+    expect(error).toHaveBeenCalledWith("ai upstream request failed", {
+      userId: "auth0|user-a",
+      model: "gemini-3.6-flash",
+      cause,
+    });
+    error.mockRestore();
+    vi.unstubAllGlobals();
+  });
+
   it("選択文が空なら拒否する", async () => {
     const harness = buildApp();
     const { ctx } = createExecutionContext();
