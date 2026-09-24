@@ -1,3 +1,5 @@
+import { PERSONA_MAX_LENGTH } from "@gakushu-sochi/domain";
+
 /**
  * Managed AI の1回あたりの出力上限（tokens）。
  *
@@ -17,15 +19,8 @@ export const MANAGED_AI_MAX_OUTPUT_TOKENS = 2_048;
  */
 export const MANAGED_AI_MODELS = ["gemini-3.6-flash", "gemini-3.8-flash"] as const;
 
-/**
- * 人格設定（persona）の最大長。
- *
- * サーバー側のスキーマと揃える（`apps/api/src/routes/ai.ts` の `PERSONA_MAX_LENGTH`）。
- * ここを緩めると、保存できるのに送信すると必ず 400 で弾かれる設定を
- * 利用者に作らせることになる。**サーバー側を直すときは、この値も一緒に動かす。**
- */
-export const PERSONA_MAX_LENGTH = 500;
-
+// persona の上限は domain が正本（PERSONA_MAX_LENGTH）。ここを緩めると、
+// 保存できるのに送信すると必ず 400 で弾かれる設定を利用者に作らせることになる。
 export interface DesktopSettings {
   apiBaseUrl: string;
   shortcut: string;

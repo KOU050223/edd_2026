@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import * as vscode from "vscode";
 import {
   createEmptyProfile,
+  PERSONA_MAX_LENGTH,
   type CodeContext,
   type ConversationTurn,
   type LearningEvent,
@@ -388,9 +389,24 @@ export function activate(context: vscode.ExtensionContext): void {
       const history = toConversationTurns(_chatContext.history);
       // 人格設定は送る直前に読む。起動時の値を使い回すと、変更が再起動まで効かない。
       // scope が application のためワークスペースの settings.json からは書き換えられない。
-      const persona = vscode.workspace
+      const configuredPersona: unknown = vscode.workspace
         .getConfiguration("gakushuSochi")
-        .get<string>("ai.persona", "");
+        .get("ai.persona", "");
+      // manifest の型・maxLength は警告を出すだけで、settings.json の直接編集では
+      // 外れた値がそのまま来る。黙って切り詰めると設定と動作が食い違うので、
+      // 不正な値は適用せず理由を記録する（RULE-004）。
+      let persona: string | undefined;
+      if (typeof configuredPersona !== "string") {
+        if (configuredPersona != null) {
+          channel.appendLine("人格設定が文字列ではないため適用しませんでした。");
+        }
+      } else if (configuredPersona.trim().length > PERSONA_MAX_LENGTH) {
+        channel.appendLine(
+          `人格設定が上限（${PERSONA_MAX_LENGTH} 文字）を超えているため適用しませんでした。設定値を短くしてください。`,
+        );
+      } else {
+        persona = configuredPersona.trim() || undefined;
+      }
       const aiResponse = await provider.ask(
         createChatAIRequest(codeContext, question, history, diagnostics, persona),
       );

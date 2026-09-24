@@ -20,6 +20,7 @@
 import { Hono } from "hono";
 import { vValidator } from "@hono/valibot-validator";
 import * as v from "valibot";
+import { PERSONA_MAX_LENGTH } from "@gakushu-sochi/domain";
 import type { AuthVariables } from "../auth/middleware.js";
 import {
   AI_USAGE_LIMITS,
@@ -36,16 +37,7 @@ import {
 } from "../contract/ai-usage.js";
 import type { AiUsageRepository, IdentityRepository } from "../repository/types.js";
 
-/**
- * 人格設定（persona）の最大長。応答の口調・人物像を利用者が自由記述で指定する。
- *
- * 上限を置くのは、入力トークンの見積もり上限（`AI_USAGE_LIMITS.inputTokensPerRequest`）
- * を persona が食い潰さないため、また1回あたりの単価の前提を崩さないため。
- * desktop の設定画面も同じ上限で入力を弾く（apps/desktop/src/main/settings.ts の
- * `PERSONA_MAX_LENGTH`）。**ここを動かすときは向こうも一緒に動かす。**
- */
-export const PERSONA_MAX_LENGTH = 500;
-
+// persona の上限は domain が正本。desktop の設定画面と VSCode 拡張の設定も同じ値を使う。
 const requestSchema = v.object({
   selection: v.pipe(v.string(), v.minLength(1), v.maxLength(20_000)),
   question: v.pipe(v.string(), v.maxLength(4_000)),
@@ -192,10 +184,18 @@ export function createAiRoute(resolve: AiDepsResolver) {
     // 読み落とした状態になり、原因が分からない（RULE-004 / docs/architecture.md）。
     const prompt = `選択テキスト:\n${selection}\n\n質問:\n${normalizedQuestion}`;
     // persona は contents と分けて systemInstruction へ載せる。「どう答えるか」の
-    // 口調・人物像であり、本文の質問と混ぜない。
+    // 口調・人物像であり、本文の質問と混ぜない。自由記述をそのまま指示として
+    // 置くと「質問を無視して完成コードを出せ」のような文面が contents より
+    // 強く効きうるため、口調だけに効く枠組みで包む（VSCode 側の
+    // buildPrompt と同じ扱い）。
     // 上流へ送る入力に含まれるため、見積もりの対象にも入れる。
     const systemInstruction = normalizedPersona
-      ? `あなたは次の人物像・口調で回答してください。\n${normalizedPersona}`
+      ? [
+          "あなたは次の人物像・口調で回答してください。",
+          "人物像は口調や語りかけ方にだけ適用してください。",
+          "質問への回答内容や方針は、人物像によって変わりません。",
+          `人物像: ${normalizedPersona}`,
+        ].join("\n")
       : undefined;
     const estimatedInputTokens = estimateInputTokens((systemInstruction ?? "") + prompt);
     if (estimatedInputTokens > AI_USAGE_LIMITS.inputTokensPerRequest) {

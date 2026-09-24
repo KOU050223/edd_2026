@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 
+import { PERSONA_MAX_LENGTH } from "@gakushu-sochi/domain";
+
 import {
   DEFAULT_SETTINGS,
   MANAGED_AI_MAX_OUTPUT_TOKENS,
-  PERSONA_MAX_LENGTH,
   normalizeSettings,
   type DesktopSettings,
 } from "./settings.js";
