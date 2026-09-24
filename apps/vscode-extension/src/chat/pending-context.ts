@@ -4,6 +4,8 @@ import type { CodeContext } from "@gakushu-sochi/domain";
 export interface PendingAIRequest {
   context: CodeContext;
   diagnostics: string[];
+  /** 同じ Diagnostics の識別キー。再発判定（診断/02 #76）に使い、AI へは送らない。 */
+  errorKeys: string[];
 }
 
 export interface PendingChatContextOptions {
@@ -37,13 +39,13 @@ export class PendingChatContext {
     }
   }
 
-  set(context: CodeContext, diagnostics: string[] = []): string {
+  set(context: CodeContext, diagnostics: string[] = [], errorKeys: string[] = []): string {
     const id = `context-${this.nextId}`;
     this.nextId += 1;
     const timeout = setTimeout(() => {
       this.values.delete(id);
     }, this.ttlMs);
-    this.values.set(id, { request: { context, diagnostics }, timeout });
+    this.values.set(id, { request: { context, diagnostics, errorKeys }, timeout });
     return id;
   }
 

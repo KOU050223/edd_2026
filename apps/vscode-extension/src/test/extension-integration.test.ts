@@ -15,6 +15,7 @@ const {
   showWarningMessage,
   executeCommand,
   getConfiguration,
+  getDiagnostics,
   getOrCreateClientId,
   loadProfile,
   participantHandlers,
@@ -37,6 +38,7 @@ const {
   showWarningMessage: vi.fn(),
   executeCommand: vi.fn(),
   getConfiguration: vi.fn(),
+  getDiagnostics: vi.fn((): unknown[] => []),
   getOrCreateClientId: vi.fn(),
   loadProfile: vi.fn(),
   participantHandlers: [] as ChatHandler[],
@@ -73,7 +75,7 @@ vi.mock("vscode", () => ({
     }),
   },
   workspace: { getConfiguration },
-  languages: { getDiagnostics: vi.fn(() => []) },
+  languages: { getDiagnostics },
 }));
 
 vi.mock("../ai/vscodeLm", () => ({
@@ -111,17 +113,28 @@ vi.mock("../context/clipboard", () => ({
 
 vi.mock("../ui/confirm", () => ({ confirmSend }));
 
-vi.mock("../learning/store", () => ({
-  getOrCreateClientId,
-  loadProfile,
-  recordEvent,
-}));
+// 解説済みエラーの読み書きは実物を使い、再発判定を globalState ごしに確かめる。
+vi.mock("../learning/store", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../learning/store")>();
+  return {
+    getOrCreateClientId,
+    loadProfile,
+    recordEvent,
+    loadExplainedErrors: actual.loadExplainedErrors,
+    saveExplainedErrors: actual.saveExplainedErrors,
+  };
+});
 
 vi.mock("../learning/sync", () => ({ syncEvent }));
 
 import { activate } from "../extension";
 import { CONSENT_KEY } from "../consent/consent";
-import { CONSENT_NOTICE_VERSION } from "@gakushu-sochi/domain";
+import {
+  applyEvent,
+  CONSENT_NOTICE_VERSION,
+  createEmptyProfile,
+  type LearnerProfile,
+} from "@gakushu-sochi/domain";
 
 /**
  * activate() に渡す最小の ExtensionContext。
@@ -163,6 +176,7 @@ const CONTEXT: CodeContext = {
 
 afterEach(() => {
   vi.clearAllMocks();
+  getDiagnostics.mockImplementation(() => []);
   registeredCommands.clear();
   participantHandlers.length = 0;
 });
@@ -413,4 +427,127 @@ test("同意を取り消すと、学習イベントをAPIへ同期しない", as
 
   expect(response.markdown).toHaveBeenCalledWith("変数宣言についての回答");
   expect(syncEvent).not.toHaveBeenCalled();
+});
+
+// --- 診断/02 #76: 同じエラーの再発を error_recurred として記録する -------------
+
+/** 選択範囲（0:0〜0:16）に重なる Diagnostic を1件だけ持つ状態にする。 */
+function diagnosticsOnSelection(code: number, message: string) {
+  const diagnostic = {
+    range: { start: { line: 0, character: 6 }, end: { line: 0, character: 11 } },
+    message,
+    source: "ts",
+    code,
+  };
+  getDiagnostics.mockImplementation(() => [
+    [{ toString: () => "file:///example.ts" }, [diagnostic]],
+  ]);
+}
+
+/** 選択範囲について質問し、回答まで進める。 */
+async function askAboutSelection(): Promise<void> {
+  collectFromEditor.mockResolvedValueOnce(CONTEXT);
+  executeCommand.mockClear();
+  await registeredCommands.get("gakushuSochi.askSelection")?.();
+  const chatOpen = executeCommand.mock.calls.find(
+    ([command]) => command === "workbench.action.chat.open",
+  );
+  const response = { markdown: vi.fn(), progress: vi.fn() };
+  await participantHandlers[0]?.(
+    { prompt: `${chatOpen?.[1].query.replace("@gakushu-sochi ", "")}このエラーは？` },
+    { history: [] },
+    response,
+  );
+  expect(response.markdown).toHaveBeenCalledWith("変数宣言についての回答");
+}
+
+/** recordEvent を domain の applyEvent で動かし、最後に記録された Profile を返せるようにする。 */
+function recordWithDomain(initial: LearnerProfile): () => LearnerProfile {
+  let latest = initial;
+  loadProfile.mockReturnValueOnce(initial);
+  recordEvent.mockImplementation(
+    async (_context, profile: LearnerProfile, event: LearningEvent) => {
+      latest = applyEvent(profile, event);
+      return latest;
+    },
+  );
+  getConfiguration.mockReturnValue({ get: (_key: string, fallback: string) => fallback });
+  return () => latest;
+}
+
+function recordedTypes(): string[] {
+  return recordEvent.mock.calls.map((call) => (call[2] as LearningEvent).type);
+}
+
+test("同じエラーを2回解説させるとerror_recurredを記録する", async () => {
+  recordWithDomain(createEmptyProfile("2026-09-21T00:00:00.000Z"));
+  activate(createExtensionContext(true) as never);
+
+  diagnosticsOnSelection(2345, "Argument of type 'string' is not assignable to 'number'.");
+  await askAboutSelection();
+  expect(recordedTypes()).not.toContain("error_recurred");
+
+  // 同じコードなら、型名が変わっても同じエラーとして扱う。
+  diagnosticsOnSelection(2345, "Argument of type 'boolean' is not assignable to 'User'.");
+  await askAboutSelection();
+
+  expect(recordEvent).toHaveBeenCalledWith(
+    expect.anything(),
+    expect.anything(),
+    expect.objectContaining({
+      type: "error_recurred",
+      origin: "vscode",
+      conceptIds: ["ts.variable_declaration"],
+      language: "typescript",
+      diagnosticCode: "ts:2345",
+    }),
+    expect.any(Function),
+  );
+  expect(recordedTypes().filter((type) => type === "error_recurred")).toHaveLength(1);
+});
+
+test("別のエラーではerror_recurredを記録しない", async () => {
+  recordWithDomain(createEmptyProfile("2026-09-21T00:00:00.000Z"));
+  activate(createExtensionContext(true) as never);
+
+  diagnosticsOnSelection(2345, "Argument of type 'string' is not assignable to 'number'.");
+  await askAboutSelection();
+  diagnosticsOnSelection(2322, "Type 'string' is not assignable to type 'number'.");
+  await askAboutSelection();
+
+  expect(recordedTypes()).not.toContain("error_recurred");
+});
+
+test("Diagnosticsが無い質問では再発を判定しない", async () => {
+  recordWithDomain(createEmptyProfile("2026-09-21T00:00:00.000Z"));
+  activate(createExtensionContext(true) as never);
+
+  await askAboutSelection();
+  await askAboutSelection();
+
+  expect(recordedTypes()).not.toContain("error_recurred");
+});
+
+test("error_recurredの記録で、該当Conceptがconfirmedから外れる", async () => {
+  let confirmed = createEmptyProfile("2026-09-21T00:00:00.000Z");
+  for (const id of ["s1", "s2"]) {
+    confirmed = applyEvent(confirmed, {
+      id,
+      occurredAt: "2026-09-21T00:00:00.000Z",
+      type: "solved_independently",
+      origin: "vscode",
+      conceptIds: ["ts.variable_declaration"],
+    });
+  }
+  expect(confirmed.mastery["ts.variable_declaration"]?.status).toBe("confirmed");
+  const latestProfile = recordWithDomain(confirmed);
+  activate(createExtensionContext(true) as never);
+
+  diagnosticsOnSelection(2345, "Argument of type 'string' is not assignable to 'number'.");
+  await askAboutSelection();
+  // 解説を見ただけでは confirmed のまま。
+  expect(latestProfile().mastery["ts.variable_declaration"]?.status).toBe("confirmed");
+
+  await askAboutSelection();
+  expect(latestProfile().mastery["ts.variable_declaration"]?.status).toBe("learning");
 });
