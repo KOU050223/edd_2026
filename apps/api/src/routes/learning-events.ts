@@ -141,6 +141,9 @@ export function createLearningEventsRoute(resolve: SyncDepsResolver) {
           index: target.index,
           id: result.id,
           status: result.duplicate ? "duplicate" : "accepted",
+          // 削除境界に吞まれた受理だけ区別を返す。クライアントは追従後の
+          // 再記録をこれで判断する（Issue #124）。
+          ...(result.droppedByReset ? { droppedByReset: true } : {}),
         };
       });
     }
@@ -164,7 +167,12 @@ export function createLearningEventsRoute(resolve: SyncDepsResolver) {
       summary[result.status] += 1;
     }
 
-    const body: SyncResponse = { results: finalized, summary };
+    // 削除時刻は append の後で読む。このリクエストの処理中に割り込んだ
+    // DELETE /v1/learning-events も拾えるようにするため。クライアントは
+    // 前回より新しい時刻を受け取ったらローカルのコピーを消す（Issue #124）。
+    const historyResetAtMs = await deps.events.latestResetAtMs(userId);
+
+    const body: SyncResponse = { results: finalized, summary, historyResetAtMs };
     return c.json(body);
   });
 

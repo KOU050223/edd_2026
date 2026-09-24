@@ -37,6 +37,16 @@ export interface StoredEventInput {
 export interface AppendResult {
   id: string;
   duplicate: boolean;
+  /**
+   * 履歴の削除時刻（`learning_history_resets`）以前に受け取ったため、
+   * 受理したが書かなかったイベントなら true。
+   *
+   * 「受理」には「保存した」と「削除に含まれた」の2通りがある。
+   * クライアントはこの区別で、削除への追従後にそのイベントをローカルへ
+   * 記録し直すかを決める（Issue #124）。区別が無いと、サーバーが境界の
+   * 内側に倒したイベントがローカルにだけ復活する。
+   */
+  droppedByReset: boolean;
 }
 
 /**
@@ -122,6 +132,13 @@ export interface LearningEventRepository {
    * @returns 消した件数。0件でも成功とする（再実行で失敗させない）。
    */
   deleteByUser(userId: string, resetAtMs: number): Promise<number>;
+
+  /**
+   * 最後に学習履歴を削除した時刻（epoch ミリ秒）。削除されていなければ `null`。
+   *
+   * 同期応答へ載せて、削除を呼んでいない他端末へ伝えるために使う（Issue #124）。
+   */
+  latestResetAtMs(userId: string): Promise<number | null>;
 }
 
 export interface MasteryOverride {

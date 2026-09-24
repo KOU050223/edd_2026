@@ -36,6 +36,14 @@ export type LearningDataDepsResolver = (env: CloudflareBindings) => LearningData
 export interface DeleteLearningEventsResponse {
   /** 消したイベントの件数。既に空なら 0。 */
   deletedCount: number;
+  /**
+   * `learning_history_resets` へ記録した削除時刻（epoch ミリ秒）。
+   *
+   * 呼んだ端末はこの値を「適用済みの削除時刻」として記憶する。同期応答の
+   * `historyResetAtMs` と比較して、自分が呼んだ削除を「他端末から見えた削除」
+   * として二重に処理しないためである（Issue #124）。
+   */
+  resetAtMs: number;
 }
 
 export function createLearningDataRoute(resolve: LearningDataDepsResolver) {
@@ -72,7 +80,19 @@ export function createLearningDataRoute(resolve: LearningDataDepsResolver) {
     // 先に取った値を使うと、その間に受け取った同期を境界の外へ取りこぼす。
     const deletedCount = await deps.events.deleteByUser(userId, deps.nowMs());
 
-    const body: DeleteLearningEventsResponse = { deletedCount };
+    // 応答には記録後の実効値を返す。deleteByUser は既存の削除時刻を
+    // 巻き戻さない（MAX を取る）ため、時計の逆行などで要求時刻より新しい値が
+    // 残っている場合がある。要求時刻を返すとクライアントが古い「適用済み」を
+    // 記録し、次回同期で自分が呼んだ削除へ再度追従してしまう。
+    const resetAtMs = await deps.events.latestResetAtMs(userId);
+    if (resetAtMs === null) {
+      // deleteByUser の直後に読めないのはリポジトリの不整合。要求時刻で
+      // 埋めると削除時刻が他端末へ伝わらないままになるため握らない。
+      // deleteByUser は冪等なので、失敗と返して再実行してもらう。
+      throw new Error("履歴の削除時刻が記録されていません");
+    }
+
+    const body: DeleteLearningEventsResponse = { deletedCount, resetAtMs };
     return c.json(body);
   });
 

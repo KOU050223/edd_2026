@@ -142,13 +142,18 @@ test("他人のイベントはエクスポートに含まれない", async () =>
   expect(Object.keys(body.mastery)).toEqual(["go.defer"]);
 });
 
-test("削除は自分のイベントを全件消し、件数を返す", async () => {
+test("削除は自分のイベントを全件消し、件数と削除時刻を返す", async () => {
   await seed("user-a", [event({ id: "e1" }), event({ id: "e2" })]);
 
   const res = await request("/v1/learning-events", "token-a", "DELETE");
 
   expect(res.status).toBe(200);
-  expect((await res.json()) as DeleteLearningEventsResponse).toEqual({ deletedCount: 2 });
+  // resetAtMs は呼んだ端末が「適用済みの削除時刻」として記憶し、
+  // 自分が呼んだ削除を同期応答で再度処理しないためのもの（Issue #124）。
+  expect((await res.json()) as DeleteLearningEventsResponse).toEqual({
+    deletedCount: 2,
+    resetAtMs: 1_000,
+  });
   expect(await events.countByUser("user-a")).toBe(0);
 });
 
@@ -160,7 +165,23 @@ test("削除を再実行しても失敗しない", async () => {
   const res = await request("/v1/learning-events", "token-a", "DELETE");
 
   expect(res.status).toBe(200);
-  expect((await res.json()) as DeleteLearningEventsResponse).toEqual({ deletedCount: 0 });
+  expect((await res.json()) as DeleteLearningEventsResponse).toEqual({
+    deletedCount: 0,
+    resetAtMs: 1_000,
+  });
+});
+
+test("削除を呼んでいない端末は、同期応答の削除時刻で削除を知る", async () => {
+  // 削除を呼んだ端末以外は DELETE を受け取る経路が無い。同期の応答に
+  // 削除時刻を載せて、次回の同期でローカルのコピーを消せるようにする（Issue #124）。
+  const res = await sync("token-a", [event({ id: "before-delete" })]);
+  expect(((await res.json()) as SyncResponse).historyResetAtMs).toBeNull();
+
+  await request("/v1/learning-events", "token-a", "DELETE");
+  clockMs += 1;
+
+  const after = await sync("token-a", [event({ id: "after-delete" })]);
+  expect(((await after.json()) as SyncResponse).historyResetAtMs).toBe(1_000);
 });
 
 test("削除後、learning-profile の習熟度から消したイベントの寄与が消える", async () => {
@@ -191,7 +212,10 @@ test("削除しても他人のイベントと習熟度は残る", async () => {
 
   const res = await request("/v1/learning-events", "token-a", "DELETE");
 
-  expect((await res.json()) as DeleteLearningEventsResponse).toEqual({ deletedCount: 1 });
+  expect((await res.json()) as DeleteLearningEventsResponse).toEqual({
+    deletedCount: 1,
+    resetAtMs: 1_000,
+  });
   expect(await events.countByUser("user-b")).toBe(2);
   expect(await (await request("/v1/learning-profile", "token-b")).json()).toEqual(beforeB);
 });
@@ -228,9 +252,11 @@ test("削除より前に受け取った同期は、書き込みが削除の後�
 
   // 受理はする。受理したうえで削除に含まれた、という扱い。
   // 重複と答えると、既に保存されていたかのように見える。
+  // droppedByReset で「受理したが書かなかった」を区別する。クライアントは
+  // 追従後にこのイベントをローカルへ記録し直さない（Issue #124）。
   expect(res.status).toBe(200);
   expect(((await res.json()) as SyncResponse).results).toEqual([
-    { index: 0, id: "in-flight", status: "accepted" },
+    { index: 0, id: "in-flight", status: "accepted", droppedByReset: true },
   ]);
   expect(await events.countByUser("user-a")).toBe(0);
 });
@@ -239,13 +265,32 @@ test("まだ一度も同期していない利用者の削除も、並行する�
   // users 行が無いからといって削除時刻の記録を省くと、並行して走っている
   // 初回の同期が削除の後に書き込む。
   const res = await request("/v1/learning-events", "token-a", "DELETE");
-  expect((await res.json()) as DeleteLearningEventsResponse).toEqual({ deletedCount: 0 });
+  expect((await res.json()) as DeleteLearningEventsResponse).toEqual({
+    deletedCount: 0,
+    resetAtMs: 1_000,
+  });
 
   // 削除と同じ時刻に受け取ったイベントは境界の内側（書かない側）に倒す。
   await seed("user-a", [event({ id: "same-ms" })]);
 
   expect(await events.countByUser("user-a")).toBe(0);
   expect(identity.users.has("user-a")).toBe(true);
+});
+
+test("削除応答の削除時刻は、巻き戻らなかった記録後の実効値を返す", async () => {
+  // deleteByUser は既存の削除時刻を巻き戻さない。時計の逆行などで
+  // 既存値のほうが新しい場合、応答も新しい値を返さないと、呼んだ端末が
+  // 古い「適用済み」を記録して次回同期で自分の削除へ二度追従する（Issue #124）。
+  await events.deleteByUser("user-a", 2_000);
+  clockMs = 1_500;
+
+  const res = await request("/v1/learning-events", "token-a", "DELETE");
+
+  expect(res.status).toBe(200);
+  expect((await res.json()) as DeleteLearningEventsResponse).toEqual({
+    deletedCount: 0,
+    resetAtMs: 2_000,
+  });
 });
 
 test("削除時刻は巻き戻らない", async () => {

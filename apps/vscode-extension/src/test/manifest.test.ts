@@ -78,6 +78,19 @@ test("同意の状態をワークスペース設定から書き換えられな�
   expect(consentSettings).toEqual([]);
 });
 
+test("学習データの削除を利用者がコマンドから実行できる", () => {
+  // #124: サーバー側の削除とローカルコピーの削除をまとめて行う入口。
+  // キーバインドは割り当てない。誤って発火する操作ではないため。
+  expect(manifest.contributes.commands).toEqual(
+    expect.arrayContaining([
+      {
+        command: "gakushuSochi.deleteLearningData",
+        title: "Gakushu Sochi: 学習データを削除する",
+      },
+    ]),
+  );
+});
+
 test("キーボードショートカット設定への導線をコマンドから辿れる", () => {
   // #34: 既定のキーバインドは `keybindings.json` から上書きできるが、その設定画面へ
   // 辿り着く導線が拡張側に無かった。独自の設定画面は作らない（VS Code の作法から

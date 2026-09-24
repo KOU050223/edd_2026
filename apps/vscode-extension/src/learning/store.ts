@@ -180,3 +180,76 @@ export async function saveExplainedErrors(
     onError?.(error);
   }
 }
+
+/**
+ * この端末が適用済みの、サーバー側の学習履歴削除時刻（epoch ミリ秒）を保持するキー。
+ *
+ * 学習データではなく同期の状態である。`DELETE /v1/learning-events` は呼んだ端末の
+ * コピーしか消せないため、他端末は同期応答の `historyResetAtMs` がこの値より
+ * 新しいときにローカルのコピーを消す（Issue #124）。
+ * `clearLocalLearningData` では消さない。消すと適用済みの削除が「まだ」に
+ * 巻き戻り、次の同期で同じ削除へ二度追従する。
+ */
+const APPLIED_RESET_KEY = "gakushuSochi.appliedHistoryResetAtMs";
+
+/**
+ * 適用済みの削除時刻を読む。無ければ 0（一度も適用していない）。
+ *
+ * 壊れた値は 0 に丸める。「実際より古い」と判定される方向にだけ倒れるため、
+ * 起きうるのは既に空のコピーをもう一度消す冗長な追従だけで、
+ * 消すべきデータを残す側には倒れない。
+ */
+export function getAppliedHistoryResetAtMs(context: vscode.ExtensionContext): number {
+  const stored = context.globalState.get<unknown>(APPLIED_RESET_KEY);
+  return typeof stored === "number" && Number.isFinite(stored) && stored > 0 ? stored : 0;
+}
+
+/**
+ * 削除時刻を適用済みとして記録する。巻き戻さない。
+ *
+ * ローカルのコピーが消えた後に呼ぶこと。先に記録すると、コピーの削除に
+ * 失敗したときに追従が済んだことになり、消すべきデータが残る。
+ */
+export async function markHistoryResetApplied(
+  context: vscode.ExtensionContext,
+  resetAtMs: number,
+): Promise<void> {
+  const applied = getAppliedHistoryResetAtMs(context);
+  if (resetAtMs <= applied) {
+    return;
+  }
+  await context.globalState.update(APPLIED_RESET_KEY, resetAtMs);
+}
+
+/**
+ * この端末に残る学習データのコピーをすべて消す（Issue #124）。
+ *
+ * 消す対象は globalState の学習データ3キー:
+ * - `gakushuSochi.learnerProfile`（イベントと習熟度）
+ * - `codeCompanion.learnerProfile`（旧キーのコピー。退避用に残す方針だが、
+ *   利用者が削除を選んだ以上は学習データのコピーなのでここでも消す）
+ * - `gakushuSochi.explainedErrors`（再発判定の記憶）
+ *
+ * 消さないもの: `gakushuSochi.clientId`（端末の識別子。サーバー側も履歴削除で
+ * devices 行を残す）、`gakushuSochi.consent`（同意の記録）、
+ * `gakushuSochi.appliedHistoryResetAtMs`（同期状態）、SecretStorage の資格情報
+ * （#87 が持つ）。
+ *
+ * 一部のキーの削除が失敗しても残りは消し、失敗があれば例外を投げる。
+ * 呼び出し側は失敗を利用者へ伝えること。「消せた」と伝えるのは全部消えた
+ * ときだけにする（RULE-004）。再実行してよい（消えたキーの再削除は無害）。
+ */
+export async function clearLocalLearningData(context: vscode.ExtensionContext): Promise<void> {
+  const keys = [PROFILE_KEY, LEGACY_PROFILE_KEY, EXPLAINED_ERRORS_KEY];
+  const results = await Promise.allSettled(
+    keys.map((key) => context.globalState.update(key, undefined)),
+  );
+  const failed = results.filter((result) => result.status === "rejected");
+  if (failed.length > 0) {
+    throw new Error(
+      `学習データの削除に失敗しました（${failed.length}/${keys.length} キー）: ${String(
+        (failed[0] as PromiseRejectedResult).reason,
+      )}`,
+    );
+  }
+}

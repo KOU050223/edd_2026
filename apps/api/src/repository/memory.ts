@@ -62,14 +62,14 @@ export class InMemoryLearningEventRepository implements LearningEventRepository 
     const results = inputs.map(({ event, receivedAtMs }) => {
       // 履歴の削除より前に受け取ったイベントは書かず、受理として返す（D1 実装と同じ）。
       if (resetAtMs !== undefined && resetAtMs >= receivedAtMs) {
-        return { id: event.id, duplicate: false };
+        return { id: event.id, duplicate: false, droppedByReset: true };
       }
       if (events.has(event.id)) {
         // 既存を上書きしない。イベントは追記のみで、あとから書き換えない。
-        return { id: event.id, duplicate: true };
+        return { id: event.id, duplicate: true, droppedByReset: false };
       }
       events.set(event.id, event);
-      return { id: event.id, duplicate: false };
+      return { id: event.id, duplicate: false, droppedByReset: false };
     });
 
     return Promise.resolve(results);
@@ -97,6 +97,10 @@ export class InMemoryLearningEventRepository implements LearningEventRepository 
     const count = this.byUser.get(userId)?.size ?? 0;
     this.byUser.delete(userId);
     return Promise.resolve(count);
+  }
+
+  latestResetAtMs(userId: string): Promise<number | null> {
+    return Promise.resolve(this.store.historyResets.get(userId) ?? null);
   }
 
   deleteUser(userId: string): void {

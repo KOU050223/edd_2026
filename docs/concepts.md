@@ -354,6 +354,16 @@ ID によるタイブレークが無いと、同じイベント集合でも入�
 Learner Profile はプロジェクトではなく人に紐づくため、`workspaceState` ではなく
 `globalState` を使う。別端末との同期は行わない（同期は Pro の Cloud Sync 段階の課題）。
 
+### 削除
+
+`Gakushu Sochi: 学習データを削除する` は、この端末の学習データのコピーをすべて消す。
+対象は `gakushuSochi.learnerProfile`・旧キー `codeCompanion.learnerProfile`・
+`gakushuSochi.explainedErrors` の3キー。`gakushuSochi.clientId`（端末の識別子）と
+`gakushuSochi.consent`（同意の記録）、`gakushuSochi.appliedHistoryResetAtMs`（同期状態）は
+学習データではないため残す。
+サーバー側の削除との順序と、他端末への追従は
+[architecture.md](architecture.md)「クライアント側に残るコピー」を参照。
+
 ### 型を JSON serializable に保つ
 
 globalState は値を JSON として直列化する。そのため `LearnerProfile` の型に
