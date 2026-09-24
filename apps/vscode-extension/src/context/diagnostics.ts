@@ -26,6 +26,28 @@ export function rangesOverlap(left: RangeLike, right: RangeLike): boolean {
   return comparePositions(left.start, right.end) < 0 && comparePositions(right.start, left.end) < 0;
 }
 
+/**
+ * VS Code の `DiagnosticSeverity` と同じ値。この関数群は `vscode` に依存させないため、
+ * 列挙の値をここに写す（値は VS Code の公開 API として固定されている）。
+ */
+export const DiagnosticSeverityValue = {
+  Error: 0,
+  Warning: 1,
+  Information: 2,
+  Hint: 3,
+} as const;
+
+/**
+ * AI へエラーとして渡す Diagnostic か判定する。Error と Warning だけを対象にする。
+ *
+ * Hint と Information は誤りではない（未使用変数などを TypeScript は Hint で出す）。
+ * これを渡すと、エラーの無い選択でも回答が Error Explain に切り替わり、
+ * 「このコードの意味は？」という質問に「なぜエラーになるか」を答えてしまう（#161）。
+ */
+export function isErrorLikeSeverity(severity: number): boolean {
+  return severity === DiagnosticSeverityValue.Error || severity === DiagnosticSeverityValue.Warning;
+}
+
 /** 再発判定に必要な、VS Code の Diagnostic と互換な最小の形。 */
 export interface DiagnosticLike {
   message: string;

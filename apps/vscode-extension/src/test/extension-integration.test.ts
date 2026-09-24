@@ -1,5 +1,6 @@
 import { afterEach, expect, test, vi } from "vitest";
-import type { CodeContext, LearningEvent } from "@gakushu-sochi/domain";
+import type { AIRequest, CodeContext, LearningEvent } from "@gakushu-sochi/domain";
+import { buildPrompt } from "../ai/prompt";
 
 type ChatResponse = { markdown: ReturnType<typeof vi.fn>; progress: ReturnType<typeof vi.fn> };
 type ChatHandler = (
@@ -10,6 +11,7 @@ type ChatHandler = (
 
 const {
   activeTextEditor,
+  askedRequests,
   confirmSend,
   collectFromEditor,
   showWarningMessage,
@@ -33,6 +35,7 @@ const {
     },
     document: { uri: { toString: () => "file:///example.ts" } },
   },
+  askedRequests: [] as AIRequest[],
   confirmSend: vi.fn(),
   collectFromEditor: vi.fn(),
   showWarningMessage: vi.fn(),
@@ -82,7 +85,8 @@ vi.mock("../ai/vscodeLm", () => ({
   VSCodeLMProvider: class {
     readonly id = "fake";
 
-    async ask() {
+    async ask(request: AIRequest) {
+      askedRequests.push(request);
       return {
         ok: true,
         answer: {
@@ -179,6 +183,7 @@ afterEach(() => {
   getDiagnostics.mockImplementation(() => []);
   registeredCommands.clear();
   participantHandlers.length = 0;
+  askedRequests.length = 0;
 });
 
 test("クリップボード本文を送信前に出力パネルへ表示しない", async () => {
@@ -432,9 +437,10 @@ test("同意を取り消すと、学習イベントをAPIへ同期しない", as
 // --- 診断/02 #76: 同じエラーの再発を error_recurred として記録する -------------
 
 /** 選択範囲（0:0〜0:16）に重なる Diagnostic を1件だけ持つ状態にする。 */
-function diagnosticsOnSelection(code: number, message: string) {
+function diagnosticsOnSelection(code: number, message: string, severity: number = 0) {
   const diagnostic = {
     range: { start: { line: 0, character: 6 }, end: { line: 0, character: 11 } },
+    severity,
     message,
     source: "ts",
     code,
@@ -550,4 +556,32 @@ test("error_recurredの記録で、該当Conceptがconfirmedから外れる", as
 
   await askAboutSelection();
   expect(latestProfile().mastery["ts.variable_declaration"]?.status).toBe("learning");
+});
+
+// --- #161: Hint・Information の Diagnostic で Error Explain に切り替えない ------
+
+test("Hintだけが重なる選択ではError ExplainではなくExplainで回答させる", async () => {
+  recordWithDomain(createEmptyProfile("2026-09-21T00:00:00.000Z"));
+  activate(createExtensionContext(true) as never);
+
+  // TypeScript は未使用変数を Hint（DiagnosticSeverity.Hint = 3）で出す。
+  diagnosticsOnSelection(6133, "'userName' is declared but its value is never read.", 3);
+  await askAboutSelection();
+
+  const prompt = buildPrompt(askedRequests[0] as AIRequest);
+  expect(prompt).toContain("### Explain");
+  expect(prompt).not.toContain("### Error Explain");
+  expect(prompt).not.toContain("is declared but its value is never read");
+});
+
+test("Errorが重なる選択では従来どおりError Explainで回答させる", async () => {
+  recordWithDomain(createEmptyProfile("2026-09-21T00:00:00.000Z"));
+  activate(createExtensionContext(true) as never);
+
+  diagnosticsOnSelection(2345, "Argument of type 'string' is not assignable to 'number'.", 0);
+  await askAboutSelection();
+
+  const prompt = buildPrompt(askedRequests[0] as AIRequest);
+  expect(prompt).toContain("### Error Explain");
+  expect(prompt).toContain("Argument of type 'string' is not assignable to 'number'.");
 });
