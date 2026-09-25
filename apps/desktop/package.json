@@ -1,7 +1,7 @@
 {
   "name": "@gakushu-sochi/desktop",
   "private": true,
-  "version": "0.0.1",
+  "version": "0.1.0",
   "type": "module",
   "description": "選択したテキストをすぐに質問できる常駐型 AI コンパニオン",
   "author": "Gakushu Sochi contributors",
@@ -31,20 +31,35 @@
   "build": {
     "appId": "com.gakushusochi.desktop",
     "productName": "Gakushu Sochi",
+    "artifactName": "Gakushu-Sochi-${version}-${os}-${arch}.${ext}",
     "files": [
       "out/**",
       "src/renderer/**",
       "package.json"
     ],
     "mac": {
+      "category": "public.app-category.education",
       "target": [
-        "dmg"
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
       ]
     },
     "win": {
       "target": [
         "nsis"
       ]
-    }
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "KOU050223",
+        "repo": "edd_2026"
+      }
+    ]
   }
 }

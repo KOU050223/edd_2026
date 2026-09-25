@@ -10,6 +10,7 @@ import { useEffect } from "react";
 import { ApiError } from "./api.js";
 
 const errorText: Record<ApiError["kind"], string> = {
+  login_required: "この画面を見るにはログインが必要です",
   session_expired: "ログインの有効期限が切れました",
   auth_unavailable: "認証サーバーへ一時的に接続できません。少し待って再試行してください。",
   rate_limited: "短時間に要求が多すぎます。しばらく待って再読み込みしてください。",
@@ -34,6 +35,21 @@ export function ErrorPanel({ error }: { error: unknown }) {
         window.location.href = "/login";
       }, 500);
   }, [expired]);
+  // 未ログインは失敗ではない（Issue #182）。初めて開いた人がまず見る画面なので、
+  // エラー文面ではなく `/login-failed` と同じ導線の形にする。
+  if (error instanceof ApiError && error.kind === "login_required") {
+    return (
+      <main className="login">
+        <section className="card">
+          <h1>学習装置</h1>
+          <p>この画面を見るにはログインが必要です。</p>
+          <a className="button" href="/login">
+            ログイン
+          </a>
+        </section>
+      </main>
+    );
+  }
   return (
     <section className="message error">
       <p>{toErrorText(error)}</p>

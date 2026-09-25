@@ -26,6 +26,38 @@
 
 対象外: WebviewによるリッチUI、完全なPersonal Learning Map。
 
+## インストール
+
+### Desktop（macOS / Windows）
+
+[GitHub Releases](https://github.com/KOU050223/edd_2026/releases) の `desktop-v*` から
+dmg（macOS、x64 / arm64）または exe（Windows）をダウンロードする。
+
+macOS は Homebrew でも入る。
+
+```bash
+brew tap KOU050223/tap
+brew install --cask gakushu-sochi
+```
+
+いずれも未署名。macOS は右クリック → 開く（または `xattr -dr com.apple.quarantine`）、
+Windows は SmartScreen の警告が出る。
+
+### VS Code Extension
+
+[Marketplace](https://marketplace.visualstudio.com/items?itemName=gakushu-sochi.gakushu-sochi)
+から入れるか、次のコマンドを実行する。
+
+```bash
+code --install-extension gakushu-sochi.gakushu-sochi
+```
+
+### Web
+
+<https://gakushu-sochi-web.uozumi05.workers.dev>
+
+リリース方式と手順の正典は [`docs/release.md`](docs/release.md)。
+
 ## ファイル構成
 
 複数クライアントで同じ Personal Learning Map を扱うため、モノレポで管理する。
@@ -44,6 +76,7 @@
 │  ├─ concepts.md               # Concept一覧・習熟度ルール・マイグレーション方針
 │  ├─ testing.md                # デモケースと手動テスト手順
 │  ├─ testing-guide.md          # 自動テストの方針と書き方
+│  ├─ release.md                # リリース方式と手順の正典
 │  └─ guardrails.md             # PRレビューからルールを育てる仕組みの方針
 ├─ .agents/                     # エージェントが毎回読むもの
 │  ├─ rules/                    # プロジェクト固有ルールの正典と却下記録

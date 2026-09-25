@@ -1,0 +1,138 @@
+name: Release Desktop
+
+# desktop-vX.Y.Z タグの push で mac / win のインストーラを作り GitHub Release へ出す。
+# workflow_dispatch はビルドの試運転用で、成果物は workflow artifacts に残すだけで
+# リリースは作らない。
+on:
+  push:
+    tags:
+      - "desktop-v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.20.0
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      # タグのバージョンと apps/desktop/package.json がズレたまま出すと、
+      # リリース名とアプリ内表示のバージョンが食い違う。ここで失敗させる。
+      - name: Require tag version to match desktop version
+        if: github.event_name == 'push'
+        run: |
+          tag_version="${GITHUB_REF_NAME#desktop-v}"
+          pkg_version="$(node -p "require('./apps/desktop/package.json').version")"
+          if [ "$tag_version" != "$pkg_version" ]; then
+            echo "::error::tag desktop-v${tag_version} does not match apps/desktop/package.json version ${pkg_version}"
+            exit 1
+          fi
+      - name: Run tests
+        run: npm run test
+
+  build:
+    name: Build (${{ matrix.os }})
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.20.0
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      # electron-builder へは publish を渡さない。成果物を集めてから release ジョブが
+      # gh でリリースを 1 個だけ作るので、mac/win それぞれがリリースを作りにいく
+      # 競合を起こさない。
+      - name: Build Desktop packages
+        run: |
+          npm run compile --workspace=@gakushu-sochi/domain
+          npm run compile --workspace=@gakushu-sochi/desktop
+          npx --no-install electron-builder --publish never --projectDir apps/desktop
+      - name: Upload installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.os }}
+          path: |
+            apps/desktop/dist/*.dmg
+            apps/desktop/dist/*.exe
+            apps/desktop/dist/*.zip
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    environment: production
+    concurrency:
+      group: desktop-release-${{ github.ref }}
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # GITHUB_TOKEN は他リポジトリを push できないので、Cask 更新には
+      # homebrew-tap への contents 書き込み権を持つ PAT を使う。
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Download installers
+        uses: actions/download-artifact@v4
+        with:
+          pattern: desktop-*
+          path: dist
+          merge-multiple: true
+      - name: Create GitHub Release
+        run: gh release create "${GITHUB_REF_NAME}" --generate-notes --title "Gakushu Sochi Desktop ${GITHUB_REF_NAME#desktop-}" dist/*
+      - name: Check out homebrew-tap
+        uses: actions/checkout@v4
+        with:
+          repository: KOU050223/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: homebrew-tap
+      - name: Render Homebrew cask
+        run: |
+          version="${GITHUB_REF_NAME#desktop-v}"
+          node scripts/gen-cask.mjs \
+            --version "$version" \
+            --sha256-arm "$(shasum -a 256 "dist/Gakushu-Sochi-${version}-mac-arm64.dmg" | cut -d' ' -f1)" \
+            --sha256-intel "$(shasum -a 256 "dist/Gakushu-Sochi-${version}-mac-x64.dmg" | cut -d' ' -f1)" \
+            --out homebrew-tap/Casks/gakushu-sochi.rb
+      - name: Push cask to homebrew-tap
+        working-directory: homebrew-tap
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/gakushu-sochi.rb
+          if git diff --cached --quiet; then
+            echo "Cask に変更がないので push しない"
+            exit 0
+          fi
+          git commit -m "gakushu-sochi ${GITHUB_REF_NAME#desktop-v}"
+          git push

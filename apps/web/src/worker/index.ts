@@ -95,6 +95,17 @@ function sessionExpired(c: Context<{ Bindings: WebBindings }>, options?: { clear
 }
 
 /**
+ * セッション Cookie 自体が無いときの応答。
+ *
+ * `session_expired` と分けるのは、見せる画面が違うためである（Issue #182）。
+ * Cookie を持たない訪問者は「期限が切れた」のではなく「まだログインしていない」ので、
+ * エラー文面ではなくログインの導線を見せる。
+ */
+function loginRequired(c: Context<{ Bindings: WebBindings }>) {
+  return c.json({ error: "login_required" }, 401, { "cache-control": "no-store" });
+}
+
+/**
  * 認証前エンドポイントへの到達を数える（docs/auth.md §5.3）。
  *
  * パスワード試行の制限は IdP の責務へ移ったが、`/login` と `/callback` は
@@ -314,6 +325,21 @@ export function createWebApp(
   });
 
   /**
+   * ログイン状態の確認（Issue #182）。
+   *
+   * ヘッダーの「ログイン / ログアウト」の切り替えに使う。未ログインでも
+   * 200 を返す —— 状態を知る手段が認証で止まると、未ログインであること自体を
+   * 画面へ伝えられなくなる。`run_worker_first` にこのパスが要る。
+   */
+  app.get("/session", async (c) => {
+    const session = await readSession(
+      c.env.SESSIONS,
+      cookieValue(c.req.header("cookie"), "session"),
+    );
+    return c.json({ loggedIn: session !== undefined }, 200, { "cache-control": "no-store" });
+  });
+
+  /**
    * 同意の記録の読み出し（#174）。
    *
    * 記録は `consent:{sub}` として KV に置く（worker/consent.ts）。この経路は
@@ -321,10 +347,9 @@ export function createWebApp(
    * 呼べる必要がある**（同意状態を知る手段が同意で止まると先へ進めない）。
    */
   app.get("/consent", async (c) => {
-    const session = await readSession(
-      c.env.SESSIONS,
-      cookieValue(c.req.header("cookie"), "session"),
-    );
+    const token = cookieValue(c.req.header("cookie"), "session");
+    const session = await readSession(c.env.SESSIONS, token);
+    if (!token) return loginRequired(c);
     if (!session) return sessionExpired(c);
     const record = await readConsent(c.env.SESSIONS, session.sub);
     return c.json(
@@ -340,10 +365,9 @@ export function createWebApp(
    * 記録しないためである（同意は「その文面」への合意）。
    */
   app.put("/consent", async (c) => {
-    const session = await readSession(
-      c.env.SESSIONS,
-      cookieValue(c.req.header("cookie"), "session"),
-    );
+    const token = cookieValue(c.req.header("cookie"), "session");
+    const session = await readSession(c.env.SESSIONS, token);
+    if (!token) return loginRequired(c);
     if (!session) return sessionExpired(c);
     const body = (await c.req.json().catch(() => ({}))) as { version?: unknown };
     if (body.version !== CONSENT_NOTICE_VERSION) {
@@ -362,10 +386,9 @@ export function createWebApp(
    * （削除は `DELETE /v1/learning-events` が持つ）。
    */
   app.delete("/consent", async (c) => {
-    const session = await readSession(
-      c.env.SESSIONS,
-      cookieValue(c.req.header("cookie"), "session"),
-    );
+    const token = cookieValue(c.req.header("cookie"), "session");
+    const session = await readSession(c.env.SESSIONS, token);
+    if (!token) return loginRequired(c);
     if (!session) return sessionExpired(c);
     await deleteConsent(c.env.SESSIONS, session.sub);
     return c.json({ granted: false }, 200, { "cache-control": "no-store" });
@@ -377,7 +400,8 @@ export function createWebApp(
   app.all("/api/*", async (c) => {
     const sessionToken = cookieValue(c.req.header("cookie"), "session");
     const session = await readSession(c.env.SESSIONS, sessionToken);
-    if (!sessionToken || !session) return sessionExpired(c);
+    if (!sessionToken) return loginRequired(c);
+    if (!session) return sessionExpired(c);
 
     // #174: 書き込み系の要求は、同意の記録があるときだけ上流へ中継する。
     // 版が古い・壊れた記録は同意なしとして扱う（readConsent の仕様）。
