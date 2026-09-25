@@ -243,6 +243,7 @@ function ConceptDetail({
   concepts,
   isCurrent,
   pending,
+  loggedIn,
   onChange,
   onSelect,
   panel,
@@ -252,6 +253,7 @@ function ConceptDetail({
   concepts: ReadonlyMap<string, OverlaidConcept>;
   isCurrent: boolean;
   pending: boolean;
+  loggedIn: boolean;
   onChange: (status: MasteryStatus | null) => void;
   onSelect: (conceptId: string) => void;
   panel: RefObject<HTMLElement | null>;
@@ -297,13 +299,15 @@ function ConceptDetail({
         empty="この先に続く Concept はありません"
         onSelect={onSelect}
       />
-      <MasteryPicker concept={concept} pending={pending} onChange={onChange} />
+      {loggedIn && <MasteryPicker concept={concept} pending={pending} onChange={onChange} />}
     </aside>
   );
 }
 
 function LearningMap() {
   const { profile, overrides } = Route.useLoaderData();
+  // 未ログインでは profile が無い。地図の形は見せたまま、記録や修正の導線だけを畳む。
+  const loggedIn = profile !== null;
   const router = useRouter();
   const [saveError, setSaveError] = useState<string>();
   const [pending, setPending] = useState<readonly string[]>([]);
@@ -346,7 +350,11 @@ function LearningMap() {
 
   // 応答は観測済みの Concept だけなので、定義の全件と突き合わせて未観測を補う。
   // 手動上書きは補ったあとに重ねる。未観測の Concept も手動で確認済みにできる。
-  const conceptList = applyOverrides(completeConcepts(profile.concepts, CONCEPTS), overrides);
+  // 未ログインでは観測も上書きも無いので、全部が未観測の地図になる。
+  const conceptList = applyOverrides(
+    completeConcepts(profile?.concepts ?? [], CONCEPTS),
+    overrides ?? {},
+  );
   const concepts = new Map(conceptList.map((concept) => [concept.conceptId, concept]));
   const summary = summarizeConcepts(conceptList);
   const current = findCurrentPosition(conceptList);
@@ -366,6 +374,13 @@ function LearningMap() {
   const currentConcept = current === undefined ? undefined : concepts.get(current);
   return (
     <>
+      {!loggedIn && (
+        // 最初に開く人がまず見る画面（Issue #182）。地図の形はログイン無しで
+        // 見せ、記録の開始点としてログインへの導線を置く。
+        <p className="hint">
+          学習の進み具合を記録・表示するには<a href="/login">ログイン</a>してください。
+        </p>
+      )}
       <section className="summary">
         <div>
           <strong>{summary.confirmed}</strong>確認済み
@@ -385,7 +400,7 @@ function LearningMap() {
           <p>理解度の保存に失敗しました：{saveError}</p>
         </section>
       )}
-      {profile.eventCount === 0 && (
+      {loggedIn && profile.eventCount === 0 && (
         <p className="hint">
           まだ学習データがありません。学習を始めると、この地図に現在地が現れます。
         </p>
@@ -440,6 +455,7 @@ function LearningMap() {
             concepts={concepts}
             isCurrent={selected.conceptId === current}
             pending={pending.includes(selected.conceptId)}
+            loggedIn={loggedIn}
             onChange={(status) => changeStatus(selected.conceptId, status)}
             onSelect={select}
             panel={detail}
@@ -460,10 +476,12 @@ function LearningMap() {
           ))}
         </section>
       )}
-      <footer>
-        {profile.eventCount} 件のイベントから導出 ·{" "}
-        {new Date(profile.derivedAt).toLocaleString("ja-JP")}
-      </footer>
+      {profile && (
+        <footer>
+          {profile.eventCount} 件のイベントから導出 ·{" "}
+          {new Date(profile.derivedAt).toLocaleString("ja-JP")}
+        </footer>
+      )}
     </>
   );
 }
@@ -473,11 +491,19 @@ export const Route = createFileRoute("/_framed/")({
   // 片方だけ古い組み合わせが表示されることがない（RULE-005）。
   loader: async () => {
     const retry = takeLoginRetry();
-    const [profile, overrides] = await Promise.all([
-      requestJson<Profile>("/api/v1/learning-profile", fetch, retry),
-      requestJson<MasteryOverrides>(OVERRIDES_PATH, fetch, retry),
-    ]);
-    return { profile, overrides };
+    try {
+      const [profile, overrides] = await Promise.all([
+        requestJson<Profile>("/api/v1/learning-profile", fetch, retry),
+        requestJson<MasteryOverrides>(OVERRIDES_PATH, fetch, retry),
+      ]);
+      return { profile, overrides };
+    } catch (error) {
+      // 未ログインは失敗ではない（Issue #182）。地図の形は Concept の定義だけで
+      // 描けるので、profile 無しのまま画面へ進み、上で導線を出す。
+      if (error instanceof ApiError && error.kind === "login_required")
+        return { profile: null, overrides: null };
+      throw error;
+    }
   },
   component: LearningMap,
 });

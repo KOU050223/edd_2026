@@ -342,15 +342,51 @@ test("セッションが無い /api は API に中継せず理由を区別する
       throw new Error("must not fetch");
     },
   });
+  const env = envWith(sessions);
 
-  const response = await app.request(
+  // Cookie が無いのは「まだログインしていない」ので、期限切れとは別の理由を返す。
+  const noCookie = await app.request("https://web.example.test/api/v1/learning-profile", {}, env);
+  expect(noCookie.status).toBe(401);
+  await expect(noCookie.json()).resolves.toEqual({ error: "login_required" });
+
+  // Cookie があって KV に無いのは「期限切れか伝播待ち」なので session_expired。
+  const expired = await app.request(
     "https://web.example.test/api/v1/learning-profile",
-    {},
-    envWith(sessions),
+    { headers: { cookie: "session=unknown-token" } },
+    env,
   );
+  expect(expired.status).toBe(401);
+  await expect(expired.json()).resolves.toEqual({ error: "session_expired" });
+});
 
-  expect(response.status).toBe(401);
-  await expect(response.json()).resolves.toEqual({ error: "session_expired" });
+test("/session はログイン状態だけを返し、未ログインでも 200 で答える", async () => {
+  const sessions = new MemoryKv();
+  const app = createWebApp({
+    fetch: async () => {
+      throw new Error("must not fetch");
+    },
+  });
+  const env = envWith(sessions);
+
+  const noCookie = await app.request("https://web.example.test/session", {}, env);
+  expect(noCookie.status).toBe(200);
+  await expect(noCookie.json()).resolves.toEqual({ loggedIn: false });
+  expect(noCookie.headers.get("cache-control")).toBe("no-store");
+
+  const invalid = await app.request(
+    "https://web.example.test/session",
+    { headers: { cookie: "session=unknown-token" } },
+    env,
+  );
+  await expect(invalid.json()).resolves.toEqual({ loggedIn: false });
+
+  const token = await createSession(kvOf(sessions), { refreshToken: "rt-1", sub: "auth0|a" });
+  const loggedIn = await app.request(
+    "https://web.example.test/session",
+    { headers: { cookie: `session=${token}` } },
+    env,
+  );
+  await expect(loggedIn.json()).resolves.toEqual({ loggedIn: true });
 });
 
 test("伝播待ちの 401 では Cookie を消さない（再試行が資格情報を失わない）", async () => {
@@ -693,10 +729,18 @@ test("/consent はセッションが無いと 401 を返す", async () => {
   });
   const env = envWith(sessions);
 
-  const response = await app.request("https://web.example.test/consent", {}, env);
+  // Cookie が無ければ未ログイン、Cookie があって KV に無ければ期限切れ。
+  const noCookie = await app.request("https://web.example.test/consent", {}, env);
+  expect(noCookie.status).toBe(401);
+  await expect(noCookie.json()).resolves.toEqual({ error: "login_required" });
 
-  expect(response.status).toBe(401);
-  await expect(response.json()).resolves.toEqual({ error: "session_expired" });
+  const expired = await app.request(
+    "https://web.example.test/consent",
+    { headers: { cookie: "session=unknown-token" } },
+    env,
+  );
+  expect(expired.status).toBe(401);
+  await expect(expired.json()).resolves.toEqual({ error: "session_expired" });
 });
 
 test("同意を記録すると現在の版と時刻が保存され、読み出せる", async () => {
