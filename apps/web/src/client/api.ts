@@ -4,6 +4,7 @@
  * 一時的な失敗で、**セッションは生きている**ので再試行で直る。
  */
 export type ApiErrorKind =
+  | "login_required"
   | "session_expired"
   | "auth_unavailable"
   | "rate_limited"
@@ -46,6 +47,7 @@ export async function requestJson<T>(
     }
   }
   const body = (await response.json().catch(() => ({}))) as { error?: string };
+  if (body.error === "login_required") throw new ApiError("login_required");
   if (body.error === "session_expired") throw new ApiError("session_expired");
   if (body.error === "auth_unavailable") throw new ApiError("auth_unavailable");
   if (body.error === "consent_required") throw new ApiError("consent_required");
@@ -139,6 +141,7 @@ async function sendJson<T>(
   }
   if (!response.ok) {
     const body = (await response.json().catch(() => ({}))) as { error?: string };
+    if (body.error === "login_required") throw new ApiError("login_required");
     if (body.error === "session_expired") throw new ApiError("session_expired");
     if (body.error === "auth_unavailable") throw new ApiError("auth_unavailable");
     if (body.error === "consent_required") throw new ApiError("consent_required");

@@ -11,6 +11,11 @@ import {
 test("API の 401 理由を利用者が取れるエラー種別へ写像する", async () => {
   await expect(
     requestJson("/api/v1/learning-profile", async () =>
+      Response.json({ error: "login_required" }, { status: 401 }),
+    ),
+  ).rejects.toEqual(new ApiError("login_required"));
+  await expect(
+    requestJson("/api/v1/learning-profile", async () =>
       Response.json({ error: "session_expired" }, { status: 401 }),
     ),
   ).rejects.toEqual(new ApiError("session_expired"));

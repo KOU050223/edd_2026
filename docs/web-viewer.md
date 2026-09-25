@@ -174,7 +174,8 @@ Durable Objects はその時点の選択肢として再評価する。
 **ゲートが守る範囲を正確に書いておく。** 後述の `run_worker_first` の通り、
 `/` や `/activity` の HTML・JS は Worker を経由せず静的配信される。つまり
 **アプリシェルは未認証でも取得できる。ログインが守るのは `/api/*` のデータ経路だけである。**
-未認証のブラウザが `/` を開くと、画面の枠だけが出てデータ取得が 401 になり `/login` へ誘導される。
+未認証のブラウザが `/` を開くと、データ取得は 401（`login_required`）になるが、
+地図の形は Concept の定義だけで描けるので、全部が未観測の地図とログインへの導線を出す（Issue #182）。
 学習データが漏れることはないが、「ログインしないと何も見えない」ではない。
 アプリシェル自体を隠したくなったら `run_worker_first` に `"/"` を足して
 Worker 側でリダイレクトするが、秘匿すべき情報がシェルに無い以上、現状は不要とする。
@@ -352,6 +353,7 @@ CLAUDE.md「エラーを握りつぶすな」。
 
 | 状況                      | 画面の表示                                                          | 追加の挙動                       |
 | ------------------------- | ------------------------------------------------------------------- | -------------------------------- |
+| 未ログイン（Cookie 無し） | `/` では未観測の地図とログイン導線、他画面ではログイン導線          | エラーとして扱わない（#182）     |
 | セッション無効 / 期限切れ | 「ログインの有効期限が切れました」                                  | `/login` へ誘導                  |
 | API が 401                | 「サーバー側の API トークンが無効です」                             | 再ログインでは直らないと明記する |
 | API が 429                | 「短時間に要求が多すぎます。しばらく待って再読み込みしてください」  | 自動リトライしない               |
@@ -434,9 +436,9 @@ apps/api/src/
     "directory": "./dist/client",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    // /login と /api/* は Worker が先に受ける。
+    // /login・/callback・/logout・/consent・/session・/api/* は Worker が先に受ける。
     // それ以外は Asset Worker が静的ファイルを返す。
-    "run_worker_first": ["/api/*", "/login", "/logout"],
+    "run_worker_first": ["/api/*", "/login", "/callback", "/logout", "/consent", "/session"],
   },
   "vars": {
     "API_ORIGIN": "https://gakushu-sochi-api.<account>.workers.dev",

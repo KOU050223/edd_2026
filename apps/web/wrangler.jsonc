@@ -16,7 +16,8 @@
     // （docs/web-viewer.md の警告 / docs/auth.md §5.3）。
     // `/login` は IdP へのリダイレクト開始点として Worker 側に残る。
     // `/consent` は同意記録の読み書きを Worker が担う（#174）。
-    "run_worker_first": ["/api/*", "/login", "/callback", "/logout", "/consent"],
+    // `/session` はログイン状態の確認（#182）。
+    "run_worker_first": ["/api/*", "/login", "/callback", "/logout", "/consent", "/session"],
   },
   "vars": {
     "API_ORIGIN": "https://gakushu-sochi-api.uozumi05.workers.dev",
