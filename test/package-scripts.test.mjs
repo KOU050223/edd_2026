@@ -16,8 +16,15 @@ const webPackageJson = JSON.parse(
 );
 const lefthook = await readFile(new URL("../lefthook.yml", import.meta.url), "utf8");
 const ci = await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+const desktopPackageJson = JSON.parse(
+  await readFile(new URL("../apps/desktop/package.json", import.meta.url), "utf8"),
+);
 const webPreview = await readFile(
   new URL("../.github/workflows/preview-web.yml", import.meta.url),
+  "utf8",
+);
+const desktopRelease = await readFile(
+  new URL("../.github/workflows/release-desktop.yml", import.meta.url),
   "utf8",
 );
 const harvestWorkflow = await readFile(
@@ -118,6 +125,33 @@ test("VS Code Extension はコンパイル後に VSIX を生成できる", () =>
   );
   // npx --no-install はローカル依存のみを実行するため、lockfile 固定のバージョンが必須。
   assert.equal(extensionPackageJson.devDependencies["@vscode/vsce"], "3.9.2");
+});
+
+test("desktop-v* タグで Desktop の GitHub Release を作る", () => {
+  // リリース経路は docs/release.md が正典。ここでは配線だけを検査する。
+  // タグ push が唯一のリリーストリガー。workflow_dispatch は試運転用でリリースを作らない。
+  assert.match(desktopRelease, /tags:\s*\n\s*- "?desktop-v\*"?/);
+  assert.match(desktopRelease, /workflow_dispatch:/);
+  assert.match(desktopRelease, /if: github\.event_name == 'push'/);
+  // タグと package.json のバージョン不一致は即失敗。
+  // 名と中身が食い違うリリースを出さないため。
+  assert.match(desktopRelease, /GITHUB_REF_NAME#desktop-v/);
+  assert.match(desktopRelease, /apps\/desktop\/package\.json/);
+  // 検証を通っていないコードはビルドしない、ビルドなしにリリースしない。
+  assert.match(desktopRelease, /needs: verify/);
+  assert.match(desktopRelease, /needs: build/);
+  // mac の dmg と win の nsis を matrix で作る。
+  assert.match(desktopRelease, /macos-latest/);
+  assert.match(desktopRelease, /windows-latest/);
+  // electron-builder には publish させず、gh が各 OS の成果物を 1 つの
+  // リリースへ集約する。matrix 各ジョブが個別に publish すると競合する。
+  assert.match(desktopRelease, /--publish never/);
+  assert.match(desktopRelease, /gh release create/);
+  assert.match(desktopRelease, /contents: write/);
+  // publish 先の設定が変わると手動 publish の行き先も変わる。向き先を固定する。
+  assert.deepEqual(desktopPackageJson.build.publish, [
+    { provider: "github", owner: "KOU050223", repo: "edd_2026" },
+  ]);
 });
 
 test("PR レビュー由来のプロジェクトルールを hook と CI で検証する", () => {
