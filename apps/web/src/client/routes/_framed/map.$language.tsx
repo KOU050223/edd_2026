@@ -1,6 +1,7 @@
 import { createFileRoute, Link, useNavigate, useRouter } from "@tanstack/react-router";
 import { useEffect, useRef } from "react";
 import {
+  CompleteBadge,
   ConceptDetail,
   LINKS,
   loadLearningMap,
@@ -22,7 +23,7 @@ import { findCurrentPosition, summarizeTree } from "../../learning-map.js";
  */
 function LanguageMap() {
   const { language } = Route.useParams();
-  const { profile, overrides } = Route.useLoaderData();
+  const { profile, overrides, completions } = Route.useLoaderData();
   // 未ログインでは profile が無い。地図の形は見せたまま、記録や修正の導線だけを畳む。
   const loggedIn = profile !== null;
   const { concept: selectedId } = Route.useSearch();
@@ -74,6 +75,9 @@ function LanguageMap() {
   }
   const summary = summarizeTree(tree, concepts);
   const currentConcept = current === undefined ? undefined : concepts.get(current);
+  // 記録は消えない（Concept が増えても残る）。いま全件 確認済みかどうかとは別物なので、
+  // 達成の時刻は記録から、進捗は今の地図から出す。
+  const recorded = completions?.completions.find((completion) => completion.language === language);
   return (
     <>
       <p className="map-head">
@@ -81,8 +85,25 @@ function LanguageMap() {
           ← 項目一覧
         </Link>
         <h1>{languageLabel[language] ?? language}</h1>
-        {tree.nodes.some((node) => node.conceptId === current) && <em className="badge">現在地</em>}
+        {summary.complete && <CompleteBadge small />}
+        {!summary.complete && tree.nodes.some((node) => node.conceptId === current) && (
+          <em className="badge">現在地</em>
+        )}
       </p>
+      {summary.complete && (
+        <section className="celebrate" role="status">
+          <CompleteBadge />
+          <div>
+            <h2>{languageLabel[language] ?? language} コンプリート</h2>
+            <p>
+              全 {summary.total} Concept を確認済みにしました。
+              {recorded
+                ? `${new Date(recorded.completedAt).toLocaleDateString("ja-JP")} に達成を記録しています。`
+                : "達成の記録はまだ読めていません。"}
+            </p>
+          </div>
+        </section>
+      )}
       <section className="summary" aria-label={`${languageLabel[language] ?? language} の集計`}>
         <div>
           <strong>{summary.confirmed}</strong>確認済み

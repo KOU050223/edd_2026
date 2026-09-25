@@ -169,6 +169,64 @@ a.area-card:focus-visible {
   font-size: 13px;
   color: #64748b;
 }
+/* 分野コンプリート（#178）。色だけで伝えないよう、星の形と COMPLETE の文字を並べる。
+   金色は白地で読みにくいので、文字色は十分に濃い琥珀にする。 */
+.complete-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: #fef3c7;
+  border: 1px solid #d97706;
+  color: #92400e;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.complete-badge.small {
+  padding: 1px 8px;
+  font-size: 10px;
+}
+a.area-card.complete {
+  background: #fffbeb;
+  border-color: #fcd34d;
+}
+.area-complete {
+  color: #92400e;
+  font-weight: 600;
+}
+.complete-count {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 16px;
+  font-size: 13px;
+}
+.complete-count b {
+  font-size: 17px;
+}
+/* 達成したときに一度だけ出す。次に開いたときは出ない（newlyCompleted が空になる）。 */
+.celebrate {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin: 0 0 16px;
+  padding: 16px 20px;
+  background: #fffbeb;
+  border: 1px solid #fcd34d;
+  border-radius: 14px;
+}
+.celebrate h2 {
+  margin: 0;
+  font-size: 18px;
+  color: #92400e;
+}
+.celebrate p {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: #78350f;
+}
 /* 領域別マップの見出し。一覧へ戻る導線と領域名を一行に置く。 */
 .map-head {
   display: flex;
