@@ -12,3 +12,9 @@ skills-lock.json
 # TanStack Router が生成するルートツリー。ビルドのたびに作り直されるので
 # 手で直さない（git には追跡させる。実行時に使われる正真正銘のソースである）。
 apps/web/src/client/routeTree.gen.ts
+
+# Concept 一覧の生成物。書式は packages/domain/scripts/gen-concepts.mjs が決める。
+# prettier に整形させると、整形後の内容が生成物と一致しなくなり
+# `npm run check:concepts` が落ちる（format と check が互いを壊す）。
+# 正典は packages/domain/concepts.md であり、こちらは手で直さない。
+packages/domain/src/concepts.generated.ts

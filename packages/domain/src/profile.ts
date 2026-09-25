@@ -56,7 +56,15 @@ export interface Concept {
   label: string;
   /** `id` のプレフィックスと一致する領域識別子。例: `go` / `git`（プログラミング言語とは限らない） */
   language: string;
-  /** 1〜2文の説明。UI での補足表示に使う。 */
+  /**
+   * 1〜2文の説明。UI での補足表示と、確認問題を生成するときの AI への入力に使う（#184）。
+   *
+   * `packages/domain/concepts.md` の全行が持ち（空欄は `npm run check:concepts` が落とす）、
+   * 一覧から生成した {@link CONCEPTS} では常に埋まっている。型で必須にしていないのは、
+   * 手で組み立てる Concept（テストの題材や、将来の外部由来の一覧）まで
+   * 巻き込まないためである。**省略された Concept の確認問題は生成しない。**
+   * 表示名1行だけを入力に生成すると、問題の粒度が Concept ごとにばらける。
+   */
   summary?: string;
   /**
    * 前提となる Concept。Skill Tree の辺にあたる。

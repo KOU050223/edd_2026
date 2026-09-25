@@ -79,6 +79,21 @@ roadmap.sh（`nilbuild/developer-roadmap`）の Go ロードマップは、各�
 生成物 `packages/domain/src/concepts.generated.ts` の隣に置き、
 生成の入力と出力を並べて確認できるようにしている。
 
+表の列は `ID | 表示名 | 概要 | 前提` である。
+`packages/domain/scripts/gen-concepts.mjs` は**列を位置で読む**ので、
+列を増やす・並べ替えるときはパーサとこの手順を同時に変える。
+
+`概要`（`Concept.summary`）は 1〜2 文で、次の2か所が読む。
+
+- UI での補足表示
+- **確認問題の生成（#184）が AI へ渡す入力**
+
+表示名だけでは問題の粒度と深さが決まらないため、生成の入力はここに依存する。
+全 Concept が必ず持ち、空欄は `npm run check:concepts` が落とす。
+表示名を言い換えただけの文や「〜を学ぶ」のような学習の説明は書かない。
+その概念で何が起きるか、どこでつまずくかを書く。
+`|` `"` `\` は使えない（表と生成物が壊れる）。
+
 一覧は手で定義する。MVP の主対象は Go と TypeScript / JavaScript で、それ以外の言語
 （Python / Rust / Java / C# / PHP / Ruby）と、言語を横断する領域（Git / 設計 /
 データベース / HTTP）は暫定の一覧を持つ。
@@ -114,9 +129,12 @@ languageId がそのまま prefix になる。
    後から名寄せが必要になるため、近い ID がすでにないかを必ず見る。
 2. **ID を決める。** `^[a-z0-9]+\.[a-z0-9_]+$` を満たすこと。単数形・スネークケースに揃える。
 3. **`packages/domain/concepts.md` の表に行を追加する。** 前提となる Concept があれば
-   `prerequisites` 列に書く。
+   `前提` 列に書く。
    前提は既存 ID のみを指し、循環してはならない。かつ、同じプレフィックスの
    Concept に限る。プレフィックスをまたぐ辺は Learning Map の木に描かれない。
+   **`概要` 列は空にできない。** 1〜2 文で、その概念で何が起きるか・どこでつまずくかを書く
+   （上の「Concept 一覧」を参照）。確認問題の生成（#184）がこの文を AI へ渡すため、
+   ここが薄いと、その Concept の問題だけ粒度が浅くなる。
 4. **`source` は `manual` になる。** 表に `source` 列はなく、
    `packages/domain/scripts/gen-concepts.mjs` が全件を `{ kind: "manual" }` として書き出す。
    MVP では Concept をすべて手で定義するためである。

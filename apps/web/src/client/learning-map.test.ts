@@ -229,11 +229,34 @@ test("領域の集計は木に載っている Concept だけを数える", () =>
     learning: 1,
     unobserved: 2,
     total: 4,
+    complete: false,
   });
+  // ts は Concept が 1 件で、それが確認済み。全件なのでコンプリートになる。
   expect(summarizeTree(trees[1]!, concepts)).toEqual({
     confirmed: 1,
     learning: 0,
     unobserved: 0,
     total: 1,
+    complete: true,
   });
+});
+
+test("1 件でも確認済みでない Concept が残っていればコンプリートにしない", () => {
+  const trees = layoutTrees(DEFINITIONS);
+  const concepts = new Map(
+    applyOverrides(
+      completeConcepts(
+        [
+          observed("go.a", "confirmed"),
+          observed("go.b", "confirmed"),
+          observed("go.c", "confirmed"),
+          observed("go.d", "learning"),
+        ],
+        DEFINITIONS,
+      ),
+      {},
+    ).map((concept) => [concept.conceptId, concept]),
+  );
+
+  expect(summarizeTree(trees[0]!, concepts)).toMatchObject({ confirmed: 3, complete: false });
 });
