@@ -16,6 +16,7 @@ import { createLearningProfileRoute } from "./routes/learning-profile.js";
 import { createLearningDataRoute } from "./routes/learning-data.js";
 import { createLearningActivityRoute } from "./routes/learning-activity.js";
 import { createAiRoute } from "./routes/ai.js";
+import { createAiConceptScoresRoute } from "./routes/ai-concept-scores.js";
 import { createAccountRoute } from "./routes/account.js";
 import { createManagementUsers } from "./auth/management.js";
 import { createMasteryOverridesRoute } from "./routes/mastery-overrides.js";
@@ -119,6 +120,12 @@ app.use(
   "/v1/ai/usage",
   rateLimit((env) => env.PROFILE_RATE_LIMITER),
 );
+// Jev による Concept 分類（#130 の PoC）。Workers AI のコストが発生するため
+// /v1/ai/responses と同じユーザー単位の上限を適用する。
+app.use(
+  "/v1/ai/concept-scores",
+  rateLimit((env) => env.PROFILE_RATE_LIMITER),
+);
 // 退会は Auth0 の Management API を呼ぶ。Auth0 側にもレート制限があるため、
 // 認証済みであっても叩き放題にしない。頻度の想定は Profile より遥かに低い。
 app.use(
@@ -134,6 +141,18 @@ app.route(
     fetch: (input, init) => globalThis.fetch(input, init),
     // 利用量は D1 に置く。退会が `DELETE FROM users` 1文で全データを消せる
     // という前提を崩さないため（migrations/0004_ai_usage.sql）。
+    usage: new D1AiUsageRepository(env.DB),
+    identity: new D1IdentityRepository(env.DB),
+    now: () => new Date(),
+  })),
+);
+
+app.route(
+  "/v1",
+  createAiConceptScoresRoute((env) => ({
+    ai: env.AI,
+    // 回数枠は Managed AI と同じ `ai_usage` を共有する。退会で消える前提も
+    // 揃えるため、置き場所は D1 で統一する（routes/ai-concept-scores.ts）。
     usage: new D1AiUsageRepository(env.DB),
     identity: new D1IdentityRepository(env.DB),
     now: () => new Date(),
