@@ -4,6 +4,7 @@ import { suggestNextConcepts } from "@gakushu-sochi/domain";
 import type { ConceptFamiliarity, MasteryStatusView } from "@gakushu-sochi/domain";
 import {
   AREAS,
+  CompleteBadge,
   ConceptDetail,
   LINKS,
   loadLearningMap,
@@ -23,7 +24,7 @@ import { findCurrentPosition, summarizeTree } from "../../learning-map.js";
  * 地図に載らない Concept だけはここから直接詳細を開ける（`?concept=`）。
  */
 function AreaIndex() {
-  const { profile, overrides } = Route.useLoaderData();
+  const { profile, overrides, completions, completionsError } = Route.useLoaderData();
   // 未ログインでは profile が無い。地図の形は見せたまま、記録や修正の導線だけを畳む。
   const loggedIn = profile !== null;
   const { concept: selectedId } = Route.useSearch();
@@ -39,6 +40,9 @@ function AreaIndex() {
   // 定義から外れた Concept の観測は地図に載らない。件数だけ数えて見えなくすると
   // 記録が消えたように見えるので、一覧の下に並べて選べるようにする（RULE-004）。
   const unmapped = conceptList.filter((concept) => !AREAS.has(concept.conceptId));
+  // 件数はサーバーの記録を正とする。記録は Concept が増えても消えないので、
+  // いま全件 確認済みかどうかとは一致しないことがある（RULE-004 の理由で理由も出す）。
+  const celebrated = completions?.newlyCompleted ?? [];
 
   // 外部履歴の形跡があるのに確認されていない Concept を「次に学ぶ候補」にする
   // （Issue #157）。履歴は Mastery へは混ぜず、候補の提示にだけ使う。
@@ -70,10 +74,36 @@ function AreaIndex() {
           学習の進み具合を記録・表示するには<a href="/login">ログイン</a>してください。
         </p>
       )}
+      {celebrated.length > 0 && (
+        <section className="celebrate" role="status">
+          <CompleteBadge />
+          <div>
+            <h2>
+              {celebrated.map((language) => languageLabel[language] ?? language).join(" · ")}
+              をコンプリートしました
+            </h2>
+            <p>この分野の Concept が全件 確認済みになりました。達成は記録に残ります。</p>
+          </div>
+        </section>
+      )}
       {saveError && (
         <section className="message error">
           <p>理解度の保存に失敗しました：{saveError}</p>
         </section>
+      )}
+      {completionsError && (
+        <p className="hint">
+          コンプリートの記録を読めませんでした：{completionsError}
+          <span className="muted"> 表示は今の地図から数えた値です。</span>
+        </p>
+      )}
+      {loggedIn && (
+        <p className="complete-count">
+          <CompleteBadge small />
+          <span className="muted">コンプリート</span>
+          <b>{completions?.completions.length ?? 0}</b>
+          <span className="muted">/ {TREES.length} 領域</span>
+        </p>
       )}
       {loggedIn && profile.eventCount === 0 && (
         <p className="hint">
@@ -90,11 +120,12 @@ function AreaIndex() {
                 key={tree.language}
                 to="/map/$language"
                 params={{ language: tree.language }}
-                className="area-card"
+                className={summary.complete ? "area-card complete" : "area-card"}
               >
                 <h2>
                   {languageLabel[tree.language] ?? tree.language}
-                  {hasCurrent && <em className="badge">現在地</em>}
+                  {summary.complete && <CompleteBadge small />}
+                  {!summary.complete && hasCurrent && <em className="badge">現在地</em>}
                 </h2>
                 <div className="area-progress" aria-hidden="true">
                   <i
@@ -106,9 +137,25 @@ function AreaIndex() {
                     style={{ width: `${(summary.learning / summary.total) * 100}%` }}
                   />
                 </div>
+                {/* Concept 1 つを 1 つのブロックで出す。帯は割合しか見せないので、
+                    「あと何個か」が数えられるようにこちらも並べる。 */}
+                <span className="area-blocks" aria-hidden="true">
+                  {tree.nodes.map((node) => (
+                    <i
+                      key={node.conceptId}
+                      className={concepts.get(node.conceptId)?.status ?? "unobserved"}
+                    />
+                  ))}
+                </span>
                 <p className="area-counts">
-                  確認済み {summary.confirmed}・学習中 {summary.learning}・未観測{" "}
-                  {summary.unobserved}
+                  {summary.complete ? (
+                    <span className="area-complete">全 {summary.total} Concept を確認済み</span>
+                  ) : (
+                    <>
+                      確認済み {summary.confirmed}・学習中 {summary.learning}・未観測{" "}
+                      {summary.unobserved}
+                    </>
+                  )}
                 </p>
               </Link>
             );

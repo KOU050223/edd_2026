@@ -1,0 +1,26 @@
+{
+  "name": "gakushu-sochi-launch-video",
+  "private": true,
+  "version": "0.0.1",
+  "license": "UNLICENSED",
+  "type": "module",
+  "scripts": {
+    "voice": "node scripts/make-voice.ts",
+    "audio": "node scripts/make-audio.ts",
+    "studio": "npm run audio && remotion studio src/index.ts",
+    "render": "npm run audio && remotion render src/index.ts Launch out/launch.mp4",
+    "typecheck": "tsc -p ."
+  },
+  "dependencies": {
+    "@remotion/cli": "^4.0.529",
+    "@remotion/google-fonts": "^4.0.529",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "remotion": "^4.0.529"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.6",
+    "@types/react": "^19.3.0",
+    "typescript": "^7.0.2"
+  }
+}

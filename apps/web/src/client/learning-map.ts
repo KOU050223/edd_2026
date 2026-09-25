@@ -175,12 +175,30 @@ export function conceptAreas(trees: readonly MapTree[]): ReadonlyMap<string, str
 export function summarizeTree(
   tree: MapTree,
   concepts: ReadonlyMap<string, OverlaidConcept>,
-): { confirmed: number; learning: number; unobserved: number; total: number } {
+): {
+  confirmed: number;
+  learning: number;
+  unobserved: number;
+  total: number;
+  /**
+   * この領域の Concept が全件 確認済みか（コンプリート）。
+   *
+   * 表示のための導出であって、達成の記録そのものではない。記録は
+   * `POST /v1/area-completions:check` がサーバー側で持つ。Concept があとから
+   * 増えると、記録は残ったままこの値だけが false に戻る。
+   */
+  complete: boolean;
+} {
   const inTree = tree.nodes.flatMap((node) => {
     const concept = concepts.get(node.conceptId);
     return concept === undefined ? [] : [concept];
   });
-  return { ...summarizeConcepts(inTree), total: inTree.length };
+  const summary = summarizeConcepts(inTree);
+  return {
+    ...summary,
+    total: inTree.length,
+    complete: inTree.length > 0 && summary.confirmed === inTree.length,
+  };
 }
 
 export interface MapNode {

@@ -6,7 +6,14 @@
 import { CONCEPTS } from "@gakushu-sochi/domain";
 import { useNavigate, useRouter } from "@tanstack/react-router";
 import { useEffect, useRef, useState, type RefObject } from "react";
-import { ApiError, createOperationQueue, createSubmitGuard, putJson, requestJson } from "./api.js";
+import {
+  ApiError,
+  createOperationQueue,
+  createSubmitGuard,
+  postJson,
+  putJson,
+  requestJson,
+} from "./api.js";
 import { toErrorText } from "./errors.js";
 import {
   attachFamiliarity,
@@ -37,6 +44,20 @@ export type MapProfile = {
 };
 
 const OVERRIDES_PATH = "/api/v1/mastery-overrides";
+const COMPLETIONS_PATH = "/api/v1/area-completions:check";
+
+/** 分野コンプリートの記録。契約は apps/api/src/contract/area-completions.ts。 */
+export interface AreaCompletion {
+  language: string;
+  completedAt: string;
+}
+
+export interface AreaCompletions {
+  version: number;
+  completions: AreaCompletion[];
+  /** この読み込みで初めて記録された分野。ここに入っているものだけを祝う。 */
+  newlyCompleted: string[];
+}
 
 // 習熟度と手動上書きは別の要求だが、loader が1つの結果にまとめるので、
 // 片方だけ古い組み合わせが表示されることがない（RULE-005）。
@@ -44,14 +65,19 @@ const OVERRIDES_PATH = "/api/v1/mastery-overrides";
 export async function loadLearningMap(): Promise<{
   profile: MapProfile | null;
   overrides: MasteryOverrides | null;
+  /** 達成の記録。未ログイン、または読めなかったときは `undefined`。 */
+  completions?: AreaCompletions;
+  /** 記録を読めなかった理由。地図は出したうえで画面に出す（RULE-004）。 */
+  completionsError?: string;
 }> {
   const retry = takeLoginRetry();
+  let profile: MapProfile;
+  let overrides: MasteryOverrides;
   try {
-    const [profile, overrides] = await Promise.all([
+    [profile, overrides] = await Promise.all([
       requestJson<MapProfile>("/api/v1/learning-profile", fetch, retry),
       requestJson<MasteryOverrides>(OVERRIDES_PATH, fetch, retry),
     ]);
-    return { profile, overrides };
   } catch (error) {
     // 未ログインは失敗ではない（Issue #182）。地図の形は Concept の定義だけで
     // 描けるので、profile 無しのまま画面へ進み、画面側で導線を出す。
@@ -59,6 +85,44 @@ export async function loadLearningMap(): Promise<{
       return { profile: null, overrides: null };
     throw error;
   }
+
+  // 分野コンプリートの判定はサーバーが行う（apps/api/src/routes/area-completions.ts）。
+  // これは POST なので、同意の記録が無いと Worker が 403 で止める（#174）。
+  // 地図そのものは同意が無くても読めるので、記録が取れなくても画面は出す。
+  // ただし黙って消さない。理由を持ち帰って画面に出す（RULE-004）。
+  let completions: AreaCompletions | undefined;
+  let completionsError: string | undefined;
+  try {
+    completions = await postJson<AreaCompletions>(COMPLETIONS_PATH);
+  } catch (error) {
+    // セッションが切れているなら地図そのものも出せない。呼び出し元へ通す。
+    if (
+      error instanceof ApiError &&
+      (error.kind === "session_expired" || error.kind === "login_required")
+    )
+      throw error;
+    completionsError = toErrorText(error);
+  }
+  return { profile, overrides, completions, completionsError };
+}
+
+/**
+ * コンプリートの印。分野の Concept が全件 確認済みになった分野に付ける。
+ *
+ * 色だけで伝えない。星の形と「COMPLETE」の文字を必ず並べる。
+ */
+export function CompleteBadge({ small }: { small?: boolean }) {
+  return (
+    <span className={`complete-badge${small ? " small" : ""}`}>
+      <svg viewBox="0 0 16 16" width={small ? 11 : 13} height={small ? 11 : 13} aria-hidden>
+        <path
+          d="M8 1.5l1.9 4 4.4.6-3.2 3 .8 4.4L8 11.4 4.1 13.5l.8-4.4-3.2-3 4.4-.6z"
+          fill="currentColor"
+        />
+      </svg>
+      COMPLETE
+    </span>
+  );
 }
 
 /** 選択中の Concept を URL に載せる。載せると共有・再読み込みで同じ詳細が開く。 */

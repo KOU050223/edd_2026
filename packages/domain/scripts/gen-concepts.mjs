@@ -18,18 +18,25 @@ const CONCEPT_ID_PATTERN = /^[a-z0-9]+\.[a-z0-9_]+$/;
 /**
  * concepts.md の一覧テーブルから1行ずつ Concept を読む。
  *
+ * 列は `ID | 表示名 | 概要 | 前提` の順で、**位置で読む。** 見出しの文字列では引かない。
+ * 列を増やすときは、この正規表現と下の分解、`docs/concepts.md` の手順を揃えて変えること。
+ * 4列に足りない行は1件も拾わないので、列を足しただけで中身を書き忘れれば
+ * `concepts.length === 0` として validate() で落ちる。
+ *
  * ID と前提 ID はバッククォートで囲まれていれば形式を問わず拾う。
  * ここで妥当な形式だけに絞ると、`go.pointer-receiver` のような書き間違いが
  * 行ごと（前提なら値ごと）黙って消え、検証を素通りして生成が成功してしまう。
  * 妥当性の判断は validate() に一本化する。
  */
 function parseConcepts(markdown) {
-  const rows = [...markdown.matchAll(/^\|\s*`([^`|]*)`\s*\|([^|]*)\|([^|]*)\|/gm)];
-  return rows.map(([, id, label, prerequisites]) => ({
+  const rows = [...markdown.matchAll(/^\|\s*`([^`|]*)`\s*\|([^|]*)\|([^|]*)\|([^|]*)\|/gm)];
+  return rows.map(([, id, label, summary, prerequisites]) => ({
     id: id.trim(),
     // 表示名は UI にそのまま出す。md のインラインコード記法は表示上の装飾なので剥がす。
     label: label.replaceAll("`", "").trim(),
     language: id.trim().split(".")[0],
+    // 概要も同じ理由で剥がす。UI と AI へのプロンプトの両方へ素のまま渡る（#184）。
+    summary: summary.replaceAll("`", "").trim(),
     prerequisites: [...prerequisites.matchAll(/`([^`|]*)`/g)].map((m) => m[1].trim()),
     source: { kind: "manual" },
   }));
@@ -54,6 +61,15 @@ function validate(concepts) {
     // 生成物では表示名を二重引用符で囲むため、含まれていると壊れる。
     if (c.label.includes('"') || c.label.includes("\\")) {
       errors.push(`表示名に " または \\ を含められない: ${c.id}`);
+    }
+    // 概要は全件が持つ。型は summary?: string だが、空欄を許すと確認問題の生成（#184）が
+    // 表示名1行だけを入力に走り、問題の粒度が Concept ごとにばらける。
+    // 「まだ書いていない」を undefined として通すのではなく、ここで落とす。
+    if (c.summary === "") {
+      errors.push(`概要が空: ${c.id}`);
+    }
+    if (c.summary.includes('"') || c.summary.includes("\\")) {
+      errors.push(`概要に " または \\ を含められない: ${c.id}`);
     }
   }
 
@@ -110,6 +126,7 @@ function render(concepts) {
         `    id: "${c.id}",`,
         `    label: "${c.label}",`,
         `    language: "${c.language}",`,
+        `    summary: "${c.summary}",`,
         `    prerequisites: [${prerequisites}],`,
         `    source: { kind: "manual" },`,
         "  },",

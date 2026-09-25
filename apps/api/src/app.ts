@@ -1,10 +1,12 @@
 import { Hono } from "hono";
+import { CONCEPTS } from "@gakushu-sochi/domain";
 import { cors } from "hono/cors";
 import { HTTPException } from "hono/http-exception";
 import { requireAuth, type AuthVariables } from "./auth/middleware.js";
 import { rateLimit } from "./auth/rate-limit.js";
 import {
   D1AiUsageRepository,
+  D1AreaCompletionRepository,
   D1AuditLogRepository,
   D1IdentityRepository,
   D1ImportSessionRepository,
@@ -21,6 +23,7 @@ import { createImportSessionsRoute } from "./routes/import-sessions.js";
 import { createAiRoute } from "./routes/ai.js";
 import { createAccountRoute } from "./routes/account.js";
 import { createManagementUsers } from "./auth/management.js";
+import { createAreaCompletionsRoute } from "./routes/area-completions.js";
 import { createMasteryOverridesRoute } from "./routes/mastery-overrides.js";
 import { createUserSettingsRoute } from "./routes/user-settings.js";
 
@@ -104,6 +107,12 @@ app.use(
   "/v1/mastery-overrides",
   rateLimit((env) => env.MASTERY_OVERRIDE_RATE_LIMITER),
 );
+// 分野コンプリートの判定（#178）。地図を開くたびに 1 回叩かれ、全イベントを読んで
+// 導出する。頻度も重さも Profile と同じ性質なので同じ上限を使う。
+app.use(
+  "/v1/area-completions:check",
+  rateLimit((env) => env.PROFILE_RATE_LIMITER),
+);
 // 設定の保存も利用者の操作ごとに1回書き込む。手動上書きと頻度の性質が同じなので
 // 同じ上限を使う。設定のためだけに新しい namespace を増やさない。
 app.use(
@@ -160,6 +169,14 @@ app.route(
   })),
 );
 
+// 確認問題の生成（#184、`routes/checks.ts`）はここへ繋がない。
+//
+// 歯止めの本体は「保存済みの問題があれば生成しない」であり、**それを実装するのは #185** である。
+// 生成だけを先に開けると、`ai_usage` の回数上限の外で毎回生成が走る経路になる。
+// #185 の D1 キャッシュと同時に `app.route` し、そのとき `app.test.ts` の
+// 「公開しない」テストを書き換える。レート制限はルート側が自分で掛けている
+// （繋いでいないルートの上限をここへ置くと、参照先の無い設定になるため）。
+
 /**
  * Repository の実体を D1 に結び付ける唯一の場所。
  *
@@ -182,6 +199,20 @@ app.route(
     events: new D1LearningEventRepository(env.DB),
     evidence: new D1LearningEvidenceRepository(env.DB),
     nowIso: () => new Date().toISOString(),
+  })),
+);
+
+app.route(
+  "/v1",
+  createAreaCompletionsRoute((env) => ({
+    identity: new D1IdentityRepository(env.DB),
+    events: new D1LearningEventRepository(env.DB),
+    overrides: new D1MasteryOverrideRepository(env.DB),
+    completions: new D1AreaCompletionRepository(env.DB),
+    // 定義は生成物の全件。テストだけが小さな一覧へ差し替える。
+    definitions: CONCEPTS,
+    nowIso: () => new Date().toISOString(),
+    nowMs: () => Date.now(),
   })),
 );
 

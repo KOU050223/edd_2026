@@ -10,13 +10,14 @@
  * この境界の外へその都合を漏らさない。
  */
 
-import type { LearningEvent } from "@gakushu-sochi/domain";
 import type {
   HistoryProviderId,
+  LearningEvent,
   LearningEvidence,
   MasteryStatus,
   UnmappedCandidate,
 } from "@gakushu-sochi/domain";
+import type { AreaCompletion } from "../contract/area-completions.js";
 import type { UserSettings, UserSettingsInput } from "../contract/user-settings.js";
 import type { ImportSessionView } from "../contract/history-import.js";
 
@@ -255,6 +256,23 @@ export interface MasteryOverrideRepository {
     status: MasteryStatus | null,
     updatedAt: string,
   ): Promise<Record<string, MasteryOverride>>;
+}
+
+/**
+ * 分野コンプリートの記録（migrations/0007_area_completions.sql）。
+ *
+ * 件数ではなく「どの分野をいつ達成したか」を持つ。件数は行数として数える。
+ * 達成は追記だけで、取り消す操作は無い。
+ */
+export interface AreaCompletionRepository {
+  /** 達成順（古い順）に返す。 */
+  listByUser(userId: string): Promise<AreaCompletion[]>;
+
+  /**
+   * まだ記録の無い分野だけを追記する。既にある分野は**書き換えない**。
+   * 再実行しても件数が増えず、最初の達成時刻が後の時刻で上書きされない。
+   */
+  record(userId: string, languages: readonly string[], completedAt: string): Promise<void>;
 }
 
 /**
