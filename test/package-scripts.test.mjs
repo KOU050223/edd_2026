@@ -119,9 +119,11 @@ test("PR 作成・更新時は本番へ昇格しない Web Preview を発行す�
 });
 
 test("VS Code Extension はコンパイル後に VSIX を生成できる", () => {
+  // domain の dist が古いままだと .d.ts の型が足りず拡張の tsc が落ちる。
+  // test:unit / watch と同じく、先に domain をコンパイルさせる。
   assert.equal(
     extensionPackageJson.scripts.package,
-    "npm run compile && npx --no-install @vscode/vsce package --no-dependencies",
+    "npm run compile --workspace=@gakushu-sochi/domain && npm run compile && npx --no-install @vscode/vsce package --no-dependencies",
   );
   // npx --no-install はローカル依存のみを実行するため、lockfile 固定のバージョンが必須。
   assert.equal(extensionPackageJson.devDependencies["@vscode/vsce"], "3.9.2");
