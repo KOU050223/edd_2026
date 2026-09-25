@@ -3,9 +3,11 @@ import { CONCEPTS } from "@gakushu-sochi/domain";
 import { expect, test } from "vitest";
 import {
   completeConcepts,
+  conceptAreas,
   findCurrentPosition,
   layoutTrees,
   linkConcepts,
+  summarizeTree,
 } from "./learning-map.js";
 import { applyOverrides } from "./overrides.js";
 import type { Concept } from "./profile.js";
@@ -196,4 +198,42 @@ test("全 Concept が地図に載る", () => {
   const placed = layoutTrees(CONCEPTS).flatMap((tree) => tree.nodes.map((node) => node.conceptId));
 
   expect(placed.sort()).toEqual(CONCEPTS.map((concept) => concept.id).sort());
+});
+
+test("Concept ID から属する領域を引ける。地図に無い Concept は含まれない", () => {
+  const areas = conceptAreas(layoutTrees(DEFINITIONS));
+
+  expect(areas.get("go.a")).toBe("go");
+  expect(areas.get("ts.a")).toBe("ts");
+  expect(areas.has("go.removed")).toBe(false);
+});
+
+test("領域の集計は木に載っている Concept だけを数える", () => {
+  const trees = layoutTrees(DEFINITIONS);
+  const concepts = new Map(
+    applyOverrides(
+      completeConcepts(
+        [
+          observed("go.a", "confirmed"),
+          observed("go.b", "learning"),
+          observed("ts.a", "confirmed"),
+        ],
+        DEFINITIONS,
+      ),
+      {},
+    ).map((concept) => [concept.conceptId, concept]),
+  );
+
+  expect(summarizeTree(trees[0]!, concepts)).toEqual({
+    confirmed: 1,
+    learning: 1,
+    unobserved: 2,
+    total: 4,
+  });
+  expect(summarizeTree(trees[1]!, concepts)).toEqual({
+    confirmed: 1,
+    learning: 0,
+    unobserved: 0,
+    total: 1,
+  });
 });
