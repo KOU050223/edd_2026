@@ -31,20 +31,35 @@
   "build": {
     "appId": "com.gakushusochi.desktop",
     "productName": "Gakushu Sochi",
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
     "files": [
       "out/**",
       "src/renderer/**",
       "package.json"
     ],
     "mac": {
+      "category": "public.app-category.education",
       "target": [
-        "dmg"
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
       ]
     },
     "win": {
       "target": [
         "nsis"
       ]
-    }
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "KOU050223",
+        "repo": "edd_2026"
+      }
+    ]
   }
 }

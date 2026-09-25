@@ -44,6 +44,7 @@
 │  ├─ concepts.md               # Concept一覧・習熟度ルール・マイグレーション方針
 │  ├─ testing.md                # デモケースと手動テスト手順
 │  ├─ testing-guide.md          # 自動テストの方針と書き方
+│  ├─ release.md                # リリース方式と手順の正典
 │  └─ guardrails.md             # PRレビューからルールを育てる仕組みの方針
 ├─ .agents/                     # エージェントが毎回読むもの
 │  ├─ rules/                    # プロジェクト固有ルールの正典と却下記録
