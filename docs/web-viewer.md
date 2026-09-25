@@ -2,13 +2,11 @@
 
 Issue #67「閲覧機能」。D1 に蓄積した学習イベントを Web から閲覧する。
 
-> **認証の記述は Auth/05（#84）で置き換わった。**
-> 本書が書いている共有パスフレーズ（`WEB_ACCESS_PASSPHRASE`）と共有 `API_TOKEN` の
-> 注入は、もう存在しない。ログインは Auth0 の Authorization Code + PKCE になり、
-> `/api/*` にはセッションの利用者本人のアクセストークンが載る。
-> **認証について現在の正典は [`auth.md`](auth.md) §5.3 である。**
-> 本書のうち有効なままなのは、パスの契約（`/api/*` → `/v1/*`）、
-> `run_worker_first` の罠、KV の結果整合性、画面の構成である。
+> **認証の正典は [`auth.md`](auth.md) §5.3 である。** 本書は認証フローの設計を持たない。
+> ログインは Auth0 の Authorization Code + PKCE で、`/api/*` にはセッションの
+> 利用者本人のアクセストークンが載る。起票時に設計した共有パスフレーズ
+> （`WEB_ACCESS_PASSPHRASE`）と共有 `API_TOKEN` は Auth/05（#84）で置き換わり、
+> Auth/06（#85）で secret ごと削除した。本書には残っていない。
 
 ## 位置づけと範囲
 
@@ -31,30 +29,26 @@ docs/architecture.md「Phase 1: 最初の学習ループを完成させる」の
 | ユーザー設定画面         | apps/web/README.md は設定も担当範囲に挙げるが、設定の書き込み API が無い。閲覧が動いてから別 Issue にする    |
 | GraphQL / 汎用 BFF       | apps/web/AGENTS.md「汎用GraphQLや巨大なBFFを先行して導入しない」                                             |
 
-## 前提として認めておく制約: 認証
+## 資格情報をどこに置くか
 
-**この設計で最も強い制約は認証であり、Issue の文面には現れていない。**
+**Web 固有の制約は「ブラウザに安全な保管場所が無い」ことである。** 誰であるかの識別は
+Auth0 が担うが（`auth.md` §5.3）、受け取ったトークンをどこに置くかは本書の判断である。
 
-現状の `apps/api/src/auth/middleware.ts` の `devAuth` は、単一の共有トークン
-`DEV_AUTH_TOKEN` を検証し、通過した全員を `DEV_AUTH_USER_ID`（既定 `dev-user`）
-という**一人のユーザー**として扱う。OAuth / OIDC による Identity は
-architecture.md「本番化前に明確化する事項」の通り未実装である。
-
-したがって次を設計の明示的な前提とする。
-
-> **Identity が実装されるまで、Web Viewer は単一ユーザー向けである。**
-> **ログインは「部外者を入れないゲート」であって、「誰であるかの識別」ではない。**
-
-この前提は画面にも書く。「現在は開発用の単一ユーザーモードです」と表示し、
-複数人で使えると誤解させない。
+起票時はまだ Identity が無く、`apps/api` の `devAuth` が単一の共有トークンを検証して
+通過者全員を `dev-user` として扱っていた。下の3案はその時点の比較であり、
+**採った案 A の構成は Identity 導入後もそのまま生きている**。変わったのは
+Worker が注入するものが共有トークンから利用者本人のアクセストークンになった点だけである。
 
 ### 検討した3案
 
-| 案                                                | 内容                                                                       | 判断             |
-| ------------------------------------------------- | -------------------------------------------------------------------------- | ---------------- |
-| A. Web を Worker にし、トークンはサーバー側に置く | ブラウザにはセッション Cookie だけを渡し、API 呼び出しは Worker 内から行う | **採用**         |
-| B. ブラウザに `DEV_AUTH_TOKEN` を配る             | 実装は最小。ただしシステム全体の資格情報がブラウザに露出する               | 却下             |
-| C. 先に Identity（OAuth）を作る                   | 正しい順序だが、本 Issue の範囲を大きく超える                              | 却下（別 Issue） |
+| 案                                                | 内容                                                                       | 判断              |
+| ------------------------------------------------- | -------------------------------------------------------------------------- | ----------------- |
+| A. Web を Worker にし、トークンはサーバー側に置く | ブラウザにはセッション Cookie だけを渡し、API 呼び出しは Worker 内から行う | **採用**          |
+| B. ブラウザに `DEV_AUTH_TOKEN` を配る             | 実装は最小。ただしシステム全体の資格情報がブラウザに露出する               | 却下              |
+| C. 先に Identity（OAuth）を作る                   | 正しい順序だが、本 Issue の範囲を大きく超える                              | 却下（別 Issue）※ |
+
+※ 案 C は後に Auth/05（#84）として実装され、**案 A の上に載った**。
+A と C は排他ではなく、当時は順序の問題だった。
 
 **A を採る理由。**
 
@@ -75,21 +69,30 @@ architecture.md「本番化前に明確化する事項」の通り未実装で�
   │  Cookie: session=<opaque>      （HttpOnly / Secure / SameSite=Lax）
   ▼
 apps/web （Cloudflare Worker + static assets）
-  │  Authorization: Bearer $API_TOKEN   （Worker の secret。ブラウザへ出さない）
+  │  Authorization: Bearer <利用者本人の Access Token>
+  │  （Refresh Token から Worker 内で取得。ブラウザへ出さない）
   ▼
 apps/api （既存）── D1
 ```
 
-- `POST /login`: パスフレーズを検証してセッションを発行する。
-  検証対象は Worker の secret `WEB_ACCESS_PASSPHRASE`。
-  比較は `devAuth` の `timingSafeEqual` と同じく定数時間で行う
-  （実装を `packages/domain` へ移すか、`apps/web` に写経するかは実装時に決める。
-  ドメインロジックではないので domain へは置かない方が筋がよい）。
+- `/login` → `/callback`: Auth0 の Authorization Code + PKCE。**フローの正典は
+  `auth.md` §5.3。** Worker が認可コードを交換し、セッションを発行する。
 - セッションは Workers KV に置く。値は乱数の opaque token、TTL は 7 日。
   JWT にしない。失効させたいときに撤回できないものを、認証の代わりに使わない。
-- `GET /api/*`: セッションを検証し、`apps/api` へ中継する。
-  中継先の URL は var `API_ORIGIN`、トークンは secret `API_TOKEN`。
+  KV には Refresh Token を紐づけ、Access Token は Worker 内で都度取得・更新する
+  （`src/worker/access-token.ts`）。
+- `/api/*`: セッションを検証し、`apps/api` へ中継する。
+  中継先の URL は var `API_ORIGIN`。`Authorization` は Worker が付け替える。
+- `/consent`: 同意の記録の読み書き（#174）。中継ではなく Worker 自身の endpoint で、
+  **同意が無くても呼べる**（同意状態を知る手段が同意で止まると先へ進めない）。
+  書き込み系（GET / HEAD / DELETE 以外）の中継は同意の記録があるときだけ通す。
+- `/session`: ログイン状態の確認（#182）。`{ loggedIn: boolean }` を返す。
+  **未ログインでも 200 を返す**（ログインしているかを知る手段が 401 になると、
+  未ログイン向けの画面を描けない）。`/consent` と同じ理由である。
 - 静的アセットは同じ Worker から配信する（`assets` バインディング）。
+
+**ブラウザへ渡すのは Cookie だけである。** Access Token も Refresh Token も
+ブラウザへ出さない。案 A を採った理由（上記1）はここで守られている。
 
 ### パスの契約
 
@@ -109,39 +112,36 @@ Worker へ回さないため、`/v1/...` は Asset Worker が処理し、
 Worker のルート・`run_worker_first`・画面の fetch 先の3つは、
 常に同じ `/api/*` を指していなければならない。
 
-### トークン名の対応
+### 認証前エンドポイントの制限
 
-Worker の secret `API_TOKEN` は、`apps/api` の secret `DEV_AUTH_TOKEN` と
-**同じ値でなければならない**。`devAuth` が検証するのは `DEV_AUTH_TOKEN` であり、
-名前が違うだけで別物ではない。値がずれると Worker 経由の全リクエストが 401 になる。
-
-名前を揃えないのは、それぞれの Worker から見た意味が違うためである
-（api にとっては「自分が受け入れるトークン」、web にとっては「相手に送るトークン」）。
-代わりにデプロイ手順へ不変条件として書き、`apps/web/README.md` にも明記する。
-どちらの値もブラウザへ渡さない。
-
-### ログイン試行の制限
-
-定数時間比較は、比較にかかる時間からパスフレーズを1文字ずつ推測されるのを防ぐだけで、
-**総当たりは防がない**。共有パスフレーズ1つが唯一の関門である以上、試行制限は必須である。
-`SYNC_RATE_LIMITER` / `PROFILE_RATE_LIMITER` は `apps/api` 側の学習データ API 用であり、
-`apps/web` の `/login` は保護していない。
+パスワードの試行制限は IdP（Auth0）へ移った。それでも `/login` と `/callback` は
+**認証前に叩ける経路**であり、叩かれれば Auth0 への外向き通信が発生する。
+`SYNC_RATE_LIMITER` / `PROFILE_RATE_LIMITER` は `apps/api` 側の学習データ API 用で、
+`apps/web` のこれらは保護していない。
 
 `apps/web` の `wrangler.jsonc` に `LOGIN_RATE_LIMITER` を独立して定義する。
 
 ```jsonc
 "ratelimits": [
   { "name": "LOGIN_RATE_LIMITER", "namespace_id": "2001",
-    "simple": { "limit": 5, "period": 60 } },
+    "simple": { "limit": 20, "period": 60 } },
 ],
 ```
 
 - 数える単位は接続元 IP（`CF-Connecting-IP`）。認証前なので userId は無い。
 - 上限を超えたら 429 を返す。理由を伏せない。
-- 分散した試行では IP 単位の制限が効かないため、**成功・失敗を問わずログイン試行を
-  `console.log` へ残し**、失敗の急増を観測できるようにする。
-  IP をまたぐ攻撃への実効的な対策は Identity の導入であり、
-  それまでは「パスフレーズを十分長くする」ことに依存していると明記しておく。
+- **1回のログインが `/login` と `/callback` の2回を消費する。** パスフレーズ時代の
+  5 回/分のままだと、やり直しを2回で使い切る。20 回/分にしてある。
+
+**この上限が何でないかを書いておく。** Workers の Rate Limiting はカウンターを
+**Cloudflare の location ごとに持つ**。したがって `limit: 20` は
+「IP ごとに全世界で 20 回/分」ではない。リクエストが複数の location に分散すれば、
+合計は 20 回/分を超えうる。
+
+狙いは**誤操作や素朴な連打で Auth0 への外向き通信が積み上がるのを抑えること**であり、
+分散した攻撃を止めることではない。後者は IdP 側の防御（Auth0 の
+Attack Protection）に委ねる。厳密な全体上限が要るなら Durable Objects のような
+強整合なカウンターが必要になるが、この目的には過剰なので採らない。
 
 ### セッションの整合性について認めておくこと
 
@@ -152,17 +152,32 @@ Workers KV は結果整合であり、書き込みと削除が別のエッジロ
 - ログアウトしても、伝播するまでの間は古いセッションが通る
 
 **この遅延を許容する。** Durable Objects による強整合なセッションストアには**しない**。
-単一ユーザーでログイン頻度が低く、ログアウトが即座に全エッジへ効かないことの実害が
-小さいためである。代わりに次で埋め合わせる。
+ログイン頻度が低く、ログアウト時はブラウザの Cookie も同時に破棄するため、
+伝播を待つ間に古いセッションが通ることの実害が小さいためである。
+代わりに次で埋め合わせる。
 
-- ログイン直後の 401 は、クライアントで**1回だけ**自動リトライする（1秒後）。
+- ログイン直後の 401 は、クライアントで**最大 3 回**再試行する
+  （`client/session.ts` の `LOGIN_SESSION_RETRIES`、1 秒間隔）。
+  再試行してよいかの印は Worker が返す `/?login=1` から sessionStorage へ移し、
+  URL から消す。**再読み込みで再試行が復活しない**ようにするための一度きりの印である。
   それでも失敗したら通常のエラー表示にする。無限にリトライしない。
 - ログアウトは KV の削除と同時に Cookie も破棄する。
   ブラウザ側の資格情報が消えるので、実用上の即時性はこれで足りる。
 - 「ログアウトは即座に全世界へ反映されるわけではない」ことを設計上の既知の性質として残す。
 
-Identity を入れる段階でセッションの持ち方ごと見直す。そのとき強整合が要るなら、
-Durable Objects はその時点の選択肢として再評価する。
+**Auth/05（#84）で Identity を入れた後も、この判断は維持している。** API が 401 を
+返した場合は KV のセッションを削除する（`src/worker/index.ts`）。Cookie だけを消すと、
+コピーされた Cookie を持つ誰かが refresh を回して使い続けられるためである。
+
+**ただしこの削除も即時失効ではない。** 削除自体が KV への書き込みであり、上と同じ
+伝播遅延を受ける。他の location には削除前の値が残るため、その間はコピーされた
+Cookie からセッションを読み直して Refresh Token を使える。同じ location でも
+即時反映は保証されていない。
+**「401 を見たら即座に失効する」とは書けない。削除は失効を早める措置であって、
+保証ではない。** 失効の実効的な上限は Refresh Token の寿命と、Auth0 側での撤回である。
+
+即時失効が要件になったら、KV 以外の強整合な失効確認（Durable Objects、または
+API 側でのトークン失効）をその時点で検討する。
 
 ### キャッシュ
 
@@ -180,9 +195,11 @@ Durable Objects はその時点の選択肢として再評価する。
 アプリシェル自体を隠したくなったら `run_worker_first` に `"/"` を足して
 Worker 側でリダイレクトするが、秘匿すべき情報がシェルに無い以上、現状は不要とする。
 
-`WEB_ACCESS_PASSPHRASE` / `API_TOKEN` が未設定のときは、
-`devAuth` と同じく **500 で落とす**。「設定が無いから素通しする」は、
-設定漏れがそのまま認証の無効化になる。設定漏れは機能停止として現れるべきである。
+認証に必要な設定（`AUTH_ISSUER` / `AUTH_AUDIENCE` / `AUTH_CLIENT_ID` /
+secret `AUTH_CLIENT_SECRET`）が欠けているときは **500 で落とす**。
+「設定が無いから素通しする」は、設定漏れがそのまま認証の無効化になる。
+設定漏れは機能停止として現れるべきである。`apps/api` の検証器も同じ原則で、
+設定欠落を 401 ではなく 500 として返す（`auth/middleware.ts`）。
 
 ## API に追加する読み取りエンドポイント
 
@@ -319,20 +336,47 @@ SELECT strftime('%Y-%m-%d', occurred_at_ms / 1000, 'unixepoch') AS date,
 
 ### 1. ログイン `/login`
 
-パスフレーズ1つ。「開発用の単一ユーザーモード」である旨を明記する。
+Worker が Auth0 へリダイレクトする起点。画面は持たない（`auth.md` §5.3）。
+認可に失敗した場合は `/login-failed` を出す。この画面は**ヘッダーの枠を出さない** —
+認可に失敗した画面に「マップ / 推移 / 設定」への導線を出すと、押しても
+`/api/*` が 401 を返すだけになる（`routes/__root.tsx`）。
 
 ### 2. Learning Map `/`
 
-ブラウザから `GET /api/v1/learning-profile` を1回フェッチして描く
-（Worker が `/v1/learning-profile` へ中継する）。
+ブラウザから `GET /api/v1/learning-profile` と `GET /api/v1/mastery-overrides` を
+フェッチして描く（Worker が `/v1/*` へ中継する）。
 
-- 確認済み / 学習中 の件数サマリ
-- Concept の一覧。`compareConceptView` の順序（サーバーが決めた順）を保つ。
-  クライアントで並べ替え直さない。順序の正典はサーバーにある。
-- 各行: `label`（無ければ `conceptId`）、`status`、`score`、`evidence` の要約
-  （「Hintで2回解決」など）。docs/concepts.md の意図通り、
-  score 単独ではなく status と evidence を必ず併記する。
-- `eventCount` と `derivedAt` をフッタに出す。いつ時点の導出かを隠さない。
+**起票時は Concept の一覧表だったが、Web/04（#53）で Skill Tree + 現在地へ置き換えた。**
+
+- 領域（Concept ID のプレフィックス）ごとの Skill Tree。列は前提の段数、
+  辺は `prerequisites`。木の定義は `packages/domain/concepts.md` が正典で、
+  自動生成しない。
+- **現在地**。学習中のうち最後に観測したものを1つ選ぶ（`client/learning-map.ts`）。
+  観測時刻の無い学習中は観測のあるものより後ろに回す。
+- 応答に無い Concept を `unobserved` として補い、全件を出す。
+  **`unobserved` を 0% のバーとして描かない。**「まだ判断材料がありません。
+  0% という意味ではありません」と文言で出す。
+- 選んだ Concept の詳細を右のパネルへ回す。`status` / `score` / `evidence` の内訳、
+  前提と次に接続する Concept、理解度の手動修正（Web/03 #47）。
+  docs/concepts.md の意図通り、score 単独ではなく status と evidence を併記する。
+- 手動上書きは**表示だけを変え、`evidence` には触れない**。自動算出の値を
+  `derived` に残し、「手動で確認済みにしたが自動算出では学習中」を区別できるようにする。
+- `eventCount` と `derivedAt` を出す。いつ時点の導出かを隠さない。
+
+### 2-b. 設定 `/settings`
+
+Web/06（#123）で追加し、Issue #165 と #173 で広げた。「一般 / 使用状況 / プラン / データ」を
+リンクで切り替える。**どの画面を開いているかを URL に載せる** ので、再読み込みや
+共有で開いていた画面が変わらない。
+
+| パス                | 内容                           | 由来           |
+| ------------------- | ------------------------------ | -------------- |
+| `/settings`         | 表示名・既定の表示期間         | Web/06 (#123)  |
+| `/settings/usage`   | Managed AI の使用状況          | #165           |
+| `/settings/billing` | 現在のプラン                   | #165           |
+| `/settings/data`    | 学習データのエクスポートと削除 | 基盤/10 (#173) |
+
+未実装の空欄は置かない。利用者から見れば壊れているのと区別がつかない（#123）。
 
 ### 3. 推移 `/activity`
 
@@ -351,19 +395,32 @@ CLAUDE.md「エラーを握りつぶすな」。
 `apps/vscode-extension` の `AIErrorReason` と同じく、**理由を区別して名前を付けて出す**。
 「読み込みに失敗しました」の一種類にまとめない。
 
-| 状況                      | 画面の表示                                                          | 追加の挙動                       |
-| ------------------------- | ------------------------------------------------------------------- | -------------------------------- |
-| 未ログイン（Cookie 無し） | `/` では未観測の地図とログイン導線、他画面ではログイン導線          | エラーとして扱わない（#182）     |
-| セッション無効 / 期限切れ | 「ログインの有効期限が切れました」                                  | `/login` へ誘導                  |
-| API が 401                | 「サーバー側の API トークンが無効です」                             | 再ログインでは直らないと明記する |
-| API が 429                | 「短時間に要求が多すぎます。しばらく待って再読み込みしてください」  | 自動リトライしない               |
-| API が 5xx / 到達不能     | 「学習データの取得に失敗しました」                                  | 再試行ボタンを出す               |
-| ログイン試行が 429        | 「ログインの試行が多すぎます。1分ほど待ってからやり直してください」 | パスフレーズの当否を示唆しない   |
-| データが 0 件             | 「まだ学習イベントがありません」                                    | エラーとして扱わない             |
+| 状況                      | 画面の表示                                                             | 追加の挙動                                      |
+| ------------------------- | ---------------------------------------------------------------------- | ----------------------------------------------- |
+| 未ログイン（Cookie 無し） | `/` では未観測の地図とログイン導線、他画面ではログイン導線             | エラーとして扱わない（#182）                    |
+| セッション無効 / 期限切れ | 「ログインの有効期限が切れました」                                     | `/login` へ誘導                                 |
+| API が 401                | 「ログインの有効期限が切れました」                                     | KV のセッションも消してから `/login` へ誘導する |
+| IdP へ到達できない（503） | 「認証サーバーに一時的に接続できません。少し待って再試行してください」 | セッションは残るので再ログインさせない          |
+| API が 429                | 「短時間に要求が多すぎます。しばらく待って再読み込みしてください」     | 自動リトライしない                              |
+| API が 5xx / 到達不能     | 「学習データの取得に失敗しました」                                     | 再試行ボタンを出す                              |
+| ログイン試行が 429        | 「ログインの試行が多すぎます。1分ほど待ってからやり直してください」    | 自動リトライしない                              |
+| データが 0 件             | 「まだ学習イベントがありません」                                       | エラーとして扱わない                            |
 
-「セッション無効」の 401 と「API トークンが無効」の 401 は、利用者にとって
-打つ手が違う（前者は再ログインで直り、後者は直らない）。Worker が中継時に
-両者を区別し、クライアントへ別の理由として渡す。まとめて 401 にしない。
+**共有トークンが無くなったので「API トークンが無効」という状態は存在しない。**
+`apps/web/src/client/api.ts` の `ApiErrorKind` から `api_token_invalid` は消え、
+現在は `login_required` / `session_expired` / `auth_unavailable` / `rate_limited` /
+`consent_required` / `consent_outdated` / `unavailable` である。
+
+種別を分けるのは、利用者の打つ手が違うからである。`session_expired` は再ログインで直り、
+`auth_unavailable`（セッションは生きているが IdP が一時的に応答しない）は再試行で直り、
+`login_required`（そもそも未ログイン）はエラーではない（#182）。
+まとめて 401 にすると、この3つが同じ画面になる。
+
+API が 401 を返したときは**ブラウザの Cookie を消すだけでは足りない**。KV の
+セッションを残すと、同じ Cookie を持つ別の誰かが refresh を回して使い続けられる。
+サーバー側を正本として先に消す（`src/worker/index.ts`）。
+**ただし KV の削除は即時失効ではない**（上述の伝播遅延）。失効を早める措置であって、
+保証ではない。
 
 **ログイン直後の 401 だけは例外で、1回に限り自動リトライする。** Workers KV の
 伝播遅延（上述）で正常なセッションが一時的に見つからないことがあるため。
@@ -374,14 +431,15 @@ Worker 側は `apps/api/src/app.ts` の `onError` と同じ原則を採る。
 
 ## 技術選定
 
-| 項目                   | 選定               | 理由                                                                              |
-| ---------------------- | ------------------ | --------------------------------------------------------------------------------- |
-| ランタイム             | Cloudflare Workers | `apps/api` と同じ。デプロイ経路を増やさない                                       |
-| サーバーフレームワーク | Hono               | `apps/api` と同じ。middleware の書き方を共有できる                                |
-| UI                     | React + Vite       | 画面が2つでも状態遷移（読込 / エラー / 空 / 表示）があり、素の DOM 操作より読める |
-| グラフ                 | 自前の SVG         | 積み上げ棒1種類のためにライブラリを入れない                                       |
-| テスト                 | Vitest             | 他ワークスペースと揃える                                                          |
-| セッション保管         | Workers KV         | 撤回可能で TTL を持つ。KV namespace を1つ作る                                     |
+| 項目                   | 選定               | 理由                                                                                                              |
+| ---------------------- | ------------------ | ----------------------------------------------------------------------------------------------------------------- |
+| ランタイム             | Cloudflare Workers | `apps/api` と同じ。デプロイ経路を増やさない                                                                       |
+| サーバーフレームワーク | Hono               | `apps/api` と同じ。middleware の書き方を共有できる                                                                |
+| UI                     | React + Vite       | 画面が2つでも状態遷移（読込 / エラー / 空 / 表示）があり、素の DOM 操作より読める                                 |
+| ルーティング           | TanStack Router    | #142 で追加。画面が増え、設定のタブを URL に載せる必要が出た。ファイル規約で `routes/` から型付きルートを生成する |
+| グラフ                 | 自前の SVG         | 積み上げ棒1種類のためにライブラリを入れない                                                                       |
+| テスト                 | Vitest             | 他ワークスペースと揃える                                                                                          |
+| セッション保管         | Workers KV         | 撤回可能で TTL を持つ。KV namespace を1つ作る                                                                     |
 
 React を入れる判断は `apps/desktop` の素の `renderer.js` と揃わないが、
 Desktop は単一画面のオーバーレイであり、こちらは一覧とグラフを持つ。
@@ -407,10 +465,22 @@ apps/web/
 │     ├─ main.tsx
 │     ├─ api.ts              # fetch ラッパ。上表のエラー種別へ写像する
 │     ├─ api.test.ts
-│     ├─ pages/{Login,LearningMap,Activity}.tsx
-│     └─ components/
+│     ├─ routeTree.gen.ts    # TanStack Router の生成物（#142）
+│     └─ routes/             # ファイル規約でルートを定義する
+│        ├─ __root.tsx       #   枠を持たない親（/login-failed のため）
+│        ├─ login-failed.tsx
+│        └─ _framed/         #   ヘッダー付きの枠。URL には現れない
+│           ├─ route.tsx
+│           ├─ index.tsx     #   Learning Map
+│           ├─ activity.tsx
+│           └─ settings/{route,index,usage,billing,data}.tsx
 └─ index.html
 ```
+
+**描画から切り離せるロジックは切り離す。** `apps/web/AGENTS.md` の通り
+jsdom も `@testing-library` も未導入で、React コンポーネントの自動テストは書けない。
+検証したいロジックは `client/api.ts` や `client/learning-map.ts` のように
+別ファイルへ出してから `*.test.ts` を書く。
 
 `apps/api` 側の追加。
 
@@ -436,22 +506,29 @@ apps/api/src/
     "directory": "./dist/client",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    // /login・/callback・/logout・/consent・/session・/api/* は Worker が先に受ける。
-    // それ以外は Asset Worker が静的ファイルを返す。
+    // Worker が先に受けるパス。それ以外は Asset Worker が静的ファイルを返す。
+    // `/callback` を落とすと index.html が返り、認可コードの交換が
+    // Worker に届かないまま静かに失敗する（後述の罠）。
+    // `/consent` は同意記録の読み書き（#174）、`/session` はログイン状態の確認（#182）。
     "run_worker_first": ["/api/*", "/login", "/callback", "/logout", "/consent", "/session"],
   },
   "vars": {
     "API_ORIGIN": "https://gakushu-sochi-api.<account>.workers.dev",
+    // Auth0 の issuer。OIDC Discovery が返す値をそのまま置く（末尾スラッシュ必須）。
+    "AUTH_ISSUER": "https://<tenant>.auth0.com/",
+    // API の audience。指定しないと API 向けでないトークンが返る（auth.md §4）。
+    "AUTH_AUDIENCE": "https://api.gakushu-sochi.dev",
+    // confidential client の client_id は秘密ではないのでここに置く（auth.md §5）。
+    "AUTH_CLIENT_ID": "<Auth0 で発行された値>",
   },
-  // API_TOKEN は apps/api の DEV_AUTH_TOKEN と同じ値にする（上述）。
-  "secrets": { "required": ["API_TOKEN", "WEB_ACCESS_PASSPHRASE"] },
+  "secrets": { "required": ["AUTH_CLIENT_SECRET"] },
   "kv_namespaces": [{ "binding": "SESSIONS", "id": "<作成後に埋める>" }],
-  // ログインの総当たり対策。apps/api 側の制限は /login を守らない。
+  // 認証前エンドポイント（/login と /callback）への到達を数える。
   "ratelimits": [
     {
       "name": "LOGIN_RATE_LIMITER",
       "namespace_id": "2001",
-      "simple": { "limit": 5, "period": 60 },
+      "simple": { "limit": 20, "period": 60 },
     },
   ],
 }
@@ -488,12 +565,15 @@ CI で型のずれが出るとしたらこの経路である。`test/package-scr
 
 ## 積み残し（本 Issue の範囲外）
 
-- Identity（OAuth / OIDC）。これが入るまで単一ユーザーであることは上述の通り。
-  入った時点で `apps/web` の `/login` と KV セッションは、
-  OIDC のコールバックとトークン保管へ置き換わる。中継の形は変わらない。
+- ~~Identity（OAuth / OIDC）。~~ Auth/05（#84）で実装した。`/login` は Auth0 への
+  リダイレクト起点になり、KV セッションは Refresh Token を保持する。
+  **予告どおり中継の形は変わっていない**（`/api/*` → `/v1/*`、Cookie だけをブラウザへ）。
+  共有トークンは Auth/06（#85）で削除した。
 - ~~ユーザー設定の編集。~~ Web/06（#123）で `/settings` として実装した。
   設定は D1 の `user_settings` に置く。1ユーザー1行の上書きで、退会の
   `DELETE FROM users` が `ON DELETE CASCADE` で一緒に消す。
-- データのエクスポート / 削除の画面。API は #79 で実装した
+- ~~データのエクスポート / 削除の画面。~~ 基盤/10（#173）で `/settings/data` として実装した
   （`GET /v1/learning-events:export` / `DELETE /v1/learning-events`、
-  architecture.md「保存期間と削除」）。Web にはボタンがまだ無い。
+  architecture.md「保存期間と削除」）。
+- 確認問題（Web/02 #43）。出題形式の正典は #43、生成は Web/07（#184）、
+  生成した問題の保存は Web/08（#185）、正誤の記録は Web/05（#77）が持つ。
