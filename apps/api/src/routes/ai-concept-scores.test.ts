@@ -2,6 +2,10 @@ import { expect, test, vi } from "vitest";
 import { Hono } from "hono";
 import type { AuthVariables } from "../auth/middleware.js";
 import { AUTHORIZED_HEADERS, stubAuth } from "../auth/test-auth.js";
+import { AI_USAGE_LIMITS } from "../contract/ai-usage.js";
+import { InMemoryAiUsageRepository } from "../repository/ai-usage.js";
+import { InMemoryIdentityRepository } from "../repository/memory.js";
+import type { AiUsageRepository, IdentityRepository } from "../repository/types.js";
 import {
   DEFAULT_CONCEPT_THRESHOLD,
   JEV_MODEL,
@@ -9,6 +13,9 @@ import {
   createAiConceptScoresRoute,
   type ConceptScoresBody,
 } from "./ai-concept-scores.js";
+
+/** テストで固定する時刻源の既定値。月・日のキーは "2026-01" / "2026-01-01" になる。 */
+const NOW = new Date("2026-01-01T00:00:00.000Z");
 
 /**
  * Jev の偽物。実物は問い合わせたすべての質問へ `answers` で応えるため、
@@ -28,18 +35,37 @@ function stubJev(scores: Record<string, number>) {
   });
 }
 
-function buildApp(options: { ai?: Ai; now?: () => number } = {}) {
+/**
+ * ルートをテスト用の Hono app へ載せる。実際と同じ認証 middleware と
+ * 依存の差し替え方（resolver へ偽物を渡す）で組み立てる。
+ */
+function buildApp(
+  options: {
+    ai?: Ai;
+    usage?: AiUsageRepository;
+    identity?: IdentityRepository;
+    now?: () => Date;
+  } = {},
+) {
   const run = stubJev({});
   const ai = options.ai ?? ({ run } as unknown as Ai);
+  const usage = options.usage ?? new InMemoryAiUsageRepository();
+  const identity = options.identity ?? new InMemoryIdentityRepository();
   const app = new Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>();
   app.use("/v1/*", stubAuth("user-a"));
   app.route(
     "/v1",
-    createAiConceptScoresRoute(() => ({ ai, now: options.now ?? (() => 1000) })),
+    createAiConceptScoresRoute(() => ({
+      ai,
+      usage,
+      identity,
+      now: options.now ?? (() => NOW),
+    })),
   );
-  return { app, run };
+  return { app, run, usage };
 }
 
+/** `POST /v1/ai/concept-scores` へ JSON を投げる。既定は認証済みのリクエスト。 */
 function ask(
   app: Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>,
   body: Record<string, unknown>,
@@ -151,12 +177,57 @@ test("閾値はリクエストで変えられる", async () => {
   expect(body.conceptIds).toEqual(["go.defer"]);
 });
 
+test("呼び出しは ai_usage の回数枠に数える", async () => {
+  const usage = new InMemoryAiUsageRepository();
+  const { app } = buildApp({ usage });
+
+  const response = await ask(app, { selection: "code", languageId: "go" });
+
+  expect(response.status).toBe(200);
+  // PoC の間は Managed AI（/v1/ai/responses）と同じ日次・月次の枠を共有する。
+  // Workers AI 側に累積上限が無いと、認証済みならコストを積み上げ放題になる。
+  const after = await usage.get({ userId: "user-a", monthKey: "2026-01", dayKey: "2026-01-01" });
+  expect(after.monthlyRequests).toBe(1);
+  expect(after.dailyRequests).toBe(1);
+});
+
+test("ai_usage の上限に達していれば上流を呼ばず 429 を返す", async () => {
+  const usage = new InMemoryAiUsageRepository();
+  for (let i = 0; i < AI_USAGE_LIMITS.dailyRequests; i++) {
+    await usage.reserve({
+      userId: "user-a",
+      monthKey: "2026-01",
+      dayKey: "2026-01-01",
+      updatedAt: NOW.toISOString(),
+      limits: {
+        dailyRequests: AI_USAGE_LIMITS.dailyRequests,
+        monthlyRequests: AI_USAGE_LIMITS.monthlyRequests,
+      },
+    });
+  }
+  const run = stubJev({});
+  const { app } = buildApp({ usage, ai: { run } as unknown as Ai });
+
+  const response = await ask(app, { selection: "code", languageId: "go" });
+
+  expect(response.status).toBe(429);
+  await expect(response.json()).resolves.toMatchObject({
+    error: "ai usage limit reached",
+    limit: "daily",
+  });
+  expect(run).not.toHaveBeenCalled();
+});
+
 test("AI のバインドが無ければ 503 を返し、運営側の障害としてログに残す", async () => {
   const app = new Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>();
   app.use("/v1/*", stubAuth("user-a"));
   app.route(
     "/v1",
-    createAiConceptScoresRoute(() => ({ now: () => 1000 })),
+    createAiConceptScoresRoute(() => ({
+      usage: new InMemoryAiUsageRepository(),
+      identity: new InMemoryIdentityRepository(),
+      now: () => NOW,
+    })),
   );
   const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
 

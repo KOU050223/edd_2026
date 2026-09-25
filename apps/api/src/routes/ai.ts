@@ -27,11 +27,11 @@ import {
   ALLOWED_MODELS,
   estimateInputTokens,
   isAllowedModel,
+  limitReached,
   nextUtcDay,
   nextUtcMonth,
   utcDayKey,
   utcMonthKey,
-  type AiUsageLimitBody,
   type AiUsageLimitKind,
   type AiUsageSummary,
 } from "../contract/ai-usage.js";
@@ -73,28 +73,6 @@ export interface AiDeps {
 }
 
 export type AiDepsResolver = (env: CloudflareBindings) => AiDeps;
-
-/** 上限到達時の応答。理由と回復時刻を利用者へ伝える（完了条件）。 */
-function limitReached(kind: AiUsageLimitKind, now: Date): AiUsageLimitBody {
-  // トークンの安全弁に当たった場合も、利用者へは回数と同じ扱いで見せる。
-  // 内部の別勘定を説明しない（docs/architecture.md「利用者への見せ方」）。
-  // 回復は月次と同じ暦月の境界になる。
-  const resetAt = kind === "daily" ? nextUtcDay(now) : nextUtcMonth(now);
-  const when = kind === "daily" ? "明日 UTC 0時" : "翌月 UTC 1日 0時";
-  const scope = kind === "daily" ? "今日" : "今月";
-  const allowance =
-    kind === "daily"
-      ? `${String(AI_USAGE_LIMITS.dailyRequests)} 回`
-      : `${String(AI_USAGE_LIMITS.monthlyRequests)} 回`;
-  return {
-    error: "ai usage limit reached",
-    limit: kind,
-    resetAt: resetAt.toISOString(),
-    message:
-      `${scope}の AI 利用上限（${allowance}）に達しました。${when}に回復します。` +
-      "それまでは GitHub Copilot か、自分の API キー（BYOK）をご利用ください。",
-  };
-}
 
 export function createAiRoute(resolve: AiDepsResolver) {
   const route = new Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>();

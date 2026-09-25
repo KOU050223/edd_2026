@@ -151,7 +151,11 @@ app.route(
   "/v1",
   createAiConceptScoresRoute((env) => ({
     ai: env.AI,
-    now: () => Date.now(),
+    // 回数枠は Managed AI と同じ `ai_usage` を共有する。退会で消える前提も
+    // 揃えるため、置き場所は D1 で統一する（routes/ai-concept-scores.ts）。
+    usage: new D1AiUsageRepository(env.DB),
+    identity: new D1IdentityRepository(env.DB),
+    now: () => new Date(),
   })),
 );
 

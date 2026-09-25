@@ -16,7 +16,15 @@ import { vValidator } from "@hono/valibot-validator";
 import * as v from "valibot";
 import { knownConceptsFor, type Concept } from "@gakushu-sochi/domain";
 import type { AuthVariables } from "../auth/middleware.js";
-import { estimateInputTokens } from "../contract/ai-usage.js";
+import {
+  AI_USAGE_LIMITS,
+  estimateInputTokens,
+  limitReached,
+  utcDayKey,
+  utcMonthKey,
+  type AiUsageLimitKind,
+} from "../contract/ai-usage.js";
+import type { AiUsageRepository, IdentityRepository } from "../repository/types.js";
 
 /** Workers AI 上での Jev のモデル名。 */
 export const JEV_MODEL = "typesafe/jev";
@@ -169,12 +177,28 @@ function readUsage(response: unknown): { inputTokens: number; outputTokens: numb
 export interface ConceptScoresDeps {
   /** Workers AI のバインド（wrangler.jsonc の `ai`）。未設定なら 503 を返す。 */
   ai?: Ai;
-  /** レイテンシ計測のための時刻源（ms）。テストでは固定値を挿す。 */
-  now: () => number;
+  /**
+   * 回数枠の蓄積先。Managed AI（/v1/ai/responses）と同じ `ai_usage` の
+   * 日次・月次枠を共有する。Workers AI は Gemini 中継と別の課金系だが、
+   * 累積上限が無いとバースト制限の内側でコストを積み上げられるため、
+   * PoC の間は同じ枠で止める。Jev 専用の予算は採用判断のときに設計する。
+   */
+  usage: AiUsageRepository;
+  /**
+   * `ai_usage.user_id` は `users(id)` を参照するため、数える前にユーザー行を
+   * 用意する必要がある（routes/ai.ts と同じ前提）。
+   */
+  identity: IdentityRepository;
+  /** レイテンシ計測と期間キーの時刻源。テストでは固定値を挿す。 */
+  now: () => Date;
 }
 
 export type ConceptScoresDepsResolver = (env: CloudflareBindings) => ConceptScoresDeps;
 
+/**
+ * `/v1/ai/concept-scores` のルートを組み立てる。
+ * deps は Bindings ごとに変わるため、リクエスト時に env から解決する。
+ */
 export function createAiConceptScoresRoute(resolve: ConceptScoresDepsResolver) {
   const route = new Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>();
 
@@ -213,6 +237,35 @@ export function createAiConceptScoresRoute(resolve: ConceptScoresDepsResolver) {
     const questions = buildJevQuestions(concepts);
     const conceptIds = concepts.map((concept) => concept.id);
     const userId = c.get("user").userId;
+    const now = deps.now();
+    const monthKey = utcMonthKey(now);
+    const dayKey = utcDayKey(now);
+
+    // `ai_usage.user_id` は `users(id)` を参照しており、D1 は外部キーを実際に
+    // 強制する。行が無いまま INSERT すると FOREIGN KEY constraint failed で落ちる
+    // （routes/ai.ts と同じ前提）。
+    await deps.identity.ensureUser({ userId, nowMs: now.getTime() });
+
+    // 上流へ流す前に回数の枠を確保する。判定と加算は1つの操作にまとめる
+    // （`reserve`）。Managed AI と同じ枠を共有するのは ConceptScoresDeps の
+    // `usage` の説明のとおり。
+    const { reserved, usage: after } = await deps.usage.reserve({
+      userId,
+      monthKey,
+      dayKey,
+      updatedAt: now.toISOString(),
+      limits: {
+        dailyRequests: AI_USAGE_LIMITS.dailyRequests,
+        monthlyRequests: AI_USAGE_LIMITS.monthlyRequests,
+      },
+    });
+    if (!reserved) {
+      // 両方に達している利用者へ日次の回復時刻を返すと、再試行しても月次で
+      // 止まり続ける。遠いほう（実際に使えるようになる時刻）を返す。
+      const kind: AiUsageLimitKind =
+        after.monthlyRequests >= AI_USAGE_LIMITS.monthlyRequests ? "monthly" : "daily";
+      return c.json(limitReached(kind, now), 429);
+    }
 
     const startedAt = deps.now();
     let response: unknown;
@@ -222,7 +275,7 @@ export function createAiConceptScoresRoute(resolve: ConceptScoresDepsResolver) {
       console.error("ai concept scoring failed", { userId, cause });
       return c.json({ error: "AI upstream request failed" }, 502);
     }
-    const latencyMs = deps.now() - startedAt;
+    const latencyMs = deps.now().getTime() - startedAt.getTime();
 
     const scores = readConceptScores(response, conceptIds);
     if (scores === null) {
