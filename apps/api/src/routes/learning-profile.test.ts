@@ -3,11 +3,20 @@ import { Hono } from "hono";
 import type { LearningEvent } from "@gakushu-sochi/domain";
 import { type AuthVariables } from "../auth/middleware.js";
 import { TEST_TOKEN, stubAuth } from "../auth/test-auth.js";
-import { InMemoryLearningEventRepository } from "../repository/memory.js";
+import {
+  InMemoryImportSessionRepository,
+  InMemoryLearningEventRepository,
+  InMemoryLearningEvidenceRepository,
+  createInMemoryRepositoryStore,
+  type InMemoryRepositoryStore,
+} from "../repository/memory.js";
 import { createLearningProfileRoute } from "./learning-profile.js";
 import type { LearningProfileResponse } from "../contract/learning-profile.js";
 
+let store: InMemoryRepositoryStore;
 let events: InMemoryLearningEventRepository;
+let evidence: InMemoryLearningEvidenceRepository;
+let sessions: InMemoryImportSessionRepository;
 let app: Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>;
 
 /** 認証は `stubAuth` が担うので、env に資格情報は要らない。 */
@@ -15,12 +24,15 @@ const ENV = {};
 const NOW = "2026-09-06T00:00:00.000Z";
 
 beforeEach(() => {
-  events = new InMemoryLearningEventRepository();
+  store = createInMemoryRepositoryStore();
+  events = new InMemoryLearningEventRepository(store);
+  evidence = new InMemoryLearningEvidenceRepository(store);
+  sessions = new InMemoryImportSessionRepository(store);
   app = new Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>();
   app.use("/v1/*", stubAuth("user-a"));
   app.route(
     "/v1",
-    createLearningProfileRoute(() => ({ events, nowIso: () => NOW })),
+    createLearningProfileRoute(() => ({ events, evidence, nowIso: () => NOW })),
   );
 });
 
@@ -138,4 +150,52 @@ test("発生順と到着順が食い違っても発生時刻順で導出する",
 
 test("認証が無ければ401にする", async () => {
   expect((await getProfile("wrong")).status).toBe(401);
+});
+
+test("外部履歴由来の Familiarity を concepts とは別に返す", async () => {
+  // Mastery と Familiarity を混ぜない（Issue #157）。
+  // 「過去に触れた」と「現在理解している」は別の情報である。
+  await sessions.createWithEvidence(
+    "user-a",
+    {
+      id: "import-1",
+      importedBy: "desktop",
+      providers: ["codex"],
+      conversationCount: 3,
+      ignoredCount: 0,
+      unmappedCandidates: [],
+      evidenceCount: 1,
+      conceptCount: 1,
+      createdAt: NOW,
+      updatedAt: NOW,
+    },
+    [
+      {
+        id: "import-1:codex:s1",
+        conceptIds: ["go.defer"],
+        source: { provider: "codex", importedBy: "desktop" },
+        kind: "question",
+        observedAt: "2025-01-01T00:00:00.000Z",
+        confidence: 0.8,
+        importSessionId: "import-1",
+      },
+    ],
+  );
+
+  const body = (await (await getProfile()).json()) as LearningProfileResponse;
+
+  // 学習イベントが無いので concepts（Mastery 由来）は空のまま。
+  expect(body.concepts).toEqual([]);
+  // Familiarity には「Codex で1件触れた」という根拠が載る。
+  expect(body.familiarity).toEqual([
+    {
+      conceptId: "go.defer",
+      observationCount: 1,
+      maxConfidence: 0.8,
+      lastObservedAt: "2025-01-01T00:00:00.000Z",
+      sources: [{ provider: "codex", count: 1, lastObservedAt: "2025-01-01T00:00:00.000Z" }],
+      label: body.familiarity[0]?.label,
+    },
+  ]);
+  expect(body.familiarity[0]?.label).toBeTypeOf("string");
 });

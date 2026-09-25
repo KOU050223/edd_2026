@@ -22,7 +22,9 @@
         <aside class="sidebar">
           <div class="kicker" id="map-title">Learning Map · Go</div>
           <ul class="concepts" id="concepts" aria-labelledby="map-title"></ul>
-          <div class="sidebar-foot"><button id="settings">設定</button></div>
+          <div class="sidebar-foot">
+            <button id="import-open">履歴から地図を作る</button><button id="settings">設定</button>
+          </div>
         </aside>
 
         <section class="stage">
@@ -115,6 +117,63 @@
           </div>
         </div>
       </form>
+      <!-- 履歴インポート wizard（Issue #157） -->
+      <section id="import" role="dialog" aria-modal="true" aria-labelledby="import-title" hidden>
+        <div class="settings-panel import-panel">
+          <h2 id="import-title">これまでの学習から Learning Map を作ります</h2>
+          <p id="import-error" role="alert"></p>
+
+          <div id="import-step-sources">
+            <p class="import-lead">このPCで見つかった学習履歴</p>
+            <ul id="import-sources" class="import-sources"></ul>
+            <div class="import-file">
+              <button type="button" id="import-pick">エクスポートファイルを選ぶ</button>
+              <select id="import-file-provider" hidden>
+                <option value="chatgpt">ChatGPT エクスポート</option>
+                <option value="claude">Claude エクスポート</option>
+              </select>
+              <span id="import-file-name"></span>
+            </div>
+            <p id="import-analyzers" class="import-note"></p>
+          </div>
+
+          <div id="import-step-progress" hidden>
+            <p class="import-lead">過去の学習を読み解いています</p>
+            <ul id="import-progress-list" class="import-sources"></ul>
+            <div class="progress"><div id="import-bar" class="progress-bar"></div></div>
+          </div>
+
+          <div id="import-step-result" hidden>
+            <p class="import-lead" id="import-summary"></p>
+            <ul id="import-concepts" class="import-concepts"></ul>
+            <details id="import-detail-wrap" hidden>
+              <summary>詳細</summary>
+              <ul id="import-warnings"></ul>
+              <ul id="import-unmapped"></ul>
+            </details>
+            <div id="import-paste-area" hidden>
+              <p class="import-note">
+                自動で分析できなかった会話があります。プロンプトをコピーしてお持ちの AI
+                に貼り、返ってきた JSON を下に貼り付けてください。
+              </p>
+              <button type="button" id="import-copy-prompt">プロンプトをコピー</button>
+              <textarea id="import-paste" rows="4" placeholder='{"observations": [...]}'></textarea>
+              <button type="button" id="import-paste-apply">分析結果を取り込む</button>
+            </div>
+          </div>
+
+          <div id="import-step-applied" hidden>
+            <p class="import-lead" id="import-applied-message"></p>
+          </div>
+
+          <div class="settings-actions">
+            <button type="button" id="import-close">閉じる</button>
+            <button type="button" id="import-undo" hidden>この Import を取り消す</button>
+            <button type="button" id="import-run">Learning Map を作る</button>
+            <button type="button" id="import-apply" hidden>地図に適用</button>
+          </div>
+        </div>
+      </section>
     </main>
     <script type="module" src="renderer.js"></script>
   </body>

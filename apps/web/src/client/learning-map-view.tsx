@@ -9,8 +9,10 @@ import { useEffect, useRef, useState, type RefObject } from "react";
 import { ApiError, createOperationQueue, createSubmitGuard, putJson, requestJson } from "./api.js";
 import { toErrorText } from "./errors.js";
 import {
+  attachFamiliarity,
   completeConcepts,
   conceptAreas,
+  describeFamiliarity,
   layoutTrees,
   linkConcepts,
   type ConceptLinks,
@@ -23,10 +25,16 @@ import {
   type MasteryStatus,
   type OverlaidConcept,
 } from "./overrides.js";
-import type { Concept } from "./profile.js";
+import type { Concept, Familiarity } from "./profile.js";
 import { takeLoginRetry } from "./session.js";
 
-export type MapProfile = { derivedAt: string; eventCount: number; concepts: Concept[] };
+export type MapProfile = {
+  derivedAt: string;
+  eventCount: number;
+  concepts: Concept[];
+  /** 外部履歴由来の「触れた形跡」（Issue #157）。古い API は返さないので省略可。 */
+  familiarity?: Familiarity[];
+};
 
 const OVERRIDES_PATH = "/api/v1/mastery-overrides";
 
@@ -69,7 +77,12 @@ export function overlaidConcepts(
   profile: MapProfile | null,
   overrides: MasteryOverrides | null,
 ): OverlaidConcept[] {
-  return applyOverrides(completeConcepts(profile?.concepts ?? [], CONCEPTS), overrides ?? {});
+  // Familiarity は Mastery を底上げしない。「過去に触れた形跡」として
+  // 別のフィールドに載せる（Issue #157）。
+  return attachFamiliarity(
+    applyOverrides(completeConcepts(profile?.concepts ?? [], CONCEPTS), overrides ?? {}),
+    profile?.familiarity,
+  );
 }
 
 export const statusLabel: Record<MasteryStatus, string> = {
@@ -299,6 +312,11 @@ export function SkillTree({
                   {isCurrent && <em className="badge">現在地</em>}
                   {statusLabel[concept.status]}
                   {concept.manual && <em className="manual">手動</em>}
+                  {/* 履歴だけある Concept は「未観測」ではなく
+                      「触れた形跡あり」として区別する（Issue #157） */}
+                  {concept.status === "unobserved" && concept.familiarity && (
+                    <em className="familiar">履歴あり</em>
+                  )}
                 </span>
               </button>
             );
@@ -389,6 +407,21 @@ export function ConceptDetail({
       </dl>
       {concept.status === "unobserved" && !concept.manual && (
         <p className="muted">まだ判断材料がありません。0% という意味ではありません。</p>
+      )}
+      {concept.familiarity && (
+        <>
+          <h3>過去の学習履歴から</h3>
+          <p className="muted">
+            {describeFamiliarity(concept.familiarity)}
+            {concept.familiarity.observationCount > 0 &&
+              `（観測 ${concept.familiarity.observationCount} 件）`}
+          </p>
+          {concept.derived.status === "unobserved" && (
+            <p className="muted">
+              過去に触れた形跡はありますが、学習の記録では確認されていません。
+            </p>
+          )}
+        </>
       )}
       <h3>前提 Concept</h3>
       <ConceptLinksList

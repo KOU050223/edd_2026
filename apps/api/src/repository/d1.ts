@@ -5,7 +5,16 @@
  * 発生時刻が2列であることは、この外へ漏らさない。
  */
 
-import type { LearningEvent, LearningEventType, EventOrigin } from "@gakushu-sochi/domain";
+import type {
+  EvidenceImportedBy,
+  EvidenceKind,
+  EventOrigin,
+  HistoryProviderId,
+  LearningEvent,
+  LearningEventType,
+  LearningEvidence,
+  UnmappedCandidate,
+} from "@gakushu-sochi/domain";
 import {
   USER_SETTINGS_VERSION,
   isActivityPeriodDays,
@@ -13,6 +22,7 @@ import {
   type UserSettingsInput,
 } from "../contract/user-settings.js";
 import { ACCOUNT_DELETION_TOMBSTONE_TTL_MS } from "./types.js";
+import type { ImportSessionView } from "../contract/history-import.js";
 import type {
   AiUsage,
   AiUsageRepository,
@@ -20,10 +30,13 @@ import type {
   AuditLogEntry,
   AuditLogRepository,
   IdentityRepository,
+  ImportSessionRepository,
   LearningEventRepository,
+  LearningEvidenceRepository,
   MasteryOverride,
   MasteryOverrideRepository,
   StoredEventInput,
+  StoredImportSessionInput,
   UserSettingsRepository,
 } from "./types.js";
 
@@ -610,4 +623,380 @@ function toAiUsage(row: AiUsageRow | null, dayKey: string): AiUsage {
     dailyRequests: row.day_key === dayKey ? row.daily_requests : 0,
     monthlyTokens: row.monthly_tokens,
   };
+}
+
+// ---------------------------------------------------------------------------
+// 外部履歴からの学習引き継ぎ（Issue #157）
+// ---------------------------------------------------------------------------
+
+/** learning_evidence の1行。SELECT する列と対応させる。 */
+interface EvidenceRow {
+  id: string;
+  import_session_id: string;
+  provider: string;
+  imported_by: string;
+  kind: string;
+  concept_ids: string;
+  observed_at: string | null;
+  confidence: number;
+  external_ref_hash: string | null;
+}
+
+const EVIDENCE_COLUMNS = `id, import_session_id, provider, imported_by, kind, concept_ids,
+  observed_at, confidence, external_ref_hash`;
+
+/**
+ * learning_evidence の行を `LearningEvidence` へ戻す。
+ *
+ * `concept_ids` のパースに失敗したら例外にする。`toLearningEvent` と同じく、
+ * 空配列へ丸めると「なぜこの状態か」の根拠が黙って欠けるため。
+ */
+function toLearningEvidence(row: EvidenceRow): LearningEvidence {
+  let conceptIds: unknown;
+  try {
+    conceptIds = JSON.parse(row.concept_ids);
+  } catch (cause) {
+    throw new Error(`learning_evidence.concept_ids is not valid JSON (id=${row.id})`, {
+      cause,
+    });
+  }
+  if (!Array.isArray(conceptIds) || conceptIds.some((id) => typeof id !== "string")) {
+    throw new Error(`learning_evidence.concept_ids is not string[] (id=${row.id})`);
+  }
+
+  return {
+    id: row.id,
+    conceptIds,
+    source: {
+      provider: row.provider as HistoryProviderId,
+      importedBy: row.imported_by as EvidenceImportedBy,
+    },
+    kind: row.kind as EvidenceKind,
+    ...(row.observed_at === null ? {} : { observedAt: row.observed_at }),
+    confidence: row.confidence,
+    importSessionId: row.import_session_id,
+    ...(row.external_ref_hash === null ? {} : { externalRefHash: row.external_ref_hash }),
+  };
+}
+
+/** import_sessions の1行。 */
+interface ImportSessionRow {
+  id: string;
+  status: string;
+  imported_by: string;
+  providers: string;
+  conversation_count: number;
+  ignored_count: number;
+  unmapped_candidates: string;
+  evidence_count: number;
+  concept_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+/** JSON 配列の列を読む。壊れていれば丸めず例外にする（RULE-004）。 */
+function parseStringArrayJson(raw: string, context: string): string[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (cause) {
+    throw new Error(`${context} is not valid JSON`, { cause });
+  }
+  if (!Array.isArray(parsed) || parsed.some((item) => typeof item !== "string")) {
+    throw new Error(`${context} is not string[]`);
+  }
+  return parsed;
+}
+
+function toImportSessionView(row: ImportSessionRow): ImportSessionView {
+  return {
+    id: row.id,
+    status: row.status,
+    importedBy: row.imported_by as EvidenceImportedBy,
+    providers: parseStringArrayJson(
+      row.providers,
+      `import_sessions.providers (id=${row.id})`,
+    ) as HistoryProviderId[],
+    conversationCount: row.conversation_count,
+    ignoredCount: row.ignored_count,
+    evidenceCount: row.evidence_count,
+    conceptCount: row.concept_count,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function toUnmappedCandidates(row: ImportSessionRow): UnmappedCandidate[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(row.unmapped_candidates);
+  } catch (cause) {
+    throw new Error(`import_sessions.unmapped_candidates is not valid JSON (id=${row.id})`, {
+      cause,
+    });
+  }
+  if (
+    !Array.isArray(parsed) ||
+    parsed.some(
+      (item) =>
+        typeof item !== "object" ||
+        item === null ||
+        typeof (item as { sourceId?: unknown }).sourceId !== "string" ||
+        typeof (item as { candidate?: unknown }).candidate !== "string",
+    )
+  ) {
+    throw new Error(`import_sessions.unmapped_candidates has unexpected shape (id=${row.id})`);
+  }
+  return parsed as UnmappedCandidate[];
+}
+
+export class D1LearningEvidenceRepository implements LearningEvidenceRepository {
+  constructor(private readonly db: D1Database) {}
+
+  async listByUser(userId: string): Promise<LearningEvidence[]> {
+    const { results } = await this.db
+      .prepare(
+        `SELECT ${EVIDENCE_COLUMNS} FROM learning_evidence WHERE user_id = ? ORDER BY id ASC`,
+      )
+      .bind(userId)
+      .all<EvidenceRow>();
+    return results.map(toLearningEvidence);
+  }
+
+  async listBySession(userId: string, sessionId: string): Promise<LearningEvidence[]> {
+    const { results } = await this.db
+      .prepare(
+        `SELECT ${EVIDENCE_COLUMNS} FROM learning_evidence
+         WHERE user_id = ? AND import_session_id = ? ORDER BY id ASC`,
+      )
+      .bind(userId, sessionId)
+      .all<EvidenceRow>();
+    return results.map(toLearningEvidence);
+  }
+
+  async deleteByProvider(
+    userId: string,
+    provider: HistoryProviderId,
+    updatedAt: string,
+  ): Promise<{ deletedCount: number; sessionsMarkedUndone: number }> {
+    // 「どの Session がこの provider の Evidence を持っていたか」を消す前に
+    // 記録する必要はない。消した後に「Evidence が残らなかった applied の
+    // Session」を undone へ倒す方が、消し損ねた Session を残さず確実である。
+    const [deleted, undone] = await this.db.batch([
+      this.db
+        .prepare(`DELETE FROM learning_evidence WHERE user_id = ? AND provider = ?`)
+        .bind(userId, provider),
+      this.db
+        .prepare(
+          `UPDATE import_sessions SET status = 'undone', updated_at = ?
+           WHERE user_id = ? AND status = 'applied'
+             AND NOT EXISTS (
+               SELECT 1 FROM learning_evidence
+               WHERE learning_evidence.user_id = import_sessions.user_id
+                 AND learning_evidence.import_session_id = import_sessions.id
+             )`,
+        )
+        .bind(updatedAt, userId),
+    ]);
+
+    const deletedCount = deleted?.meta?.changes;
+    if (typeof deletedCount !== "number") {
+      throw new Error("D1 delete result has no meta.changes");
+    }
+    const sessionsMarkedUndone = undone?.meta?.changes;
+    if (typeof sessionsMarkedUndone !== "number") {
+      throw new Error("D1 update result has no meta.changes");
+    }
+    return { deletedCount, sessionsMarkedUndone };
+  }
+
+  async deleteAllByUser(userId: string): Promise<number> {
+    const result = await this.db
+      .prepare(`DELETE FROM learning_evidence WHERE user_id = ?`)
+      .bind(userId)
+      .run();
+    const changes = result.meta.changes;
+    if (typeof changes !== "number") {
+      throw new Error("D1 delete result has no meta.changes");
+    }
+    return changes;
+  }
+}
+
+export class D1ImportSessionRepository implements ImportSessionRepository {
+  constructor(private readonly db: D1Database) {}
+
+  async createWithEvidence(
+    userId: string,
+    session: StoredImportSessionInput,
+    evidence: readonly LearningEvidence[],
+  ): Promise<{ alreadyExisted: boolean }> {
+    const nowMs = Date.now();
+
+    // Session と Evidence を同じバッチに入れて原子的に作る。
+    // 先に存在を確認してから分岐すると、同じ ID の再送と並行したときに
+    // どちらかが中途半端な状態を作る。ON CONFLICT で DB 側へ委ねる。
+    const statements = [
+      this.db
+        .prepare(
+          `INSERT INTO import_sessions (
+             id, user_id, status, imported_by, providers, conversation_count,
+             ignored_count, unmapped_candidates, evidence_count, concept_count,
+             created_at, updated_at
+           )
+           SELECT ?, ?, 'applied', ?, ?, ?, ?, ?, ?, ?, ?, ?
+           WHERE NOT EXISTS (
+             SELECT 1 FROM account_deletions
+             WHERE user_id = ? AND started_at_ms > ?
+           )
+           ON CONFLICT (user_id, id) DO NOTHING`,
+        )
+        .bind(
+          session.id,
+          userId,
+          session.importedBy,
+          JSON.stringify(session.providers),
+          session.conversationCount,
+          session.ignoredCount,
+          JSON.stringify(session.unmappedCandidates),
+          session.evidenceCount,
+          session.conceptCount,
+          session.createdAt,
+          session.updatedAt,
+          userId,
+          nowMs - ACCOUNT_DELETION_TOMBSTONE_TTL_MS,
+        ),
+      ...evidence.map((item) =>
+        this.db
+          .prepare(
+            // Undo 済みの Session が同じ ID で再送されたとき、Evidence だけが
+            // 復活して「undone なのに形跡が残る」状態を作らないよう、
+            // applied な Session が存在するときだけ書く。
+            `INSERT INTO learning_evidence (
+               id, user_id, import_session_id, provider, imported_by, kind,
+               concept_ids, observed_at, confidence, external_ref_hash, received_at_ms
+             )
+             SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+             WHERE EXISTS (
+               SELECT 1 FROM import_sessions
+               WHERE user_id = ? AND id = ? AND status = 'applied'
+             )
+             ON CONFLICT (user_id, id) DO NOTHING`,
+          )
+          .bind(
+            item.id,
+            userId,
+            session.id,
+            item.source.provider,
+            item.source.importedBy,
+            item.kind,
+            JSON.stringify(item.conceptIds),
+            item.observedAt ?? null,
+            item.confidence,
+            item.externalRefHash ?? null,
+            nowMs,
+            userId,
+            session.id,
+          ),
+      ),
+    ];
+    const results = await this.db.batch(statements);
+
+    const sessionChanges = results[0]?.meta?.changes;
+    if (typeof sessionChanges !== "number") {
+      throw new Error("D1 insert result has no meta.changes");
+    }
+    // セッションが書けず（changes=0）、退会中なら再送ではなく退会の競合である。
+    if (sessionChanges === 0 && (await hasActiveDeletion(this.db, userId, nowMs))) {
+      throw new Error("user deletion is in progress");
+    }
+    return { alreadyExisted: sessionChanges === 0 };
+  }
+
+  async listByUser(userId: string): Promise<ImportSessionView[]> {
+    const { results } = await this.db
+      .prepare(
+        `SELECT id, status, imported_by, providers, conversation_count, ignored_count,
+                unmapped_candidates, evidence_count, concept_count, created_at, updated_at
+         FROM import_sessions WHERE user_id = ?
+         ORDER BY created_at DESC, id ASC`,
+      )
+      .bind(userId)
+      .all<ImportSessionRow>();
+    return results.map(toImportSessionView);
+  }
+
+  async getById(
+    userId: string,
+    id: string,
+  ): Promise<{ session: ImportSessionView; unmappedCandidates: UnmappedCandidate[] } | null> {
+    const row = await this.db
+      .prepare(
+        `SELECT id, status, imported_by, providers, conversation_count, ignored_count,
+                unmapped_candidates, evidence_count, concept_count, created_at, updated_at
+         FROM import_sessions WHERE user_id = ? AND id = ?`,
+      )
+      .bind(userId, id)
+      .first<ImportSessionRow>();
+    if (row === null) return null;
+    return { session: toImportSessionView(row), unmappedCandidates: toUnmappedCandidates(row) };
+  }
+
+  async undo(
+    userId: string,
+    sessionId: string,
+    updatedAt: string,
+  ): Promise<{ status: string; deletedEvidenceCount: number } | null> {
+    const current = await this.db
+      .prepare(`SELECT status FROM import_sessions WHERE user_id = ? AND id = ?`)
+      .bind(userId, sessionId)
+      .first<{ status: string }>();
+    if (current === null) return null;
+    if (current.status === "undone") {
+      // Undo の再実行は失敗にしない。応答前に切断された利用者の押し直しを
+      // 許容する（learning-data の削除と同じ方針）。
+      return { status: "undone", deletedEvidenceCount: 0 };
+    }
+    if (current.status !== "applied") {
+      // scanning / analyzing / ready_for_review / confirmed / failed は
+      // サーバーでは applied としてしか作らないが、ドメインの状態機械で
+      // undone へ遷移できない状態なら拒否する。黙って消さない。
+      return { status: current.status, deletedEvidenceCount: 0 };
+    }
+
+    // Evidence の削除と undone への更新を1トランザクションにする。
+    // 片方だけ成功すると「消えたのに applied」「applied なのに空」の
+    // どちらかの状態が残る。
+    const [deleted] = await this.db.batch([
+      this.db
+        .prepare(`DELETE FROM learning_evidence WHERE user_id = ? AND import_session_id = ?`)
+        .bind(userId, sessionId),
+      // 競合で状態が動いていたら更新しない。status の条件を WHERE に入れて
+      // 「読んだときは applied だった」のに依存しない。
+      this.db
+        .prepare(
+          `UPDATE import_sessions SET status = 'undone', updated_at = ?
+           WHERE user_id = ? AND id = ? AND status = 'applied'`,
+        )
+        .bind(updatedAt, userId, sessionId),
+    ]);
+
+    const deletedCount = deleted?.meta?.changes;
+    if (typeof deletedCount !== "number") {
+      throw new Error("D1 delete result has no meta.changes");
+    }
+    return { status: "undone", deletedEvidenceCount: deletedCount };
+  }
+
+  async deleteAllByUser(userId: string): Promise<number> {
+    const result = await this.db
+      .prepare(`DELETE FROM import_sessions WHERE user_id = ?`)
+      .bind(userId)
+      .run();
+    const changes = result.meta.changes;
+    if (typeof changes !== "number") {
+      throw new Error("D1 delete result has no meta.changes");
+    }
+    return changes;
+  }
 }

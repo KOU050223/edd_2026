@@ -1,4 +1,4 @@
-import type { Concept } from "./profile.js";
+import type { Concept, Familiarity } from "./profile.js";
 import { MASTERY_SCORE_RANGE } from "@gakushu-sochi/domain";
 import { MASTERY_STATUSES, type MasteryOverrides, type MasteryStatus } from "../shared/mastery.js";
 
@@ -18,6 +18,11 @@ export interface OverlaidConcept extends Omit<Concept, "score"> {
   manual: boolean;
   /** 自動算出のままの値。手動上書きの有無にかかわらず常に元の値。 */
   derived: { status: Concept["status"]; score: number };
+  /**
+   * 外部履歴由来の「触れた形跡」（Issue #157）。Mastery の status を
+   * 底上げしない別の軸として保持し、「なぜこの状態か」の説明に使う。
+   */
+  familiarity?: Familiarity;
 }
 
 /**

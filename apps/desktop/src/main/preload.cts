@@ -19,6 +19,19 @@ contextBridge.exposeInMainWorld("desktop", {
     ipcRenderer.on("selection", (_event, payload) => listener(payload)),
   onDelta: (listener: (delta: string) => void) =>
     ipcRenderer.on("answer:delta", (_event, delta) => listener(delta)),
+  // 履歴インポート（Issue #157）
+  historyDetect: () => ipcRenderer.invoke("history:detect"),
+  historyPickFile: () => ipcRenderer.invoke("history:pick-file"),
+  historyAnalyze: (request: unknown) => ipcRenderer.invoke("history:analyze", request),
+  historyBuildPrompt: () => ipcRenderer.invoke("history:build-prompt"),
+  historyPasteAnalysis: (text: string) => ipcRenderer.invoke("history:paste-analysis", text),
+  historyApply: (payload: unknown) => ipcRenderer.invoke("history:apply", payload),
+  historyList: () => ipcRenderer.invoke("history:list"),
+  historyUndo: (id: string) => ipcRenderer.invoke("history:undo", id),
+  historyDeleteProvider: (provider: string) =>
+    ipcRenderer.invoke("history:delete-provider", provider),
+  onHistoryProgress: (listener: (progress: unknown) => void) =>
+    ipcRenderer.on("history:progress", (_event, progress) => listener(progress)),
   onAuthState: (listener: (payload: { hasRefreshToken: boolean }) => void) =>
     ipcRenderer.on("auth:state", (_event, payload) => listener(payload)),
 });

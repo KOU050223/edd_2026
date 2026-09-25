@@ -2,5 +2,7 @@ export * from "./ai.js";
 export * from "./concepts.generated.js";
 export * from "./consent.js";
 export * from "./context.js";
+export * from "./evidence.js";
+export * from "./history-import.js";
 export * from "./mastery.js";
 export * from "./profile.js";

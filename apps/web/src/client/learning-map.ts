@@ -6,7 +6,7 @@
 
 import type { Concept as ConceptDefinition } from "@gakushu-sochi/domain";
 import type { OverlaidConcept } from "./overrides.js";
-import { summarizeConcepts, type Concept } from "./profile.js";
+import { summarizeConcepts, type Concept, type Familiarity } from "./profile.js";
 
 /**
  * API が返した観測済みの Concept へ、未観測の Concept を補って全件にする。
@@ -35,6 +35,66 @@ export function completeConcepts(
       },
   );
   return [...completed, ...observed.filter((concept) => !known.has(concept.conceptId))];
+}
+
+/**
+ * Familiarity の一覧を Concept ID で引ける表へする（Issue #157）。
+ *
+ * 「なぜこの状態か」の出典表示と、履歴の形跡がある Concept の判別に使う。
+ * `label` は API が付けるが、無いときは呼び出し側で ID を見せる。
+ */
+export function familiarityByConcept(
+  list: readonly Familiarity[] | undefined,
+): ReadonlyMap<string, Familiarity> {
+  return new Map((list ?? []).map((entry) => [entry.conceptId, entry]));
+}
+
+/**
+ * Concept の一覧へ Familiarity を結ぶ。Mastery の値（status/score）は変えず、
+ * `familiarity` フィールドとして載せるだけである（Issue #157）。
+ */
+export function attachFamiliarity<T extends { conceptId: string }>(
+  concepts: readonly T[],
+  list: readonly Familiarity[] | undefined,
+): (T & { familiarity?: Familiarity })[] {
+  const byId = familiarityByConcept(list);
+  return concepts.map((concept) => {
+    const entry = byId.get(concept.conceptId);
+    return entry === undefined ? concept : { ...concept, familiarity: entry };
+  });
+}
+
+const SOURCE_LABELS: Record<string, string> = {
+  codex: "Codex",
+  "claude-code": "Claude Code",
+  vscode: "VS Code",
+  chatgpt: "ChatGPT",
+  claude: "Claude",
+  copilot: "GitHub Copilot",
+  cursor: "Cursor",
+  gemini: "Gemini",
+};
+
+/** 履歴ソースの表示名。未知のソースは ID をそのまま見せる。 */
+export function historySourceLabel(provider: string): string {
+  return SOURCE_LABELS[provider] ?? provider;
+}
+
+/**
+ * 「なぜこの状態か」の説明文。例: 「Codex で7件・最後に触れたのは 2024-01-02」。
+ *
+ * 日付はロケール表示せず ISO の日付部分だけにする。導出値（何日前か）は
+ * 「今」を依存に持ち込むため、ここでは生の日付を出す。
+ */
+export function describeFamiliarity(familiarity: Familiarity): string {
+  const sources = familiarity.sources
+    .map((source) => `${historySourceLabel(source.provider)} ${source.count}件`)
+    .join("・");
+  const last =
+    familiarity.lastObservedAt === undefined
+      ? undefined
+      : `最後に触れたのは ${familiarity.lastObservedAt.slice(0, 10)}`;
+  return [sources, last].filter(Boolean).join("、");
 }
 
 /**

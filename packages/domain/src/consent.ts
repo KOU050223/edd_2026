@@ -18,8 +18,10 @@
  * 版の履歴:
  * - 3: 送信先が Copilot 以外の BYOK / ローカルモデルへ広がった（#121）
  * - 4: Desktop の Managed AI 経路と Web の書き込みを文面へ含めた（#174）
+ * - 5: Desktop の履歴インポートで外部 AI の会話履歴を分析に送る経路を
+ *   文面へ含めた（#157）
  */
-export const CONSENT_NOTICE_VERSION = 4;
+export const CONSENT_NOTICE_VERSION = 5;
 
 /** 同意ダイアログの見出し。 */
 export const CONSENT_NOTICE_TITLE = "Gakushu Sochi は、コードや質問文を外部へ送ることがあります";
@@ -44,6 +46,12 @@ export const CONSENT_NOTICE_DETAIL = [
   "デスクトップアプリでは Managed AI を使います。選択テキストと質問文は本プロダクトの",
   "サーバーを経由して、運営が契約する AI プロバイダ（Google Gemini）へ送られます。",
   "サーバーは本文を保存せず、利用回数とトークン量だけを記録します。",
+  "",
+  "履歴インポート機能を使う場合、このPCにある他の AI ツールの会話履歴を読み込み、",
+  "個人情報・トークン・ローカルパスを除去したうえで、ローカルルールか、あなたが",
+  "インストールした AI の CLI、または Managed AI が分析します。",
+  "学習記録サーバーへ保存されるのは分析結果（Concept・種別・時刻・確からしさ）だけで、",
+  "会話本文そのものは保存しません。",
   "",
   "Web 版からはコードや質問文を AI へ送りません。",
   "",

@@ -85,3 +85,116 @@ export async function deleteLearningData(fetcher: typeof fetch): Promise<DeleteL
 export function exportFileName(now: Date): string {
   return `gakushu-sochi-learning-data-${now.toISOString().slice(0, 10)}.json`;
 }
+
+// ---------------------------------------------------------------------------
+// 履歴インポート（Issue #157）
+// ---------------------------------------------------------------------------
+
+export const IMPORT_SESSIONS_PATH = "/api/v1/import-sessions";
+export const LEARNING_EVIDENCE_PATH = "/api/v1/learning-evidence";
+export const LEARNING_EVIDENCE_EXPORT_PATH = "/api/v1/learning-evidence:export";
+
+/**
+ * `GET /v1/import-sessions` の応答要素
+ * （apps/api/src/contract/history-import.ts の `ImportSessionView` と対応）。
+ */
+export interface ImportSessionView {
+  id: string;
+  status: string;
+  importedBy: string;
+  providers: string[];
+  conversationCount: number;
+  ignoredCount: number;
+  evidenceCount: number;
+  conceptCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+function isImportSessionView(value: unknown): value is ImportSessionView {
+  if (typeof value !== "object" || value === null) return false;
+  const view = value as Partial<ImportSessionView>;
+  return (
+    typeof view.id === "string" &&
+    typeof view.status === "string" &&
+    Array.isArray(view.providers) &&
+    typeof view.evidenceCount === "number" &&
+    typeof view.createdAt === "string"
+  );
+}
+
+/**
+ * 取り込み済みの Import Session の一覧を返す。
+ *
+ * 2xx でも形が違えば失敗として扱う（RULE-004）。
+ */
+export async function fetchImportSessions(
+  fetcher: typeof fetch,
+  sessionRetries: number,
+): Promise<ImportSessionView[]> {
+  const body = await requestJson<unknown>(IMPORT_SESSIONS_PATH, fetcher, sessionRetries);
+  if (
+    typeof body !== "object" ||
+    body === null ||
+    !Array.isArray((body as { sessions?: unknown }).sessions)
+  ) {
+    throw new ApiError("unavailable");
+  }
+  const sessions = (body as { sessions: unknown[] }).sessions;
+  if (!sessions.every(isImportSessionView)) throw new ApiError("unavailable");
+  return sessions;
+}
+
+export interface UndoImportSessionResult {
+  id: string;
+  status: "undone";
+  deletedEvidenceCount: number;
+}
+
+/**
+ * Import を取り消す（Undo）。冪等なので失敗時は再実行してよい。
+ */
+export async function undoImportSession(
+  fetcher: typeof fetch,
+  id: string,
+): Promise<UndoImportSessionResult> {
+  const body = await deleteJson<unknown>(
+    `${IMPORT_SESSIONS_PATH}/${encodeURIComponent(id)}`,
+    fetcher,
+  );
+  if (
+    typeof body !== "object" ||
+    body === null ||
+    (body as { status?: unknown }).status !== "undone" ||
+    typeof (body as { deletedEvidenceCount?: unknown }).deletedEvidenceCount !== "number"
+  ) {
+    throw new ApiError("unavailable");
+  }
+  return body as UndoImportSessionResult;
+}
+
+export interface DeleteEvidenceByProviderResult {
+  deletedCount: number;
+  sessionsMarkedUndone: number;
+}
+
+/**
+ * 特定ソース由来の Evidence をすべて消す（ソース管理）。
+ */
+export async function deleteEvidenceByProvider(
+  fetcher: typeof fetch,
+  provider: string,
+): Promise<DeleteEvidenceByProviderResult> {
+  const body = await deleteJson<unknown>(
+    `${LEARNING_EVIDENCE_PATH}?provider=${encodeURIComponent(provider)}`,
+    fetcher,
+  );
+  if (
+    typeof body !== "object" ||
+    body === null ||
+    typeof (body as { deletedCount?: unknown }).deletedCount !== "number"
+  ) {
+    throw new ApiError("unavailable");
+  }
+  return body as DeleteEvidenceByProviderResult;
+}

@@ -7,7 +7,9 @@ import {
   D1AiUsageRepository,
   D1AuditLogRepository,
   D1IdentityRepository,
+  D1ImportSessionRepository,
   D1LearningEventRepository,
+  D1LearningEvidenceRepository,
   D1MasteryOverrideRepository,
   D1UserSettingsRepository,
 } from "./repository/d1.js";
@@ -15,6 +17,7 @@ import { createLearningEventsRoute } from "./routes/learning-events.js";
 import { createLearningProfileRoute } from "./routes/learning-profile.js";
 import { createLearningDataRoute } from "./routes/learning-data.js";
 import { createLearningActivityRoute } from "./routes/learning-activity.js";
+import { createImportSessionsRoute } from "./routes/import-sessions.js";
 import { createAiRoute } from "./routes/ai.js";
 import { createAccountRoute } from "./routes/account.js";
 import { createManagementUsers } from "./auth/management.js";
@@ -119,6 +122,23 @@ app.use(
   "/v1/ai/usage",
   rateLimit((env) => env.PROFILE_RATE_LIMITER),
 );
+// Managed AI の履歴分析（#157）。外部プロバイダのコストに直結するため
+// /v1/ai/responses と同じ枠で制限する。
+app.use(
+  "/v1/ai/history-analysis",
+  rateLimit((env) => env.PROFILE_RATE_LIMITER),
+);
+// 外部履歴の取り込み（#157）。Import の作成・一覧・Undo と
+// Evidence の一覧・削除・エクスポートは、いずれも利用者の明示的な操作で
+// 呼ばれ、頻度の想定は Profile と同じか低い。
+app.use(
+  "/v1/import-sessions*",
+  rateLimit((env) => env.PROFILE_RATE_LIMITER),
+);
+app.use(
+  "/v1/learning-evidence*",
+  rateLimit((env) => env.PROFILE_RATE_LIMITER),
+);
 // 退会は Auth0 の Management API を呼ぶ。Auth0 側にもレート制限があるため、
 // 認証済みであっても叩き放題にしない。頻度の想定は Profile より遥かに低い。
 app.use(
@@ -160,6 +180,7 @@ app.route(
   "/v1",
   createLearningProfileRoute((env) => ({
     events: new D1LearningEventRepository(env.DB),
+    evidence: new D1LearningEvidenceRepository(env.DB),
     nowIso: () => new Date().toISOString(),
   })),
 );
@@ -169,6 +190,21 @@ app.route(
   createLearningDataRoute((env) => ({
     identity: new D1IdentityRepository(env.DB),
     events: new D1LearningEventRepository(env.DB),
+    evidence: new D1LearningEvidenceRepository(env.DB),
+    sessions: new D1ImportSessionRepository(env.DB),
+    audit: new D1AuditLogRepository(env.DB),
+    nowIso: () => new Date().toISOString(),
+    nowMs: () => Date.now(),
+  })),
+);
+
+// 外部履歴からの学習引き継ぎ（Issue #157）。
+app.route(
+  "/v1",
+  createImportSessionsRoute((env) => ({
+    identity: new D1IdentityRepository(env.DB),
+    sessions: new D1ImportSessionRepository(env.DB),
+    evidence: new D1LearningEvidenceRepository(env.DB),
     audit: new D1AuditLogRepository(env.DB),
     nowIso: () => new Date().toISOString(),
     nowMs: () => Date.now(),

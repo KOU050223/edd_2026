@@ -326,6 +326,54 @@ ID によるタイブレークが無いと、同じイベント集合でも入�
 
 ---
 
+## 外部履歴のインポート（Learning Evidence）
+
+このアプリ外で行った学習（Codex や Claude Code など他の AI ツールとの会話履歴）を
+取り込み、Personal Learning Map の初期状態の材料にする（Issue #157）。
+
+`LearningEvent` は「このアプリを使った学習の記録」であり、`LearningEvidence` は
+「このアプリの外でその話題に触れた形跡」である。両者は混ぜない。
+
+|                | LearningEvent             | LearningEvidence                 |
+| -------------- | ------------------------- | -------------------------------- |
+| 記録するもの   | このアプリでの学習行動    | 外部ツールでその話題に触れた形跡 |
+| 本文の保存     | しない（イベントのみ）    | しない（構造化した観測のみ）     |
+| 影響する軸     | Mastery（status / score） | Familiarity（触れた形跡）        |
+| 導出されるもの | 習熟度                    | 観測数・最後に触れた時刻・出典   |
+
+重要な区別: **Familiarity は Mastery を底上げしない。** 過去に触れたことと
+今わかることは別であり、「触れた形跡あり」は「確認済み」ではない。
+Map 上の表示状態は `deriveLearningMapStatus` が Mastery と Familiarity を合成する
+（`unobserved` / `familiar` / `learning` / `confirmed`）。
+
+### 取り込みの流れ
+
+```text
+RawConversation（端末内にだけ存在）
+  → 前処理（個人情報・ローカルパスの除去、重複排除、長さの上限）
+  → 分析（ローカルルール → 利用者の AI CLI → Managed AI の順）
+  → LearningEvidence（sourceId・Concept 候補・confidence・時刻）
+  → 利用者がプレビューで確認・除外
+  → POST /v1/import-sessions で Import Session として保存
+```
+
+- Import Session は適用の単位であり、Undo（`DELETE /v1/import-sessions/:id`）で
+  その Import が持ち込んだ Evidence をすべて取り除ける。
+- Evidence ID は `${importSessionId}:${provider}:${sourceId}` で決定的に決まる。
+  同じ観測を二度取り込んでも重複しない（冪等）。
+- 会話本文は端末を出てもサーバーへ保存されない。Managed AI へ送る場合も
+  `POST /v1/ai/history-analysis` が本文を保存せず、構造化した観測だけを返す。
+- Concept 候補が既知の Concept 一覧に無いものは、似た Concept へ推測で寄せず
+  `unmapped` として残す。推測で張り替えると「なぜ」の説明が嘘になるため。
+
+### 「なぜ」の説明
+
+Familiarity は観測数・最大 confidence・最後に触れた時刻・ソース別の内訳を持ち、
+Map の詳細画面が「Codex で7件・最後に触れたのは 2026-09-20」のような
+出典つきの説明を出せるようにする。ここを推測や平均値で埋めない。
+
+---
+
 ## 保存
 
 `ExtensionContext.globalState` に単一キーで保存する。
@@ -425,6 +473,8 @@ version が無い/不正     → 破損とみなし、新規作成する
 
 - 型定義: `packages/domain/src/profile.ts`
 - 習熟度の導出実装: `packages/domain/src/mastery.ts`
+- 履歴インポートの契約: `packages/domain/src/history-import.ts`
+- Evidence の正規化と Familiarity の導出: `packages/domain/src/evidence.ts`
 - Concept 一覧の正典: `packages/domain/concepts.md`
 - Concept 一覧の生成物（編集しない）: `packages/domain/src/concepts.generated.ts`
 - 生成スクリプト: `packages/domain/scripts/gen-concepts.mjs`

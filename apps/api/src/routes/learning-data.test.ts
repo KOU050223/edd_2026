@@ -12,7 +12,9 @@ import {
   createInMemoryRepositoryStore,
   InMemoryAuditLogRepository,
   InMemoryIdentityRepository,
+  InMemoryImportSessionRepository,
   InMemoryLearningEventRepository,
+  InMemoryLearningEvidenceRepository,
   type InMemoryRepositoryStore,
 } from "../repository/memory.js";
 import type { LearningProfileResponse } from "../contract/learning-profile.js";
@@ -24,6 +26,8 @@ import { createLearningProfileRoute } from "./learning-profile.js";
 let store: InMemoryRepositoryStore;
 let identity: InMemoryIdentityRepository;
 let events: InMemoryLearningEventRepository;
+let evidence: InMemoryLearningEvidenceRepository;
+let sessions: InMemoryImportSessionRepository;
 /** 現在時刻（epoch ミリ秒）。テストの中で進めて、削除の前後を作る。 */
 let clockMs: number;
 let app: Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>;
@@ -41,6 +45,8 @@ beforeEach(() => {
   store = createInMemoryRepositoryStore();
   identity = new InMemoryIdentityRepository(store);
   events = new InMemoryLearningEventRepository(store);
+  evidence = new InMemoryLearningEvidenceRepository(store);
+  sessions = new InMemoryImportSessionRepository(store);
   clockMs = 1_000;
   app = new Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>();
   app.use("/v1/*", stubAuth(TOKENS));
@@ -51,6 +57,8 @@ beforeEach(() => {
     createLearningDataRoute(() => ({
       identity,
       events,
+      evidence,
+      sessions,
       audit: new InMemoryAuditLogRepository(store),
       nowIso: () => NOW,
       nowMs: () => clockMs,
@@ -63,7 +71,7 @@ beforeEach(() => {
   );
   app.route(
     "/v1",
-    createLearningProfileRoute(() => ({ events, nowIso: () => NOW })),
+    createLearningProfileRoute(() => ({ events, evidence, nowIso: () => NOW })),
   );
 });
 
@@ -156,6 +164,8 @@ test("削除は自分のイベントを全件消し、件数と削除時刻を�
   // 自分が呼んだ削除を同期応答で再度処理しないためのもの（Issue #124）。
   expect((await res.json()) as DeleteLearningEventsResponse).toEqual({
     deletedCount: 2,
+    deletedEvidenceCount: 0,
+    deletedSessionCount: 0,
     resetAtMs: 1_000,
   });
   expect(await events.countByUser("user-a")).toBe(0);
@@ -171,8 +181,52 @@ test("削除を再実行しても失敗しない", async () => {
   expect(res.status).toBe(200);
   expect((await res.json()) as DeleteLearningEventsResponse).toEqual({
     deletedCount: 0,
+    deletedEvidenceCount: 0,
+    deletedSessionCount: 0,
     resetAtMs: 1_000,
   });
+});
+
+test("削除は外部履歴由来の Evidence と Import Session も一緒に消す", async () => {
+  // 「履歴を消した」のに Familiarity が Map に残ると、利用者には
+  // 消えたように見えない。Issue #157 で加わる学習データも対象にする。
+  await sessions.createWithEvidence(
+    "user-a",
+    {
+      id: "import-1",
+      importedBy: "desktop",
+      providers: ["codex"],
+      conversationCount: 1,
+      ignoredCount: 0,
+      unmappedCandidates: [],
+      evidenceCount: 1,
+      conceptCount: 1,
+      createdAt: NOW,
+      updatedAt: NOW,
+    },
+    [
+      {
+        id: "import-1:codex:s1",
+        conceptIds: ["go.defer"],
+        source: { provider: "codex", importedBy: "desktop" },
+        kind: "question",
+        confidence: 0.9,
+        importSessionId: "import-1",
+      },
+    ],
+  );
+
+  const res = await request("/v1/learning-events", "token-a", "DELETE");
+
+  expect(res.status).toBe(200);
+  expect((await res.json()) as DeleteLearningEventsResponse).toEqual({
+    deletedCount: 0,
+    deletedEvidenceCount: 1,
+    deletedSessionCount: 1,
+    resetAtMs: 1_000,
+  });
+  expect(await evidence.listByUser("user-a")).toEqual([]);
+  expect(await sessions.listByUser("user-a")).toEqual([]);
 });
 
 test("削除を呼んでいない端末は、同期応答の削除時刻で削除を知る", async () => {
@@ -230,7 +284,7 @@ test("削除は監査ログに件数とともに記録される", async () => {
       userId: "user-a",
       action: "learning_events.deleted",
       occurredAtMs: clockMs,
-      detail: { deletedCount: 2 },
+      detail: { deletedCount: 2, deletedEvidenceCount: 0, deletedSessionCount: 0 },
     },
   ]);
 });
@@ -276,6 +330,8 @@ test("削除しても他人のイベントと習熟度は残る", async () => {
 
   expect((await res.json()) as DeleteLearningEventsResponse).toEqual({
     deletedCount: 1,
+    deletedEvidenceCount: 0,
+    deletedSessionCount: 0,
     resetAtMs: 1_000,
   });
   expect(await events.countByUser("user-b")).toBe(2);
@@ -329,6 +385,8 @@ test("まだ一度も同期していない利用者の削除も、並行する�
   const res = await request("/v1/learning-events", "token-a", "DELETE");
   expect((await res.json()) as DeleteLearningEventsResponse).toEqual({
     deletedCount: 0,
+    deletedEvidenceCount: 0,
+    deletedSessionCount: 0,
     resetAtMs: 1_000,
   });
 
@@ -351,6 +409,8 @@ test("削除応答の削除時刻は、巻き戻らなかった記録後の実�
   expect(res.status).toBe(200);
   expect((await res.json()) as DeleteLearningEventsResponse).toEqual({
     deletedCount: 0,
+    deletedEvidenceCount: 0,
+    deletedSessionCount: 0,
     resetAtMs: 2_000,
   });
 });

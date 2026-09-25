@@ -21,12 +21,21 @@ import type { AuthVariables } from "../auth/middleware.js";
 import type {
   AuditLogRepository,
   IdentityRepository,
+  ImportSessionRepository,
   LearningEventRepository,
+  LearningEvidenceRepository,
 } from "../repository/types.js";
 
 export interface LearningDataDeps {
   identity: IdentityRepository;
   events: LearningEventRepository;
+  /**
+   * 外部履歴由来の Evidence（Issue #157）。学習履歴の削除では
+   * LearningEvent と一緒に消す。「履歴を消したのに Map 上の触れた形跡が
+   * 残る」状態を作らないためである。
+   */
+  evidence: LearningEvidenceRepository;
+  sessions: ImportSessionRepository;
   /** 監査ログ（Issue #122）。エクスポートと削除を「誰がいつ何をしたか」として残す。 */
   audit: AuditLogRepository;
   /** 現在時刻を ISO 8601 で返す。テストで固定できるよう注入する。 */
@@ -42,6 +51,10 @@ export type LearningDataDepsResolver = (env: CloudflareBindings) => LearningData
 export interface DeleteLearningEventsResponse {
   /** 消したイベントの件数。既に空なら 0。 */
   deletedCount: number;
+  /** 一緒に消した外部履歴由来の Evidence の件数（Issue #157）。 */
+  deletedEvidenceCount: number;
+  /** 一緒に消した Import Session の件数。 */
+  deletedSessionCount: number;
   /**
    * `learning_history_resets` へ記録した削除時刻（epoch ミリ秒）。
    *
@@ -98,12 +111,16 @@ export function createLearningDataRoute(resolve: LearningDataDepsResolver) {
     // 時刻は ensureUser の後で取り直す。Workers の Date.now() は I/O を挟むまで進まないため、
     // 先に取った値を使うと、その間に受け取った同期を境界の外へ取りこぼす。
     const deletedCount = await deps.events.deleteByUser(userId, deps.nowMs());
+    // 外部履歴由来のデータも一緒に消す。残すと「履歴を消した」のに
+    // Familiarity が Map 上に残り、利用者には消えたように見えない（Issue #157）。
+    const deletedEvidenceCount = await deps.evidence.deleteAllByUser(userId);
+    const deletedSessionCount = await deps.sessions.deleteAllByUser(userId);
 
     await deps.audit.record({
       userId,
       action: "learning_events.deleted",
       occurredAtMs: deps.nowMs(),
-      detail: { deletedCount },
+      detail: { deletedCount, deletedEvidenceCount, deletedSessionCount },
     });
 
     // 応答には記録後の実効値を返す。deleteByUser は既存の削除時刻を
@@ -118,7 +135,12 @@ export function createLearningDataRoute(resolve: LearningDataDepsResolver) {
       throw new Error("履歴の削除時刻が記録されていません");
     }
 
-    const body: DeleteLearningEventsResponse = { deletedCount, resetAtMs };
+    const body: DeleteLearningEventsResponse = {
+      deletedCount,
+      deletedEvidenceCount,
+      deletedSessionCount,
+      resetAtMs,
+    };
     return c.json(body);
   });
 
