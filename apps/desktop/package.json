@@ -31,7 +31,7 @@
   "build": {
     "appId": "com.gakushusochi.desktop",
     "productName": "Gakushu Sochi",
-    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+    "artifactName": "Gakushu-Sochi-${version}-${os}-${arch}.${ext}",
     "files": [
       "out/**",
       "src/renderer/**",
