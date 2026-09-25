@@ -38,9 +38,26 @@
    ```
 
 3. `release-desktop.yml` が検証 → mac（dmg、x64/arm64）と win（nsis）のビルド →
-   GitHub Release `desktop-vX.Y.Z` への添付まで自動で行う。
+   GitHub Release `desktop-vX.Y.Z` への添付 → `KOU050223/homebrew-tap` の
+   `Casks/gakushu-sochi.rb` 更新まで自動で行う。
    electron-builder には publish させず、`gh release create` が 2 ジョブの成果物を
    1 つのリリースへ集約する（matrix 各ジョブが個別にリリースを作ると競合する）。
+
+### Homebrew
+
+```bash
+brew tap KOU050223/tap
+brew install --cask gakushu-sochi
+```
+
+Cask の正本は `KOU050223/homebrew-tap` 側に置く。`brew tap` が `homebrew-<名>` を
+暗に引く規約のため、`edd_2026` 内に Cask を置くとインストール手順が長くなる。
+生成は `scripts/gen-cask.mjs` が担い、リリースごとに version と sha256 を書き換えて
+homebrew-tap へ push する（`GITHUB_TOKEN` は他リポジトリを push できないので
+`HOMEBREW_TAP_TOKEN` という secrets に tap 用の PAT を登録しておく）。
+
+dmg のファイル名は `apps/desktop/package.json` の `artifactName` が決める。
+Cask の URL はこれを参照するため、両方を同時に変えないとダウンロードが壊れる。
 
 - Actions タブから `Release Desktop` を手動実行すると、リリースを作らずに
   ビルドだけ試せる（成果物は workflow artifacts に残る）。

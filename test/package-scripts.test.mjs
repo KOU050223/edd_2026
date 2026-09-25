@@ -152,6 +152,18 @@ test("desktop-v* タグで Desktop の GitHub Release を作る", () => {
   assert.deepEqual(desktopPackageJson.build.publish, [
     { provider: "github", owner: "KOU050223", repo: "edd_2026" },
   ]);
+  // Cask の正本は homebrew-tap に置く。GITHUB_TOKEN は他リポジトリを push できないので
+  // 専用 PAT を使う。トークンをURLに埋めるとログに漏れるため checkout の token に渡す。
+  assert.match(desktopRelease, /repository: KOU050223\/homebrew-tap/);
+  assert.match(desktopRelease, /token: \$\{\{ secrets\.HOMEBREW_TAP_TOKEN \}\}/);
+  assert.match(desktopRelease, /HOMEBREW_TAP_TOKEN: \$\{\{ secrets\.HOMEBREW_TAP_TOKEN \}\}/);
+  assert.match(desktopRelease, /scripts\/gen-cask\.mjs/);
+  // Cask の URL は dmg のファイル名を参照する。artifactName を変えるとリンクが壊れるので
+  // 生成物名をここで固定する（scripts/gen-cask.mjs のテンプレートと対になる）。
+  assert.equal(
+    desktopPackageJson.build.artifactName,
+    "Gakushu-Sochi-${version}-${os}-${arch}.${ext}",
+  );
 });
 
 test("PR レビュー由来のプロジェクトルールを hook と CI で検証する", () => {
