@@ -278,10 +278,6 @@ a.area-card.complete {
   border-radius: 12px;
   padding: 16px 12px;
 }
-.tree h2 {
-  font-size: 15px;
-  margin: 0 6px 12px;
-}
 /* 木が横に長いときは地図の中だけをスクロールさせ、ページ全体は横に揺らさない。 */
 .tree-scroll {
   overflow-x: auto;
@@ -489,11 +485,6 @@ button.link:disabled {
   color: #0f766e;
   font-size: 11px;
   font-style: normal;
-}
-footer {
-  margin-top: 24px;
-  color: #64748b;
-  font-size: 13px;
 }
 .message {
   max-width: 700px;

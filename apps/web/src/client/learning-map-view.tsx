@@ -319,8 +319,10 @@ export function SkillTree({
     );
   }, [currentDepth]);
   return (
-    <section className="tree">
-      <h2>{languageLabel[tree.language] ?? tree.language}</h2>
+    <section
+      className="tree"
+      aria-label={`${languageLabel[tree.language] ?? tree.language} の Skill Tree`}
+    >
       <div className="tree-scroll" ref={scroller}>
         <div className="tree-canvas" style={{ width, height }}>
           <svg width={width} height={height} aria-hidden="true">
