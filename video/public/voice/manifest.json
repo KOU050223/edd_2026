@@ -1,0 +1,104 @@
+[
+  {
+    "frame": 10,
+    "file": "d3b6af1025951183.wav",
+    "seconds": 3.36,
+    "text": "「わからない」は、手が止まった瞬間に来る。"
+  },
+  {
+    "frame": 120,
+    "file": "5e3e1995eaaf9258.wav",
+    "seconds": 3.12,
+    "text": "調べに行くたび、集中が切れる。"
+  },
+  {
+    "frame": 255,
+    "file": "d4a312eda52202ce.wav",
+    "seconds": 4.08,
+    "text": "コードを選んで、コマンド、シフト、J。"
+  },
+  {
+    "frame": 390,
+    "file": "7f2962db6ad4bc8d.wav",
+    "seconds": 3.64,
+    "text": "選んだコードとエラーが、そのまま質問になります。"
+  },
+  {
+    "frame": 510,
+    "file": "957b75fffcb2f89f.wav",
+    "seconds": 4.16,
+    "text": "返ってくるのは答えではなく、ヒントと次の一手。"
+  },
+  {
+    "frame": 645,
+    "file": "a26a1706cb3bed21.wav",
+    "seconds": 3.24,
+    "text": "やりとりは、自動で記録に残ります。"
+  },
+  {
+    "frame": 795,
+    "file": "e61bdcd55212eaa7.wav",
+    "seconds": 3.76,
+    "text": "エディタの外でも、コマンド、シフト、K。"
+  },
+  {
+    "frame": 930,
+    "file": "b2eff2550a429d1b.wav",
+    "seconds": 3.96,
+    "text": "常駐アプリが、選んだ文字をそのまま拾います。"
+  },
+  {
+    "frame": 1065,
+    "file": "b61b33e7c5eadc3c.wav",
+    "seconds": 3.08,
+    "text": "左には、いま学んでいる概念。"
+  },
+  {
+    "frame": 1210,
+    "file": "09ff2d98aa6f8bc1.wav",
+    "seconds": 3.32,
+    "text": "どこから聞いても、記録はひとつにまとまる。"
+  },
+  {
+    "frame": 1340,
+    "file": "2686e27c89e26d40.wav",
+    "seconds": 3.44,
+    "text": "質問するたびに、履歴がたまっていく。"
+  },
+  {
+    "frame": 1455,
+    "file": "98bdf667ee162426.wav",
+    "seconds": 3.64,
+    "text": "自力で解けた回数が、日ごとに増えていく。"
+  },
+  {
+    "frame": 1575,
+    "file": "0bb44a4ecd56757f.wav",
+    "seconds": 3,
+    "text": "記録のために、書くことは何もない。"
+  },
+  {
+    "frame": 1692,
+    "file": "cb5839923608b320.wav",
+    "seconds": 4.6,
+    "text": "聞いた内容から、理解した概念が地図に記されていく。"
+  },
+  {
+    "frame": 1837,
+    "file": "e7f1f7bd660cdf5a.wav",
+    "seconds": 5.32,
+    "text": "緑は確認済み、オレンジは学習中。青が現在地。"
+  },
+  {
+    "frame": 2010,
+    "file": "f3045a9f5a69e5d0.wav",
+    "seconds": 3.04,
+    "text": "破線の先が、次に学ぶ候補。"
+  },
+  {
+    "frame": 2135,
+    "file": "a283ebf3364884bf.wav",
+    "seconds": 4.2,
+    "text": "聞くほど、学びが地図になる。がくしゅうそうち。"
+  }
+]

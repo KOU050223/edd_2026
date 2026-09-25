@@ -2,10 +2,21 @@
 // 外部の音源素材は使わない（ライセンスの確認が要らず、毎回同じ波形が出る）。
 // 拍と効果音の位置は src/timeline.ts から読むので、映像と音はここでずれない。
 
-import { writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { BAR, BEAT, DURATION, FPS, SFX, barOf, type Sfx } from "../src/timeline.ts";
+import {
+  BAR,
+  BEAT,
+  DURATION,
+  FPS,
+  NARRATION,
+  SFX,
+  barOf,
+  narrationFrame,
+  type Sfx,
+} from "../src/timeline.ts";
+import type { VoiceClip } from "./make-voice.ts";
 
 const SR = 44_100;
 const LENGTH = Math.round((DURATION / FPS) * SR);
@@ -310,6 +321,72 @@ for (let b = 0; b < CHORDS.length; b++) {
 }
 
 for (const e of SFX) add(sec(e.frame), sfx(e), 0.6 * (e.gain ?? 1));
+
+// ---------------- ナレーション ----------------
+
+// scripts/make-voice.ts が書いた一覧を読む。無ければ黙って無音で進めず、失敗にする
+const VOICE_DIR = join(dirname(fileURLToPath(import.meta.url)), "../public/voice");
+const manifestPath = join(VOICE_DIR, "manifest.json");
+if (!existsSync(manifestPath)) {
+  throw new Error(
+    "public/voice/manifest.json が無い。先に `npm run voice` でナレーションを作ること",
+  );
+}
+const clips = JSON.parse(readFileSync(manifestPath, "utf8")) as VoiceClip[];
+
+// 原稿を変えたのに音声を作り直していなければ、古い読み上げが混ざる
+const expected = NARRATION.map((n) => `${narrationFrame(n)}:${n.text}`).join("\n");
+const actual = clips.map((c) => `${c.frame}:${c.text}`).join("\n");
+if (expected !== actual) {
+  throw new Error(
+    "ナレーションの一覧が原稿（timeline.ts の NARRATION）と一致しない。`npm run voice` を実行し直すこと",
+  );
+}
+
+// 読み上げが次の行や動画の終わりへはみ出していないか。重なると 2 行が同時に聞こえる
+const overflows = clips.flatMap((c, i) => {
+  const limit = i + 1 < clips.length ? clips[i + 1].frame : DURATION;
+  const end = c.frame + c.seconds * FPS;
+  return end > limit ? [`「${c.text}」が ${((end - limit) / FPS).toFixed(2)} 秒はみ出す`] : [];
+});
+if (overflows.length > 0) {
+  throw new Error(
+    `ナレーションが収まらない:\n${overflows.join("\n")}\n開始位置か場面の尺を見直すこと`,
+  );
+}
+
+/** 16bit モノラル WAV を読み、SR へ線形補間で変換する */
+function loadVoice(file: string): Float32Array {
+  const b = readFileSync(join(VOICE_DIR, file));
+  const rate = b.readUInt32LE(24);
+  const n = b.readUInt32LE(40) / 2;
+  const out = new Float32Array(Math.floor((n * SR) / rate));
+  for (let i = 0; i < out.length; i++) {
+    const x = (i * rate) / SR;
+    const j = Math.floor(x);
+    const a = b.readInt16LE(44 + j * 2) / 32768;
+    const c = j + 1 < n ? b.readInt16LE(44 + (j + 1) * 2) / 32768 : a;
+    out[i] = a + (c - a) * (x - j);
+  }
+  return out;
+}
+
+// 読み上げの間は BGM と効果音を下げる（-12dB 程度。声が下地より約 10dB 上に来る）。立ち上がりと戻りは滑らかにする
+const DUCK = 0.25;
+const duck = new Float32Array(LENGTH).fill(1);
+for (const c of clips) {
+  const from = idx(sec(c.frame) - 0.15);
+  const to = idx(sec(c.frame) + c.seconds + 0.25);
+  for (let i = Math.max(0, from); i < Math.min(LENGTH, to); i++) duck[i] = DUCK;
+}
+let smooth = 1;
+const coef = 1 - Math.exp(-1 / (0.08 * SR));
+for (let i = 0; i < LENGTH; i++) {
+  smooth += (duck[i] - smooth) * coef;
+  L[i] *= smooth;
+  R[i] *= smooth;
+}
+for (const c of clips) add(sec(c.frame), loadVoice(c.file), 2.0);
 
 // ---------------- 仕上げ ----------------
 

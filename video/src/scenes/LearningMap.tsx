@@ -1,6 +1,6 @@
 import { AbsoluteFill, interpolate, useCurrentFrame } from "remotion";
 import { web } from "../theme";
-import { BEAT, MAP, NOTES } from "../timeline";
+import { MAP, NOTES } from "../timeline";
 import { Caption, Notes, easeInOut, focusOpacity, glow, progress, usePop } from "../ui";
 import { S, WebFrame } from "../web-frame";
 
@@ -55,11 +55,11 @@ const nodeY = (r: number) => 24 + r * ROW;
 const byId = new Map(NODES.map((n) => [n.id, n]));
 
 // 補足②（色の意味）を読んでいる間、確認済み → 学習中 → 現在地の順に該当ノードを光らせる
-const LEGEND_FROM = NOTES.map[1].start;
+const LEGEND_FROM = MAP.legend;
 const LEGEND = [
-  { key: "confirmed", from: LEGEND_FROM, color: web.confirmed },
-  { key: "learning", from: LEGEND_FROM + BEAT * 2.5, color: web.learning },
-  { key: "current", from: LEGEND_FROM + BEAT * 5, color: web.current },
+  { key: "confirmed", from: LEGEND_FROM + MAP.legendSteps[0], color: web.confirmed },
+  { key: "learning", from: LEGEND_FROM + MAP.legendSteps[1], color: web.learning },
+  { key: "current", from: LEGEND_FROM + MAP.legendSteps[2], color: web.current },
 ] as const;
 const LEGEND_TO = MAP.next;
 const NEXT_FOCUS = [{ ...MAP.focusNext, target: "next" }];

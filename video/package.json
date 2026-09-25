@@ -5,6 +5,7 @@
   "license": "UNLICENSED",
   "type": "module",
   "scripts": {
+    "voice": "node scripts/make-voice.ts",
     "audio": "node scripts/make-audio.ts",
     "studio": "npm run audio && remotion studio src/index.ts",
     "render": "npm run audio && remotion render src/index.ts Launch out/launch.mp4",
