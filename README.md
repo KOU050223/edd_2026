@@ -45,11 +45,11 @@ Windows は SmartScreen の警告が出る。
 
 ### VS Code Extension
 
-Marketplace には公開していない。VSIX を手元で生成して入れる。
+[Marketplace](https://marketplace.visualstudio.com/items?itemName=gakushu-sochi.gakushu-sochi)
+から入れるか、次のコマンドを実行する。
 
 ```bash
-npm run package --workspace=gakushu-sochi
-code --install-extension apps/vscode-extension/gakushu-sochi-*.vsix
+code --install-extension gakushu-sochi.gakushu-sochi
 ```
 
 ### Web

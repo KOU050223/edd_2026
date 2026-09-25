@@ -10,7 +10,7 @@
 | `apps/api`              | Cloudflare Workers へ自動 | `main` への push（CI の verify 成功後） |
 | `apps/web`              | Cloudflare Workers へ自動 | 同上。PR では preview Workers を発行    |
 | `apps/desktop`          | GitHub Release を自動作成 | `desktop-vX.Y.Z` タグの push            |
-| `apps/vscode-extension` | VSIX を手動で生成・配布   | なし（手順だけ定める）                  |
+| `apps/vscode-extension` | Marketplace へ手動公開    | なし（`vsce publish` を手動実行）       |
 
 ## バージョンとタグの規則
 
@@ -67,17 +67,17 @@ Cask の URL はこれを参照するため、両方を同時に変えないと�
 
 ## VS Code Extension（手動）
 
-Marketplace 公開に必要な Azure DevOps の PAT 管理が重いため、自動化しない。
-VSIX の生成と配布は手動のままにする。
+[Marketplace](https://marketplace.visualstudio.com/items?itemName=gakushu-sochi.gakushu-sochi)
+に公開済み。公開に必要な Azure DevOps の PAT 管理が重いため、更新の公開も自動化しない。
+version を上げてから手動で `vsce publish` を叩く。
 
 ```bash
 # version を上げて main へマージしたあと
 npm version patch --workspace=gakushu-sochi --no-git-tag-version
-npm run package --workspace=gakushu-sochi   # apps/vscode-extension/ に *.vsix ができる
-code --install-extension apps/vscode-extension/gakushu-sochi-*.vsix
+cd apps/vscode-extension
+npm run package          # gakushu-sochi-X.Y.Z.vsix ができる
+npx @vscode/vsce publish # PAT でログイン済みならそのまま公開される
 ```
-
-Marketplace へ出す場合だけ `npx @vscode/vsce publish` を手動で叩く。
 
 ## 今後の課題
 
