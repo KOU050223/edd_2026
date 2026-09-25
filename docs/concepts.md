@@ -101,10 +101,11 @@ languageId がそのまま prefix になる。
 ### 言語以外の領域
 
 `git` / `design` / `db` / `http` のような言語を横断する領域も同じ `<prefix>.<concept>`
-形式で定義する。これらはファイルの languageId に対応付かないため、VS Code 拡張の
-プロンプトでは言語の Concept と別扱いで、languageId の有無に関わらず常に
-「既知の概念一覧」へ載せる。載せる領域の一覧は
-`apps/vscode-extension/src/ai/prompt/index.ts` の `CROSS_DOMAIN_PREFIXES` が持つ。
+形式で定義する。これらはファイルの languageId に対応付かないため、言語の Concept と
+別扱いで、languageId の有無に関わらず常に「既知の概念一覧」へ載せる。
+載せる領域の一覧は `packages/domain/src/known-concepts.ts` の
+`CROSS_DOMAIN_PREFIXES` が持つ。プロンプト方式の抽出と Jev による分類の両方が
+同じ絞り込みを使う。
 
 ---
 
@@ -132,9 +133,9 @@ languageId がそのまま prefix になる。
 プレフィックスを足すとき**は表示と抽出側にも登録が要る。
 
 - Web のツリー見出し: `apps/web/src/client/routes/_framed/index.tsx` の `languageLabel`
-- 言語ではない領域を追加するとき: `apps/vscode-extension/src/ai/prompt/index.ts` の
-  `CROSS_DOMAIN_PREFIXES`。登録しないとその領域の Concept がプロンプトの
-  一覧に乗らず、拡張から観測されない。
+- 言語ではない領域を追加するとき: `packages/domain/src/known-concepts.ts` の
+  `CROSS_DOMAIN_PREFIXES`。登録しないとその領域の Concept が既知の概念一覧に
+  乗らず、拡張・API のどちらからも観測されない。
 
 `ConceptId` を literal union にしないのはこの手順のためである。union にすると
 Concept を1つ足すたびに型ファイルが変更され、並行して動いている他の実装 PR と衝突する。

@@ -1,4 +1,8 @@
-import { CONCEPTS, type AIRequest, type Concept } from "@gakushu-sochi/domain";
+import {
+  knownConceptsFor as knownConceptsOf,
+  type AIRequest,
+  type Concept,
+} from "@gakushu-sochi/domain";
 
 /** 応答本文の末尾に付けさせる、表示しないメタ情報の開始マーカー。 */
 export const META_MARKER = "<<code-companion-meta>>";
@@ -8,34 +12,16 @@ const SYSTEM_PROMPT = `あなたは Gakushu Sochi の学習支援コンパニオ
 完成したコードを提示することを基本方針にしません。質問の情報だけで確定できないことは推測で埋めず、前提と確認方法を示してください。
 入力はコードとは限らないため、技術用語、エラー文、コメント、Markdownの文章にも、その入力に合う形で回答してください。`;
 
-/** VS Code の languageId を、Concept の言語プレフィックスへ対応付ける。 */
-function conceptLanguageFor(languageId: string): string {
-  // TypeScript と JavaScript の共通概念は、習熟度が分散しないよう ts.* に統一する。
-  return languageId === "typescript" || languageId === "javascript" ? "ts" : languageId;
-}
-
-/**
- * ファイルの言語に依らず質問されうる領域の Concept プレフィックス。
- * languageId と一致する Concept に加えて常に一覧へ載せる。
- * 言語ではない領域を concepts.md へ追加したらここへも登録する（docs/concepts.md）。
- */
-const CROSS_DOMAIN_PREFIXES: ReadonlySet<string> = new Set(["db", "design", "git", "http"]);
-
 /**
  * このリクエストの「既知の概念一覧」に載る Concept。
  *
  * 一覧へ載せた ID だけが抽出の受理範囲になる。応答のパース側もこの結果で
  * フィルタするため、プロンプトと受理範囲がずれることはない。
+ * 絞り込みの規則そのものは domain の `knownConceptsFor` が正本であり、
+ * Jev による分類（apps/api の /v1/ai/concept-scores）も同じ集合を見る。
  */
 export function knownConceptsFor(request: AIRequest): readonly Concept[] {
-  // 言語の Concept は languageId と一致するものだけに絞る。git や db のような
-  // 領域の Concept は languageId に対応付かないため、有無に関わらず常に載せる。
-  const languageId = request.context.languageId;
-  return CONCEPTS.filter(
-    (concept) =>
-      CROSS_DOMAIN_PREFIXES.has(concept.language) ||
-      (languageId !== undefined && concept.language === conceptLanguageFor(languageId)),
-  );
+  return knownConceptsOf(request.context.languageId);
 }
 
 function presetInstruction(request: AIRequest): string[] {

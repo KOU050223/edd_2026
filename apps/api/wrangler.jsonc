@@ -70,4 +70,6 @@
       "migrations_dir": "migrations",
     },
   ],
+  // Workers AI。Concept 分類の PoC（#130）が typesafe/jev を `env.AI.run` で呼ぶ。
+  "ai": { "binding": "AI" },
 }
