@@ -6,6 +6,7 @@ Generated from the supplied design board.
 - `app.icns` — macOS app icon
 - `vscode-marketplace-128.png` — VS Code Marketplace icon
 - `favicon.ico` — multi-size favicon
+- `icon.ico` — Windows app icon (same payload as `favicon.ico`; renamed for electron-builder convention)
 - `favicon-32.png` / `favicon-16.png` — web favicon PNGs
 - `icon-*.png` — common raster sizes
 
