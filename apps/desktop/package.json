@@ -1,7 +1,7 @@
 {
   "name": "@gakushu-sochi/desktop",
   "private": true,
-  "version": "0.0.1",
+  "version": "0.1.0",
   "type": "module",
   "description": "選択したテキストをすぐに質問できる常駐型 AI コンパニオン",
   "author": "Gakushu Sochi contributors",
