@@ -14,6 +14,7 @@ import { Route as LoginFailedRouteImport } from './routes/login-failed'
 import { Route as FramedIndexRouteImport } from './routes/_framed/index'
 import { Route as FramedActivityRouteImport } from './routes/_framed/activity'
 import { Route as FramedSettingsRouteRouteImport } from './routes/_framed/settings/route'
+import { Route as FramedMapLanguageRouteImport } from './routes/_framed/map.$language'
 import { Route as FramedSettingsIndexRouteImport } from './routes/_framed/settings/index'
 import { Route as FramedSettingsBillingRouteImport } from './routes/_framed/settings/billing'
 import { Route as FramedSettingsDataRouteImport } from './routes/_framed/settings/data'
@@ -43,6 +44,11 @@ const FramedSettingsRouteRoute = FramedSettingsRouteRouteImport.update({
   path: '/settings',
   getParentRoute: () => FramedRouteRoute,
 } as any)
+const FramedMapLanguageRoute = FramedMapLanguageRouteImport.update({
+  id: '/map/$language',
+  path: '/map/$language',
+  getParentRoute: () => FramedRouteRoute,
+} as any)
 const FramedSettingsIndexRoute = FramedSettingsIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -69,6 +75,7 @@ export interface FileRoutesByFullPath {
   '/login-failed': typeof LoginFailedRoute
   '/settings': typeof FramedSettingsRouteRouteWithChildren
   '/activity': typeof FramedActivityRoute
+  '/map/$language': typeof FramedMapLanguageRoute
   '/settings/billing': typeof FramedSettingsBillingRoute
   '/settings/data': typeof FramedSettingsDataRoute
   '/settings/usage': typeof FramedSettingsUsageRoute
@@ -78,6 +85,7 @@ export interface FileRoutesByTo {
   '/login-failed': typeof LoginFailedRoute
   '/activity': typeof FramedActivityRoute
   '/': typeof FramedIndexRoute
+  '/map/$language': typeof FramedMapLanguageRoute
   '/settings/billing': typeof FramedSettingsBillingRoute
   '/settings/data': typeof FramedSettingsDataRoute
   '/settings/usage': typeof FramedSettingsUsageRoute
@@ -90,6 +98,7 @@ export interface FileRoutesById {
   '/_framed/settings': typeof FramedSettingsRouteRouteWithChildren
   '/_framed/activity': typeof FramedActivityRoute
   '/_framed/': typeof FramedIndexRoute
+  '/_framed/map/$language': typeof FramedMapLanguageRoute
   '/_framed/settings/billing': typeof FramedSettingsBillingRoute
   '/_framed/settings/data': typeof FramedSettingsDataRoute
   '/_framed/settings/usage': typeof FramedSettingsUsageRoute
@@ -102,6 +111,7 @@ export interface FileRouteTypes {
     | '/login-failed'
     | '/settings'
     | '/activity'
+    | '/map/$language'
     | '/settings/billing'
     | '/settings/data'
     | '/settings/usage'
@@ -111,6 +121,7 @@ export interface FileRouteTypes {
     | '/login-failed'
     | '/activity'
     | '/'
+    | '/map/$language'
     | '/settings/billing'
     | '/settings/data'
     | '/settings/usage'
@@ -122,6 +133,7 @@ export interface FileRouteTypes {
     | '/_framed/settings'
     | '/_framed/activity'
     | '/_framed/'
+    | '/_framed/map/$language'
     | '/_framed/settings/billing'
     | '/_framed/settings/data'
     | '/_framed/settings/usage'
@@ -168,6 +180,13 @@ declare module '@tanstack/react-router' {
       path: '/settings'
       fullPath: '/settings'
       preLoaderRoute: typeof FramedSettingsRouteRouteImport
+      parentRoute: typeof FramedRouteRoute
+    }
+    '/_framed/map/$language': {
+      id: '/_framed/map/$language'
+      path: '/map/$language'
+      fullPath: '/map/$language'
+      preLoaderRoute: typeof FramedMapLanguageRouteImport
       parentRoute: typeof FramedRouteRoute
     }
     '/_framed/settings/': {
@@ -222,12 +241,14 @@ interface FramedRouteRouteChildren {
   FramedSettingsRouteRoute: typeof FramedSettingsRouteRouteWithChildren
   FramedActivityRoute: typeof FramedActivityRoute
   FramedIndexRoute: typeof FramedIndexRoute
+  FramedMapLanguageRoute: typeof FramedMapLanguageRoute
 }
 
 const FramedRouteRouteChildren: FramedRouteRouteChildren = {
   FramedSettingsRouteRoute: FramedSettingsRouteRouteWithChildren,
   FramedActivityRoute: FramedActivityRoute,
   FramedIndexRoute: FramedIndexRoute,
+  FramedMapLanguageRoute: FramedMapLanguageRoute,
 }
 
 const FramedRouteRouteWithChildren = FramedRouteRoute._addFileChildren(

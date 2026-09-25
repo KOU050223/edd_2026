@@ -6,7 +6,7 @@
 
 import type { Concept as ConceptDefinition } from "@gakushu-sochi/domain";
 import type { OverlaidConcept } from "./overrides.js";
-import type { Concept } from "./profile.js";
+import { summarizeConcepts, type Concept } from "./profile.js";
 
 /**
  * API が返した観測済みの Concept へ、未観測の Concept を補って全件にする。
@@ -92,6 +92,35 @@ export function linkConcepts(
     }
   }
   return links;
+}
+
+/**
+ * Concept ID から、地図の中で属する領域（木の `language`）を引く。
+ *
+ * 別領域の Concept への遷移先を決めるための逆引き表。
+ * 地図に無い Concept（定義から外れた観測）は表に入らない。
+ */
+export function conceptAreas(trees: readonly MapTree[]): ReadonlyMap<string, string> {
+  return new Map(
+    trees.flatMap((tree) => tree.nodes.map((node) => [node.conceptId, tree.language] as const)),
+  );
+}
+
+/**
+ * 1 領域ぶんの集計。項目カードとマップ画面の見出しに使う。
+ *
+ * 木に載っている Concept だけを数える。地図に無い Concept はどの領域にも
+ * 属さないので、領域の合計を全件の合計と混ぜない。
+ */
+export function summarizeTree(
+  tree: MapTree,
+  concepts: ReadonlyMap<string, OverlaidConcept>,
+): { confirmed: number; learning: number; unobserved: number; total: number } {
+  const inTree = tree.nodes.flatMap((node) => {
+    const concept = concepts.get(node.conceptId);
+    return concept === undefined ? [] : [concept];
+  });
+  return { ...summarizeConcepts(inTree), total: inTree.length };
 }
 
 export interface MapNode {

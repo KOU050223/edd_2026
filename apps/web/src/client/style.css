@@ -124,6 +124,65 @@ form button {
   margin: 16px 0 0;
   align-items: baseline;
 }
+/* 項目一覧のカード。領域ごとの進捗だけを見せ、地図本体は各マップ画面へ譲る。 */
+.areas {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 12px;
+  min-width: 0;
+}
+a.area-card {
+  display: block;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 16px;
+  color: inherit;
+  text-decoration: none;
+}
+a.area-card:hover,
+a.area-card:focus-visible {
+  border-color: #0f766e;
+}
+.area-card h2 {
+  font-size: 15px;
+  margin: 0 0 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.area-progress {
+  display: flex;
+  height: 8px;
+  border-radius: 999px;
+  background: #f1f5f9;
+  overflow: hidden;
+}
+.area-progress i.confirmed {
+  background: #10b981;
+}
+.area-progress i.learning {
+  background: #f59e0b;
+}
+.area-counts {
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: #64748b;
+}
+/* 領域別マップの見出し。一覧へ戻る導線と領域名を一行に置く。 */
+.map-head {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  margin: 0 0 16px;
+}
+.map-head h1 {
+  font-size: 20px;
+  margin: 0;
+}
+.map-head .badge {
+  font-size: 11px;
+}
 .map-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 280px;
@@ -321,7 +380,8 @@ form button {
   opacity: 0.6;
   cursor: progress;
 }
-button.link {
+button.link,
+a.link {
   background: none;
   border: 0;
   padding: 0;
