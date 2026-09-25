@@ -10,6 +10,7 @@ import {
 import { loadFont as loadRounded } from "@remotion/google-fonts/MPLUSRounded1c";
 import { loadFont as loadSerif } from "@remotion/google-fonts/SourceSerif4";
 import { fontMono, fontUi, web } from "./theme";
+import type { Note } from "./timeline";
 
 export const fontRounded = loadRounded("normal", {
   weights: ["800"],
@@ -94,9 +95,12 @@ export const Caption = ({
   style,
   size = 76,
   accent = web.primary,
+  end = Infinity,
 }: {
   lines: string[];
   start: number;
+  /** この場面の途中で見出しを差し替えるとき、消し始めるフレーム */
+  end?: number;
   dark?: boolean;
   style?: CSSProperties;
   size?: number;
@@ -105,8 +109,20 @@ export const Caption = ({
   const frame = useCurrentFrame();
   let offset = 0;
   const bar = progress(frame, start - 4, 12);
+  // interpolate は有限の値しか受け付けないので、差し替えのない見出しでは計算しない
+  const out = Number.isFinite(end) ? progress(frame, end, 8, easeInOut) : 0;
+  if (out >= 1) return null;
   return (
-    <div style={{ position: "absolute", display: "flex", gap: 28, ...style }}>
+    <div
+      style={{
+        position: "absolute",
+        display: "flex",
+        gap: 28,
+        opacity: 1 - out,
+        transform: `translateY(${-out * 20}px)`,
+        ...style,
+      }}
+    >
       <div
         style={{
           width: 10,
@@ -157,6 +173,80 @@ export const Caption = ({
       </div>
     </div>
   );
+};
+
+/**
+ * 大見出しの下に出す補足。いま画面のどこを見ればよいかを言葉で示す。
+ * 次の補足が来たら入れ替わる。30 秒版では説明が流れて伝わらなかったので足した。
+ */
+export const Notes = ({
+  notes,
+  dark = true,
+  style,
+  size = 36,
+}: {
+  notes: Note[];
+  dark?: boolean;
+  style?: CSSProperties;
+  size?: number;
+}) => {
+  const frame = useCurrentFrame();
+  return (
+    <div style={{ position: "absolute", ...style }}>
+      {notes.map((n, i) => {
+        const next = notes[i + 1]?.start ?? Infinity;
+        const enter = progress(frame, n.start, 12);
+        const exit = Number.isFinite(next) ? progress(frame, next - 6, 6, easeInOut) : 0;
+        if (frame < n.start || frame >= next) return null;
+        return (
+          <div
+            key={n.start}
+            style={{
+              position: "absolute",
+              left: 0,
+              top: 0,
+              whiteSpace: "nowrap",
+              fontFamily: fontUi,
+              fontWeight: 600,
+              fontSize: size,
+              color: dark ? "#cbd5e1" : "#475569",
+              opacity: enter * (1 - exit),
+              transform: `translateY(${(1 - enter) * 18 - exit * 10}px)`,
+            }}
+          >
+            {n.text
+              .split(/([⌘⇧]+\w)/)
+              .map((part, k) => (k % 2 === 1 ? <Shortcut key={k}>{part}</Shortcut> : part))}
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
+/** 説明中の UI を縁取って光らせる。amount は 0〜1。 */
+export const glow = (amount: number, color = "#2dd4bf"): CSSProperties =>
+  amount <= 0
+    ? {}
+    : {
+        boxShadow: `0 0 0 ${3 * amount}px ${color}, 0 0 ${28 * amount}px ${color}88`,
+      };
+
+/**
+ * 注目区間の外にある部分を薄くする。windows のどれかが target を指している間は
+ * target 以外が薄くなり、どの区間にも入っていなければ全部を普通に見せる。
+ */
+export const focusOpacity = (
+  frame: number,
+  windows: { from: number; to: number; target: string }[],
+  target: string,
+  dim = 0.22,
+) => {
+  const w = windows.find((x) => frame >= x.from - 8 && frame < x.to + 8);
+  if (!w || w.target === target) return 1;
+  const fadeIn = progress(frame, w.from - 8, 10, easeInOut);
+  const fadeOut = progress(frame, w.to - 2, 10, easeInOut);
+  return 1 - (1 - dim) * fadeIn * (1 - fadeOut);
 };
 
 /** 小さなラベル（どの環境の画面かを示す）。 */

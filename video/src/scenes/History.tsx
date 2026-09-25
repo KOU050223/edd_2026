@@ -1,7 +1,7 @@
 import { AbsoluteFill, useCurrentFrame } from "remotion";
 import { fontUi, web } from "../theme";
-import { HISTORY } from "../timeline";
-import { Caption, countUp, progress } from "../ui";
+import { HISTORY, NOTES } from "../timeline";
+import { Caption, Notes, countUp, focusOpacity, progress } from "../ui";
 import { S, WebFrame } from "../web-frame";
 
 type Outcome = "solved" | "hint" | "recurred";
@@ -28,11 +28,19 @@ const DAYS = Array.from({ length: 30 }, (_, d) => {
 });
 const MAX = Math.max(...DAYS.map((d) => d.solved + d.hint + d.recurred));
 
-const CARD_H = 104;
-const CARD_GAP = 14;
+const CARD_H = 96;
+const CARD_GAP = 12;
 
 const QuestionFeed = ({ frame }: { frame: number }) => (
-  <div style={{ position: "absolute", left: 60, top: 36, width: 540 }}>
+  <div
+    style={{
+      position: "absolute",
+      left: 60,
+      top: 36,
+      width: 540,
+      opacity: focusOpacity(frame, HISTORY.focus, "feed"),
+    }}
+  >
     <div style={{ fontSize: 17 * S, fontWeight: 700, marginBottom: 20 }}>最近の質問</div>
     <div style={{ position: "relative" }}>
       {QUESTIONS.map((item, k) => {
@@ -125,6 +133,7 @@ const Tile = ({
 
 export const History = () => {
   const frame = useCurrentFrame();
+  const chartOpacity = focusOpacity(frame, HISTORY.focus, "chart");
   return (
     <AbsoluteFill>
       <WebFrame active="推移">
@@ -140,7 +149,7 @@ export const History = () => {
             gap: 24,
           }}
         >
-          <div style={{ display: "flex", gap: 16, fontSize: 16 * S }}>
+          <div style={{ display: "flex", gap: 16, fontSize: 16 * S, opacity: chartOpacity }}>
             {["7 日", "30 日", "90 日"].map((p) => (
               <span
                 key={p}
@@ -165,14 +174,21 @@ export const History = () => {
               再読み込み
             </span>
           </div>
-          <div style={{ display: "flex", gap: 16 * S }}>
+          <div
+            style={{
+              display: "flex",
+              gap: 16 * S,
+              opacity: focusOpacity(frame, HISTORY.focus, "tiles"),
+            }}
+          >
             <Tile label="質問" value={128} unit="件" frame={frame} i={0} />
             <Tile label="自力解決" value={74} unit="%" frame={frame} i={1} />
             <Tile label="学んだ概念" value={23} unit="個" frame={frame} i={2} />
           </div>
           <div
             style={{
-              height: 380,
+              height: 340,
+              opacity: chartOpacity,
               background: web.surface,
               borderRadius: 12 * S,
               padding: 28,
@@ -213,6 +229,7 @@ export const History = () => {
               color: "#475569",
               fontSize: 15 * S,
               fontFamily: fontUi,
+              opacity: chartOpacity,
             }}
           >
             {Object.values(OUTCOME).map((o) => (
@@ -233,17 +250,18 @@ export const History = () => {
           left: 0,
           right: 0,
           bottom: 0,
-          height: 230,
+          height: 260,
           background: `linear-gradient(transparent, ${web.bg} 45%)`,
         }}
       />
       <Caption
         lines={["質問するたびに、履歴がたまっていく。"]}
-        start={HISTORY.questions[1]}
+        start={HISTORY.questions[0]}
         dark={false}
-        size={68}
-        style={{ left: 60, top: 905 }}
+        size={60}
+        style={{ left: 60, top: 868 }}
       />
+      <Notes notes={NOTES.history} dark={false} style={{ left: 98, top: 962 }} />
     </AbsoluteFill>
   );
 };

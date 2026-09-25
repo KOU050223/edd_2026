@@ -1,8 +1,18 @@
 import { AbsoluteFill, Img, staticFile, useCurrentFrame } from "remotion";
 import { CODE, CodeLines } from "../code";
 import { fontMono, fontUi, web } from "../theme";
-import { VSCODE } from "../timeline";
-import { Caption, Shortcut, DarkBackdrop, KeyCombo, Tag, progress, streamed } from "../ui";
+import { NOTES, VSCODE } from "../timeline";
+import {
+  Caption,
+  DarkBackdrop,
+  KeyCombo,
+  Notes,
+  Shortcut,
+  Tag,
+  glow,
+  progress,
+  streamed,
+} from "../ui";
 
 const FONT = 36;
 const LINE = FONT * 1.7;
@@ -11,7 +21,9 @@ const SELECTED = [3, 4, 5];
 
 const ANSWER_HINT = "バッファのないチャネルへの送信は、受け取る側が現れるまで止まります。";
 const ANSWER_NEXT = "受け取る goroutine はどこにありますか？ 送信を go func() に分けてみましょう。";
-const CPS = 1.5;
+const CPS = VSCODE.cps;
+/** 補足③（ヒントと次の一手）を出している区間。この間は回答の吹き出しを光らせる */
+const ANSWER_NOTE = NOTES.vscode[2].start;
 
 export const VsCode = () => {
   const frame = useCurrentFrame();
@@ -20,7 +32,8 @@ export const VsCode = () => {
   const hint = streamed(ANSWER_HINT, frame, VSCODE.stream, CPS);
   const nextStart = VSCODE.stream + ANSWER_HINT.length / CPS + 4;
   const next = streamed(ANSWER_NEXT, frame, nextStart, CPS);
-  const recordedAt = nextStart + ANSWER_NEXT.length / CPS + 4;
+  const recordedAt = VSCODE.recorded;
+  const answerGlow = progress(frame, ANSWER_NOTE, 10) * (1 - progress(frame, recordedAt, 10));
   const enter = progress(frame, 0, 16);
 
   return (
@@ -232,12 +245,20 @@ export const VsCode = () => {
                       background: web.hintBg,
                       color: web.hintText,
                       marginBottom: 14,
+                      ...glow(answerGlow),
                     }}
                   >
                     <b>ヒント</b>　{hint}
                   </div>
                   {frame >= nextStart && (
-                    <div>
+                    <div
+                      style={{
+                        borderRadius: 10,
+                        padding: "4px 8px",
+                        margin: "0 -8px",
+                        ...glow(answerGlow),
+                      }}
+                    >
                       <b style={{ color: "#5eead4" }}>次に試す一手</b>
                       <br />
                       {next}
@@ -245,9 +266,15 @@ export const VsCode = () => {
                   )}
                   <div
                     style={{
-                      marginTop: 18,
-                      fontSize: 19,
+                      marginTop: 22,
+                      display: "inline-block",
+                      fontSize: 22,
+                      fontWeight: 700,
+                      padding: "8px 16px",
+                      borderRadius: 999,
+                      background: "rgba(20,184,166,0.15)",
                       color: "#5eead4",
+                      ...glow(progress(frame, recordedAt + 6, 10)),
                       opacity: progress(frame, recordedAt, 8),
                       transform: `translateY(${(1 - progress(frame, recordedAt, 8)) * 10}px)`,
                     }}
@@ -277,11 +304,12 @@ export const VsCode = () => {
 
       <Caption
         lines={["ショートカット1つで、その場で質問。"]}
-        start={VSCODE.keys[0]}
-        size={68}
-        style={{ left: 90, top: 888 }}
+        start={VSCODE.select}
+        size={64}
+        style={{ left: 90, top: 862 }}
       />
-      <Tag start={10} style={{ right: 90, top: 905 }}>
+      <Notes notes={NOTES.vscode} style={{ left: 128, top: 962 }} />
+      <Tag start={10} style={{ right: 90, top: 878 }}>
         VS Code　<Shortcut>⌘⇧J</Shortcut>
       </Tag>
     </AbsoluteFill>

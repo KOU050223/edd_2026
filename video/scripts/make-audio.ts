@@ -5,7 +5,7 @@
 import { writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { BAR, BEAT, DURATION, FPS, SFX, type Sfx } from "../src/timeline.ts";
+import { BAR, BEAT, DURATION, FPS, SFX, barOf, type Sfx } from "../src/timeline.ts";
 
 const SR = 44_100;
 const LENGTH = Math.round((DURATION / FPS) * SR);
@@ -232,18 +232,30 @@ function sfx(e: Sfx): Float32Array {
 
 // ---------------- 譜面 ----------------
 
-// 1 小節ずつのコード（MIDI ノート）。導入は Am→F、終わりの 2 小節は C で解決させる。
+// 1 小節ずつのコード（MIDI ノート）。場面の小節位置から組み立てるので、
+// timeline.ts で尺を変えても譜面が追従する。
 const Am = [57, 60, 64, 69];
 const F = [53, 60, 65, 69];
 const G = [55, 59, 62, 67];
 const Em = [52, 59, 64, 67];
 const C = [48, 55, 60, 64, 67];
-const CHORDS = [Am, F, F, G, Am, F, G, Em, F, G, Am, F, G, C, C];
 
-const DRUMS_FROM = 2; // 小節番号。VS Code の場面からビートが入る
-const CLAP_FROM = 5;
-const ARP_FROM = 8;
-const DRUMS_UNTIL = 13; // ロゴで止める
+const TOTAL_BARS = DURATION / BAR;
+const LOGO_BAR = barOf("logo");
+const DRUMS_FROM = barOf("vscode"); // VS Code の場面からビートが入る
+const FOUR_ON_FLOOR_FROM = DRUMS_FROM + 2; // 最初の 2 小節は 1・3 拍だけで軽く
+const CLAP_FROM = barOf("desktop");
+const ARP_FROM = barOf("everywhere");
+const SIXTEENTH_HATS_FROM = barOf("history");
+
+const CYCLE = [F, G, Em, Am];
+const CHORDS = Array.from({ length: TOTAL_BARS }, (_, b) => {
+  if (b < DRUMS_FROM) return [Am, F, G][b % 3];
+  if (b >= LOGO_BAR) return C;
+  // ロゴの直前は G に置き、C への解決を強くする
+  if (b === LOGO_BAR - 1) return G;
+  return CYCLE[(b - DRUMS_FROM) % CYCLE.length];
+});
 
 const barStart = (b: number) => sec(b * BAR);
 const beatSec = sec(BEAT);
@@ -251,43 +263,49 @@ const beatSec = sec(BEAT);
 for (let b = 0; b < CHORDS.length; b++) {
   const chord = CHORDS[b];
   const t0 = barStart(b);
-  const last = b === CHORDS.length - 1;
-  if (b === 13) {
-    // 最後は 2 小節ぶん伸ばし、動画の終わりへ向けて減衰させる
-    add(t0, pad(chord, sec(BAR * 2) - 0.4), 0.55, -0.1);
-  } else if (!last) {
-    add(t0, pad(chord, sec(BAR) - 0.05), b < DRUMS_FROM ? 0.45 : 0.35);
-  }
-
   const root = chord[0] - 12;
-  if (b >= DRUMS_FROM && b < DRUMS_UNTIL) {
-    for (let i = 0; i < 8; i++) {
-      const note = i % 2 === 1 ? root + 12 : root;
-      add(t0 + i * (beatSec / 2), bass(note, beatSec / 2 - 0.02), 0.32);
-    }
-    for (let beat = 0; beat < 4; beat++) {
-      const tb = t0 + beat * beatSec;
-      add(tb, kick(), 0.8);
-      add(tb + beatSec / 2, hat(beat === 3), 0.22, 0.3);
-      if (b >= ARP_FROM) {
-        add(tb + beatSec / 4, hat(), 0.1, -0.3);
-        add(tb + (3 * beatSec) / 4, hat(), 0.1, -0.3);
-      }
-      if (b >= CLAP_FROM && (beat === 1 || beat === 3)) add(tb, clap(), 0.35);
-    }
-    if (b >= ARP_FROM) {
-      const tones = [...chord.slice(1), chord[1] + 12];
-      for (let i = 0; i < 16; i++) {
-        add(t0 + i * (beatSec / 4), pluck(tones[i % tones.length] + 12), 0.12, i % 2 ? 0.4 : -0.4);
-      }
-    }
-  }
-  if (b === 13) {
-    add(t0, bass(root, 3.2), 0.35);
-    // ロゴの後ろで鳴らす分散和音
-    [60, 64, 67, 72, 76, 79].forEach((n, i) =>
+
+  if (b === LOGO_BAR) {
+    // ロゴの間は C を伸ばし、動画の終わりへ向けて減衰させる
+    add(t0, pad(chord, sec(BAR * (TOTAL_BARS - LOGO_BAR)) - 0.6), 0.55, -0.1);
+    add(t0, bass(root, sec(BAR * 2)), 0.35);
+    // ロゴの後ろで鳴らす分散和音。2 小節ぶん上り下りする
+    [60, 64, 67, 72, 76, 79, 76, 72, 67, 64, 67, 72].forEach((n, i) =>
       add(t0 + 0.25 + i * (beatSec / 2), pluck(n + 12), 0.1, i % 2 ? 0.3 : -0.3),
     );
+    continue;
+  }
+  if (b > LOGO_BAR) continue;
+
+  add(t0, pad(chord, sec(BAR) - 0.05), b < DRUMS_FROM ? 0.45 : 0.35);
+  if (b < DRUMS_FROM) continue;
+
+  for (let i = 0; i < 8; i++) {
+    const note = i % 2 === 1 ? root + 12 : root;
+    add(t0 + i * (beatSec / 2), bass(note, beatSec / 2 - 0.02), 0.32);
+  }
+  const fill = b === LOGO_BAR - 1;
+  for (let beat = 0; beat < 4; beat++) {
+    const tb = t0 + beat * beatSec;
+    if (b >= FOUR_ON_FLOOR_FROM || beat % 2 === 0) add(tb, kick(), 0.8);
+    add(tb + beatSec / 2, hat(beat === 3), 0.22, 0.3);
+    if (b >= SIXTEENTH_HATS_FROM) {
+      add(tb + beatSec / 4, hat(), 0.1, -0.3);
+      add(tb + (3 * beatSec) / 4, hat(), 0.1, -0.3);
+    }
+    if (fill && beat >= 2) {
+      // ロゴへ入る前の 2 拍は手拍子を 16 分で刻んで盛り上げる
+      for (let k = 0; k < 4; k++)
+        add(tb + (k * beatSec) / 4, clap(), 0.18 + 0.1 * (beat - 2) + 0.02 * k);
+    } else if (b >= CLAP_FROM && (beat === 1 || beat === 3)) {
+      add(tb, clap(), 0.35);
+    }
+  }
+  if (b >= ARP_FROM) {
+    const tones = [...chord.slice(1), chord[1] + 12];
+    for (let i = 0; i < 16; i++) {
+      add(t0 + i * (beatSec / 4), pluck(tones[i % tones.length] + 12), 0.12, i % 2 ? 0.4 : -0.4);
+    }
   }
 }
 

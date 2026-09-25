@@ -1,7 +1,7 @@
 import { AbsoluteFill, interpolate, useCurrentFrame } from "remotion";
 import { web } from "../theme";
-import { MAP } from "../timeline";
-import { Caption, easeInOut, progress, usePop } from "../ui";
+import { BEAT, MAP, NOTES } from "../timeline";
+import { Caption, Notes, easeInOut, focusOpacity, glow, progress, usePop } from "../ui";
 import { S, WebFrame } from "../web-frame";
 
 type Status = "confirmed" | "learning" | "unobserved";
@@ -53,6 +53,16 @@ const ROW = 92;
 const nodeX = (d: number) => 28 + d * COL;
 const nodeY = (r: number) => 24 + r * ROW;
 const byId = new Map(NODES.map((n) => [n.id, n]));
+
+// 補足②（色の意味）を読んでいる間、確認済み → 学習中 → 現在地の順に該当ノードを光らせる
+const LEGEND_FROM = NOTES.map[1].start;
+const LEGEND = [
+  { key: "confirmed", from: LEGEND_FROM, color: web.confirmed },
+  { key: "learning", from: LEGEND_FROM + BEAT * 2.5, color: web.learning },
+  { key: "current", from: LEGEND_FROM + BEAT * 5, color: web.current },
+] as const;
+const LEGEND_TO = MAP.next;
+const NEXT_FOCUS = [{ ...MAP.focusNext, target: "next" }];
 
 const statusLabel: Record<Status, string> = {
   confirmed: "確認済み",
@@ -206,7 +216,10 @@ export const LearningMap = () => {
                       const next = f === CURRENT && NEXT.has(t);
                       const done = lit(a) && lit(b) && a.status === "confirmed";
                       return (
-                        <g key={f + t}>
+                        <g
+                          key={f + t}
+                          opacity={focusOpacity(frame, NEXT_FOCUS, next ? "next" : "other")}
+                        >
                           <path
                             d={d}
                             fill="none"
@@ -235,6 +248,15 @@ export const LearningMap = () => {
                     const lightAt = n.light !== undefined ? MAP.lights[n.light] : Infinity;
                     const bump = on ? 1 + 0.12 * (1 - progress(frame, lightAt, 10)) : 1;
                     const next = NEXT.has(n.id) && nextOn > 0.5;
+                    const legendKey = current ? "current" : n.status;
+                    const legend = LEGEND.find((l) => l.key === legendKey);
+                    const legendEnd =
+                      LEGEND[LEGEND.findIndex((l) => l.key === legendKey) + 1]?.from ?? LEGEND_TO;
+                    const legendGlow =
+                      on && legend
+                        ? progress(frame, legend.from, 8) * (1 - progress(frame, legendEnd - 4, 8))
+                        : 0;
+                    const inFocus = n.id === CURRENT || NEXT.has(n.id);
                     return (
                       <div
                         key={n.id}
@@ -253,11 +275,17 @@ export const LearningMap = () => {
                           flexDirection: "column",
                           justifyContent: "center",
                           gap: 2,
-                          opacity: progress(frame, i * 1.2, 8),
+                          opacity:
+                            progress(frame, i * 1.2, 8) *
+                            focusOpacity(frame, NEXT_FOCUS, inFocus ? "next" : "other"),
                           transform: `scale(${current ? 1 + 0.08 * (1 - ring) + 0.04 : bump})`,
-                          boxShadow: current
-                            ? `0 0 0 ${6 * ring}px ${web.currentRing}, 0 12px 30px rgba(37,99,235,0.35)`
-                            : undefined,
+                          ...(legendGlow > 0 && legend
+                            ? glow(legendGlow, legend.color)
+                            : {
+                                boxShadow: current
+                                  ? `0 0 0 ${6 * ring}px ${web.currentRing}, 0 12px 30px rgba(37,99,235,0.35)`
+                                  : undefined,
+                              }),
                         }}
                       >
                         <span style={{ fontSize: 13 * S, fontWeight: 600, whiteSpace: "nowrap" }}>
@@ -363,18 +391,28 @@ export const LearningMap = () => {
           left: 0,
           right: 0,
           bottom: 0,
-          height: 230,
+          height: 260,
           background: `linear-gradient(transparent, ${web.bg} 45%)`,
         }}
       />
       <Caption
         lines={["いまの自分の、現在地がわかる。"]}
-        start={MAP.lights[2]}
+        start={MAP.lights[0]}
+        end={MAP.next - 6}
         dark={false}
-        size={68}
+        size={60}
         accent={web.current}
-        style={{ left: 60, top: 905 }}
+        style={{ left: 60, top: 868 }}
       />
+      <Caption
+        lines={["次に何を学ぶかも、地図が示す。"]}
+        start={MAP.next}
+        dark={false}
+        size={60}
+        accent={web.current}
+        style={{ left: 60, top: 868 }}
+      />
+      <Notes notes={NOTES.map} dark={false} style={{ left: 98, top: 962 }} />
     </AbsoluteFill>
   );
 };

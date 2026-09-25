@@ -1,12 +1,14 @@
 import { AbsoluteFill, useCurrentFrame } from "remotion";
 import { desk, fontMono, fontUi } from "../theme";
-import { DESKTOP } from "../timeline";
+import { DESKTOP, NOTES } from "../timeline";
 import {
   Caption,
   Shortcut,
   DarkBackdrop,
   KeyCombo,
+  Notes,
   Tag,
+  glow,
   fontSerif,
   progress,
   streamed,
@@ -39,7 +41,7 @@ const dotColor = { confirmed: desk.accent, learning: desk.learning, unobserved: 
 
 /** ブラウザで読んでいるドキュメント。デスクトップ版はエディタ以外からも呼べることを見せる。 */
 const Browser = ({ frame }: { frame: number }) => {
-  const sel = progress(frame, 12, 12);
+  const sel = progress(frame, DESKTOP.select, 12);
   return (
     <div
       style={{
@@ -152,7 +154,11 @@ export const Desktop = () => {
   const pop = usePop(DESKTOP.popup, 13);
   const shown = frame >= DESKTOP.popup;
   const dim = progress(frame, DESKTOP.popup - 4, 10);
-  const answer = streamed(ANSWER, frame, DESKTOP.popup + 10, 2.2);
+  const answer = streamed(ANSWER, frame, DESKTOP.stream, DESKTOP.cps);
+  // 補足②の間は選択テキスト、補足③の間は左の概念一覧を光らせる
+  const selectionGlow =
+    progress(frame, NOTES.desktop[1].start, 10) * (1 - progress(frame, DESKTOP.sidebar, 10));
+  const sidebarGlow = progress(frame, DESKTOP.sidebar, 10);
   const enter = progress(frame, 0, 14);
 
   return (
@@ -218,6 +224,7 @@ export const Desktop = () => {
                 background: desk.surface,
                 padding: "24px 16px",
                 fontFamily: fontSerif,
+                boxShadow: `inset 0 0 0 ${4 * sidebarGlow}px #2dd4bf`,
               }}
             >
               <div
@@ -284,6 +291,7 @@ export const Desktop = () => {
                     borderRadius: 14,
                     background: desk.neutral100,
                     boxShadow: "0 1px 2px rgba(45,43,43,0.14)",
+                    ...glow(selectionGlow),
                     fontFamily: fontMono,
                     fontSize: 22,
                     color: desk.neutral700,
@@ -339,7 +347,7 @@ export const Desktop = () => {
                     style={{
                       display: "flex",
                       gap: 8,
-                      opacity: progress(frame, DESKTOP.popup + 10 + ANSWER.length / 2.2, 8),
+                      opacity: progress(frame, DESKTOP.stream + ANSWER.length / DESKTOP.cps, 8),
                     }}
                   >
                     {["goroutine", "チャネル"].map((c) => (
@@ -420,11 +428,12 @@ export const Desktop = () => {
 
       <Caption
         lines={["エディタの外でも、すぐに。"]}
-        start={DESKTOP.keys[0]}
-        size={68}
-        style={{ left: 90, top: 888 }}
+        start={DESKTOP.select}
+        size={64}
+        style={{ left: 90, top: 862 }}
       />
-      <Tag start={10} style={{ right: 90, top: 905 }}>
+      <Notes notes={NOTES.desktop} style={{ left: 128, top: 962 }} />
+      <Tag start={10} style={{ right: 90, top: 878 }}>
         Desktop　<Shortcut>⌘⇧K</Shortcut>
       </Tag>
     </AbsoluteFill>
