@@ -7,7 +7,9 @@
 -- Managed AI を使う場合も本文は使い捨てで保存しない。
 
 -- 1回の Import の実行単位。Undo はこの単位で行う。
-CREATE TABLE import_sessions (
+-- IF NOT EXISTS: 0007_history_import.sql 名で一度適用した環境が
+-- 改名後のこのファイルを再実行しても、重複エラーで止まらないようにする。
+CREATE TABLE IF NOT EXISTS import_sessions (
   id TEXT NOT NULL,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
 
@@ -39,7 +41,7 @@ CREATE TABLE import_sessions (
 
 -- 外部履歴から正規化された学習の根拠。追記のみで、Undo は
 -- 「import_session_id 単位で DELETE → sessions 側を undone にする」で行う。
-CREATE TABLE learning_evidence (
+CREATE TABLE IF NOT EXISTS learning_evidence (
   -- `${importSessionId}:${provider}:${sourceId}`。Normalizer が採番する。
   id TEXT NOT NULL,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -65,8 +67,8 @@ CREATE TABLE learning_evidence (
 );
 
 -- Undo（セッション単位の削除）と「なぜこの状態か」の出典表示に使う。
-CREATE INDEX idx_learning_evidence_user_session
+CREATE INDEX IF NOT EXISTS idx_learning_evidence_user_session
   ON learning_evidence (user_id, import_session_id);
 -- ソース単位の削除（DELETE /v1/learning-evidence?provider=...）に使う。
-CREATE INDEX idx_learning_evidence_user_provider
+CREATE INDEX IF NOT EXISTS idx_learning_evidence_user_provider
   ON learning_evidence (user_id, provider);
