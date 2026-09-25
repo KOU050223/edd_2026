@@ -122,6 +122,9 @@ grant type とアプリ登録数の上限を記載していない。
 なお、いずれも一般的な grant 設定であって有料機能として案内されている形跡は無いため、
 使える見込みは高いと考えているが、**確認していないことは確認していないと書いておく。**
 
+**追記（Auth/01 で確認済み）**: 3アプリ + API 1つの登録、Device Code グラントの有効化、
+`Allow Offline Access` ともに Free プランで動作した（§5 の client_id 一覧）。
+
 ## 3. 全体構成
 
 ```text
@@ -160,9 +163,10 @@ grant type とアプリ登録数の上限を記載していない。
 
 **この約束を守る。** `AuthenticatedUser` / `AuthVariables` の形とハンドラ
 （sync / profile / activity / ai）は変えず、`devAuth` を `requireAuth` に差し替える。
-ただし完全な無差分ではない。検証の実体を注入するため、`app.ts:75` の
-`app.use("/v1/*", devAuth)` が `app.use("/v1/*", createAuth((env) => …))` になる。
-**変わるのはこの組み立て1行だけ**である。
+ただし完全な無差分ではない。検証の実体を注入するため、`app.ts` の
+`app.use("/v1/*", devAuth)` が `app.use("/v1/*", requireAuth)` になった
+（`requireAuth` は `createAuth((env) => resolveVerifier(env))`、middleware.ts）。
+**変わったのはこの組み立て1行だけ**である。
 
 ```ts
 export interface AuthenticatedUser {

@@ -6,7 +6,7 @@
 
 ## 前提
 
-- Node.js 22.13.0 以上（ESLint 10 の要求）
+- Node.js は `.node-version` の 24.20.0（ESLint 10 は 22.13.0 以上を要求する）
 - 初回のみ `npm install`
 
 ## 1. コマンドラインでの確認
@@ -276,7 +276,7 @@ API キーは VS Code の SecretStorage にだけ保存され、設定ファイ�
 | ショートカットが反応しない       | エディタ本体にフォーカスが必要。ターミナルやサイドバーにフォーカスがあると発火しない  |
 | コードを直したのに反映されない   | `tsc -watch` は自動で再ビルドするが、開発ホスト側は `Ctrl + R` でリロードが必要       |
 | `F5` でビルドが走らない          | `.vscode/tasks.json` の watch タスクが動いているか確認する                            |
-| `npm install` で EBADENGINE 警告 | Node が 22.13.0 未満。22.13 以上か 24 LTS に上げる                                    |
+| `npm install` で EBADENGINE 警告 | Node が古い。`.node-version` の 24.20.0 に合わせる                                    |
 | ターミナルで押しても反応しない   | `when: terminalFocus` のため、ターミナルにフォーカスが必要                            |
 | 貼り付けたら元の内容が消えていた | クリップボードの復元が失敗している。不具合として報告する                              |
 | `Ask Clipboard` が候補に出ない   | `package.json` の変更はリロードでは反映されない。デバッグを停止して `F5` で起動し直す |

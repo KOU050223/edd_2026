@@ -92,9 +92,8 @@ API Server は次の処理を担当する。
 - 学習イベント、Learner Profile、Concept Mastery の処理
 - API の認可、レート制限、データ永続化
 
-Web Worker は API の認証方式を独自に持たない。Auth0 への移行後は、取得した Access Token
-を付与し、API Server が JWT の検証と認可を行う。移行完了後、Web Worker から API へ
-共有 API トークンを送る経路は使用しない。
+Web Worker は API の認証方式を独自に持たず、取得した Access Token を付与するだけである。
+JWT の検証と認可は API Server が行う。
 
 この構成では、ブラウザは API Server と直接通信しない。そのため、Web 用の CORS 設定を
 必要とせず、API の資格情報をブラウザへ公開せずに済む。Web Worker を削除してブラウザから
@@ -180,13 +179,14 @@ Client が観測する事実
 
 最初から固定すべきなのは、画面ではなく学習ドメインに由来する境界である。
 
-| 境界           | API                                                             | 責務                                                   |
-| -------------- | --------------------------------------------------------------- | ------------------------------------------------------ |
-| Identity       | OAuth / OIDC                                                    | ログイン、トークン発行、VS Codeの端末認可              |
-| Sync Command   | `POST /v1/learning-events:sync`                                 | 追記型イベントをまとめて冪等に同期する                 |
-| Learning Query | `GET /v1/learning-profile`                                      | 導出済みのLearning Mapと根拠を返す                     |
-| AI Gateway     | `POST /v1/ai/responses` / `GET /v1/ai/usage`                    | Managed AI の実行・利用制限・課金と、残量の提示を扱う  |
-| Data Rights    | `GET /v1/learning-events:export` / `DELETE /v1/learning-events` | 自分の学習データを取り出す／消す（「保存期間と削除」） |
+| 境界           | API                                                                               | 責務                                                                       |
+| -------------- | --------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| Identity       | OAuth / OIDC                                                                      | ログイン、トークン発行、VS Codeの端末認可                                  |
+| Sync Command   | `POST /v1/learning-events:sync`                                                   | 追記型イベントをまとめて冪等に同期する                                     |
+| Learning Query | `GET /v1/learning-profile` / `GET /v1/learning-activity`                          | 導出済みのLearning Mapと根拠、日次の集計を返す                             |
+| Learner Data   | `GET/PUT /v1/mastery-overrides` / `GET/PUT /v1/user-settings`                     | 習熟度の手動上書きとユーザー設定（利用者自身の宣言であり行動記録ではない） |
+| AI Gateway     | `POST /v1/ai/responses` / `GET /v1/ai/usage`                                      | Managed AI の実行・利用制限・課金と、残量の提示を扱う                      |
+| Data Rights    | `GET /v1/learning-events:export` / `DELETE /v1/learning-events` / `DELETE /v1/me` | 自分の学習データを取り出す／消す／退会（「保存期間と削除」）               |
 
 端末をユーザーへ結びつける処理は Identity の責務であり、独立した `/devices` という
 学習ドメインAPIにしない。VS Code は OAuth Device Authorization Flow など、

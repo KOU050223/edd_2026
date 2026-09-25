@@ -4,13 +4,13 @@
 
 ## 識別子
 
-| 項目              | 値                                             |
-| ----------------- | ---------------------------------------------- |
-| package name      | `gakushu-sochi`                                |
-| Extension ID      | `<publisher>.gakushu-sochi`（publisher未決定） |
-| Command ID prefix | `gakushuSochi.`                                |
-| Chat Participant  | `@gakushu-sochi`                               |
-| publisher         | 未決定                                         |
+| 項目              | 値                            |
+| ----------------- | ----------------------------- |
+| package name      | `gakushu-sochi`               |
+| Extension ID      | `gakushu-sochi.gakushu-sochi` |
+| Command ID prefix | `gakushuSochi.`               |
+| Chat Participant  | `@gakushu-sochi`              |
+| publisher         | `gakushu-sochi`               |
 
 ## Hackathon MVP
 
@@ -72,6 +72,11 @@ code --install-extension gakushu-sochi.gakushu-sochi
 ├─ packages/
 │  ├─ domain/                   # Concept、LearningEvent、Masteryの共有ドメイン
 ├─ docs/                        # 人間が読む正史（設計・方針）
+│  ├─ architecture.md           # アーキテクチャ方針と運用設計の正典
+│  ├─ auth.md                   # 認証設計（Auth0 への統合）
+│  ├─ web-viewer.md             # Web App（Learning Map 閲覧）の設計
+│  ├─ input-sources.md          # 入力経路（選択範囲・クリップボード）の設計
+│  ├─ lm-api.md                 # VS Code Language Model API の検証記録
 │  ├─ idea.md                   # プロダクトの長期構想
 │  ├─ concepts.md               # Concept一覧・習熟度ルール・マイグレーション方針
 │  ├─ testing.md                # デモケースと手動テスト手順

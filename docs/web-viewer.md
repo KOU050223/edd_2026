@@ -22,12 +22,12 @@ docs/architecture.md「Phase 1: 最初の学習ループを完成させる」の
 
 範囲に**含まない**もの。理由を添えて明示する。
 
-| 除外するもの             | 理由                                                                                                         |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------ |
-| 書き込み・編集           | 学習イベントは追記のみで、正本は Extension / Desktop からの同期である（architecture.md「オフラインと競合」） |
-| 学習イベントの生ログ表示 | architecture.md「データとプライバシー」が生ログの送出を禁じている。集計済みの読み取りモデルだけを返す        |
-| ユーザー設定画面         | apps/web/README.md は設定も担当範囲に挙げるが、設定の書き込み API が無い。閲覧が動いてから別 Issue にする    |
-| GraphQL / 汎用 BFF       | apps/web/AGENTS.md「汎用GraphQLや巨大なBFFを先行して導入しない」                                             |
+| 除外するもの                     | 理由                                                                                                         |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| 学習イベントの書き込み・編集     | 学習イベントは追記のみで、正本は Extension / Desktop からの同期である（architecture.md「オフラインと競合」） |
+| 学習イベントの生ログ表示         | architecture.md「データとプライバシー」が生ログの送出を禁じている。集計済みの読み取りモデルだけを返す        |
+| ユーザー設定画面（起票時の除外） | 起票時は設定の書き込み API が無かったため除外した。後に Web/06（#123）で `/settings` として実装済み（後述）  |
+| GraphQL / 汎用 BFF               | apps/web/AGENTS.md「汎用GraphQLや巨大なBFFを先行して導入しない」                                             |
 
 ## 資格情報をどこに置くか
 
@@ -216,7 +216,7 @@ Learning Map 画面はこれで足りる。追加不要。
 「習熟度 0%」ではない（contract/learning-profile.ts のコメント、docs/concepts.md）。
 未観測を 0% のバーとして描いてはならない。「まだ観測がありません」と文言で出す。
 
-### 追加: `GET /v1/learning-activity`
+### `GET /v1/learning-activity`（実装済み）
 
 **用途。** Web Viewer の「推移」画面。いつ・どの種別の学習が起きたかを日次で見る。
 
@@ -329,8 +329,9 @@ SELECT strftime('%Y-%m-%d', occurred_at_ms / 1000, 'unixepoch') AS date,
 **Learning Map 画面と推移画面の合計で 30 回 / 60 秒**になる。
 画面を往復すると1回の遷移で2枠を消費する。それぞれ独立に 30 回ではない。
 バインディングを増やさない側に倒した判断だが、実運用で足りなくなったら
-`wrangler.jsonc` の `ratelimits` へ `ACTIVITY_RATE_LIMITER`（`namespace_id: 1003`）を
-足して分離する。そのときは `apps/api/src/app.ts` の `app.use` も1行増える。
+`wrangler.jsonc` の `ratelimits` へ `ACTIVITY_RATE_LIMITER`（`namespace_id: 1004`。
+1003 は `MASTERY_OVERRIDE_RATE_LIMITER` が使用中）を足して分離する。
+そのときは `apps/api/src/app.ts` の `app.use` も1行増える。
 
 ## 画面
 
@@ -341,24 +342,30 @@ Worker が Auth0 へリダイレクトする起点。画面は持たない（`au
 認可に失敗した画面に「マップ / 推移 / 設定」への導線を出すと、押しても
 `/api/*` が 401 を返すだけになる（`routes/__root.tsx`）。
 
-### 2. Learning Map `/`
+### 2. Learning Map `/` と `/map/$language`
 
 ブラウザから `GET /api/v1/learning-profile` と `GET /api/v1/mastery-overrides` を
-フェッチして描く（Worker が `/v1/*` へ中継する）。
+フェッチして描く（Worker が `/v1/*` へ中継する）。ロジックは `learning-map.ts`
+（現在地・集計）と `learning-map-view.tsx`（共有の描画）に切り離してある。
 
-**起票時は Concept の一覧表だったが、Web/04（#53）で Skill Tree + 現在地へ置き換えた。**
+**起票時は Concept の一覧表だったが、Web/04（#53）で Skill Tree へ置き換え、
+#195 で項目一覧・領域別マップ・詳細の3層へ分けた。**
 
-- 領域（Concept ID のプレフィックス）ごとの Skill Tree。列は前提の段数、
-  辺は `prerequisites`。木の定義は `packages/domain/concepts.md` が正典で、
-  自動生成しない。
+- `/`: 項目一覧。領域（Concept ID のプレフィックス）ごとのカードに
+  確認済み・学習中・未観測の件数と現在地バッジを出し、`/map/$language` へリンクする。
+  木の定義に載らない Concept の観測は「地図に無い Concept」として下に並べる
+  （見えなくすると記録が消えたように見えるため）。
+- `/map/$language`: 1領域ぶんの Skill Tree。列は前提の段数、辺は `prerequisites`。
+  木の定義は `packages/domain/concepts.md` が正典で、自動生成しない。
+- 詳細は右のパネルへ回す。選択は `?concept=` で URL に載るため、
+  共有や再読み込みで同じ詳細が開く。`status` / `score` / `evidence` の内訳、
+  前提と次に接続する Concept、理解度の手動修正（Web/03 #47）。
+  docs/concepts.md の意図通り、score 単独ではなく status と evidence を併記する。
 - **現在地**。学習中のうち最後に観測したものを1つ選ぶ（`client/learning-map.ts`）。
   観測時刻の無い学習中は観測のあるものより後ろに回す。
 - 応答に無い Concept を `unobserved` として補い、全件を出す。
   **`unobserved` を 0% のバーとして描かない。**「まだ判断材料がありません。
   0% という意味ではありません」と文言で出す。
-- 選んだ Concept の詳細を右のパネルへ回す。`status` / `score` / `evidence` の内訳、
-  前提と次に接続する Concept、理解度の手動修正（Web/03 #47）。
-  docs/concepts.md の意図通り、score 単独ではなく status と evidence を併記する。
 - 手動上書きは**表示だけを変え、`evidence` には触れない**。自動算出の値を
   `derived` に残し、「手動で確認済みにしたが自動算出では学習中」を区別できるようにする。
 - `eventCount` と `derivedAt` を出す。いつ時点の導出かを隠さない。
@@ -449,31 +456,33 @@ Desktop は単一画面のオーバーレイであり、こちらは一覧とグ
 
 ```text
 apps/web/
-├─ package.json              # scripts / deps を追加（現在は description のみ）
-├─ tsconfig.json
-├─ eslint.config.mjs         # apps/api の flat config に合わせる
-├─ vite.config.ts
-├─ wrangler.jsonc
+├─ package.json / tsconfig.json / eslint.config.mjs / vite.config.ts / wrangler.jsonc
 ├─ .dev.vars.example
 ├─ src/
 │  ├─ worker/
 │  │  ├─ index.ts            # Hono。セッション検証 → apps/api へ中継
+│  │  ├─ oauth.ts            # Auth0 の認可コード交換（auth.md §5.3）
+│  │  ├─ access-token.ts     # Refresh Token → Access Token。isolate 内で直列化
 │  │  ├─ session.ts          # KV へのセッション発行・検証・失効
-│  │  ├─ session.test.ts
+│  │  ├─ consent.ts          # 同意記録の読み書き（#174）
 │  │  └─ worker-configuration.d.ts   # wrangler types の生成物
-│  └─ client/
-│     ├─ main.tsx
-│     ├─ api.ts              # fetch ラッパ。上表のエラー種別へ写像する
-│     ├─ api.test.ts
-│     ├─ routeTree.gen.ts    # TanStack Router の生成物（#142）
-│     └─ routes/             # ファイル規約でルートを定義する
-│        ├─ __root.tsx       #   枠を持たない親（/login-failed のため）
-│        ├─ login-failed.tsx
-│        └─ _framed/         #   ヘッダー付きの枠。URL には現れない
-│           ├─ route.tsx
-│           ├─ index.tsx     #   Learning Map
-│           ├─ activity.tsx
-│           └─ settings/{route,index,usage,billing,data}.tsx
+│  ├─ client/
+│  │  ├─ main.tsx / api.ts / session.ts / errors.tsx / style.css
+│  │  ├─ learning-map.ts        # 現在地・集計（描画なし）
+│  │  ├─ learning-map-view.tsx  # Skill Tree・詳細パネルの共有描画
+│  │  ├─ profile.ts / overrides.ts / activity-period.ts / ai-usage.ts
+│  │  ├─ learning-data.ts / consent.ts
+│  │  ├─ routeTree.gen.ts       # TanStack Router の生成物（#142）
+│  │  └─ routes/             # ファイル規約でルートを定義する
+│  │     ├─ __root.tsx       #   枠を持たない親（/login-failed のため）
+│  │     ├─ login-failed.tsx
+│  │     └─ _framed/         #   ヘッダー付きの枠。URL には現れない
+│  │        ├─ route.tsx
+│  │        ├─ index.tsx         # 項目一覧（領域カード）
+│  │        ├─ map.$language.tsx # 領域別 Skill Tree
+│  │        ├─ activity.tsx
+│  │        └─ settings/{route,index,usage,billing,data}.tsx
+│  └─ shared/               # Worker と client で共有する変換
 └─ index.html
 ```
 
@@ -538,30 +547,12 @@ apps/api/src/
 `CORS_ALLOWED_ORIGINS` は `""` のままにする。開ける必要が出たら、
 それは案 A から外れたということなので設計を見直す合図とする。
 
-### ルートの package.json
+### ルートの package.json（配線済み）
 
-`compile` / `test` / `test:unit` / `lint` の4つがワークスペースを名指しで列挙しているため、
-すべてに `@gakushu-sochi/web` を追加する。
-`check:worker-types` も現在は api だけを名指ししている。`apps/web` も Worker であり
-`worker-configuration.d.ts` を持つので、ここにも追加する。
-CI で型のずれが出るとしたらこの経路である。`test/package-scripts.test.mjs` が
-`dev` と `test` の形を検証しているので、変更後にこのテストが通ることを確認する。
-
-`dev` スクリプトへ web を足すかは実装時に判断する。足すなら
-`--names api,desktop,web` と対応する順序を保つこと（既存テストが名前を見ている）。
-
-## 実装の順序
-
-1. `apps/api` に `learning-activity` の契約とルートを追加（テスト付き）。
-   Web が無くても単体で意味を持ち、単体でレビューできる。
-2. `apps/web` の土台。package.json / tsconfig / eslint / vite / wrangler と、
-   Worker のセッションと中継。ここまでで「ログインして profile の JSON が見える」。
-3. Learning Map 画面。
-4. 推移画面。
-5. ルートの package.json へワークスペースを配線し、デプロイ。
-
-各段階を別 PR にする。1 は API の変更、2 は基盤、3〜4 は UI で、
-レビューの観点がそれぞれ違う。
+`compile` / `test` / `test:unit` / `lint` / `check:worker-types` / `dev` は
+ワークスペースを名指しで列挙しており、すべてに `@gakushu-sochi/web` が入っている。
+`dev` は `--names api,desktop,web` と名前・順序を揃えている
+（`test/package-scripts.test.mjs` がその形を検査する）。
 
 ## 積み残し（本 Issue の範囲外）
 

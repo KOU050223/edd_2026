@@ -131,7 +131,7 @@ languageId がそのまま prefix になる。
 既存の言語・領域への Concept 追加は上の手順で足りるが、**新しい言語や領域の
 プレフィックスを足すとき**は表示と抽出側にも登録が要る。
 
-- Web のツリー見出し: `apps/web/src/client/routes/_framed/index.tsx` の `languageLabel`
+- Web のツリー見出し: `apps/web/src/client/learning-map-view.tsx` の `languageLabel`
 - 言語ではない領域を追加するとき: `apps/vscode-extension/src/ai/prompt/index.ts` の
   `CROSS_DOMAIN_PREFIXES`。登録しないとその領域の Concept がプロンプトの
   一覧に乗らず、拡張から観測されない。
@@ -352,7 +352,9 @@ ID によるタイブレークが無いと、同じイベント集合でも入�
 旧キーの値は消さない（移行に失敗した場合の退避先として残す）。
 
 Learner Profile はプロジェクトではなく人に紐づくため、`workspaceState` ではなく
-`globalState` を使う。別端末との同期は行わない（同期は Pro の Cloud Sync 段階の課題）。
+`globalState` を使う。別端末との同期は API Server の `learning-events:sync` が担い、
+`globalState` はサーバー導出の正本に対するローカルキャッシュである
+（`docs/architecture.md`「オフラインと競合」）。
 
 ### 削除
 

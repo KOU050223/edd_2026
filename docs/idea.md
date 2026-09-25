@@ -166,17 +166,16 @@ Learning History
 ```text
 AI Provider
 ├─ VS Code Language Model / User's Copilot
-├─ Workers AI
+├─ Managed AI（API Server 経由の Gemini）
 ├─ BYOK
 └─ Local LLM
 ```
 
 基本はユーザー自身が利用できるAIを優先し、運営側のAIコストを抑える。
 
-学習履歴は最初はローカル保存し、巨大なRAGやVector DBは使わない。
-
-ローカル履歴とPro同期の移行契約（同期対象・既存データの移行・オフライン時の動作・
-競合解決・解約後のデータ扱い）は、Cloud Syncを実装する段階で定義する。本書では扱わない。
+学習履歴は巨大なRAGやVector DBを使わず、イベントの追記ログを正本として
+API Server（D1）へ同期する。クライアントが持つのはオフライン用のローカルキャッシュである。
+同期の契約（冪等性・削除・再送方針）は `docs/architecture.md` が正典である。
 
 ---
 
