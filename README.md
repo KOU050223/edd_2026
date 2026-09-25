@@ -26,6 +26,38 @@
 
 対象外: WebviewによるリッチUI、完全なPersonal Learning Map。
 
+## インストール
+
+### Desktop（macOS / Windows）
+
+[GitHub Releases](https://github.com/KOU050223/edd_2026/releases) の `desktop-v*` から
+dmg（macOS、x64 / arm64）または exe（Windows）をダウンロードする。
+
+macOS は Homebrew でも入る。
+
+```bash
+brew tap KOU050223/tap
+brew install --cask gakushu-sochi
+```
+
+いずれも未署名。macOS は右クリック → 開く（または `xattr -dr com.apple.quarantine`）、
+Windows は SmartScreen の警告が出る。
+
+### VS Code Extension
+
+Marketplace には公開していない。VSIX を手元で生成して入れる。
+
+```bash
+npm run package --workspace=gakushu-sochi
+code --install-extension apps/vscode-extension/gakushu-sochi-*.vsix
+```
+
+### Web
+
+<https://gakushu-sochi-web.uozumi05.workers.dev>
+
+リリース方式と手順の正典は [`docs/release.md`](docs/release.md)。
+
 ## ファイル構成
 
 複数クライアントで同じ Personal Learning Map を扱うため、モノレポで管理する。
