@@ -2,7 +2,7 @@
   "name": "gakushu-sochi",
   "displayName": "Gakushu Sochi",
   "description": "選択したコードやエラーをその場でAIに質問しながら学べる、学習向けAIコンパニオン",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "publisher": "gakushu-sochi",
   "private": true,
   "license": "UNLICENSED",
