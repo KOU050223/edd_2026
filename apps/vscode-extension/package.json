@@ -142,7 +142,7 @@
   },
   "scripts": {
     "compile": "tsc -p ./",
-    "package": "npm run compile && npx --no-install @vscode/vsce package --no-dependencies",
+    "package": "npm run compile --workspace=@gakushu-sochi/domain && npm run compile && npx --no-install @vscode/vsce package --no-dependencies",
     "test:unit": "npm run compile --workspace=@gakushu-sochi/domain && vitest run src",
     "test:watch": "npm run compile --workspace=@gakushu-sochi/domain && vitest src",
     "test": "npm run test:unit",
