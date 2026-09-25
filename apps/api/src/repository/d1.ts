@@ -6,6 +6,7 @@
  */
 
 import type { LearningEvent, LearningEventType, EventOrigin } from "@gakushu-sochi/domain";
+import type { AreaCompletion } from "../contract/area-completions.js";
 import {
   USER_SETTINGS_VERSION,
   isActivityPeriodDays,
@@ -17,6 +18,7 @@ import type {
   AiUsage,
   AiUsageRepository,
   AppendResult,
+  AreaCompletionRepository,
   AuditLogEntry,
   AuditLogRepository,
   IdentityRepository,
@@ -598,6 +600,50 @@ export class D1AuditLogRepository implements AuditLogRepository {
         entry.detail === undefined ? null : JSON.stringify(entry.detail),
       )
       .run();
+  }
+}
+
+/**
+ * 分野コンプリートの記録（migrations/0007_area_completions.sql）。
+ *
+ * 追記だけで、消す操作も書き換える操作も持たない。
+ */
+export class D1AreaCompletionRepository implements AreaCompletionRepository {
+  constructor(private readonly db: D1Database) {}
+
+  async listByUser(userId: string): Promise<AreaCompletion[]> {
+    const { results } = await this.db
+      .prepare(
+        `SELECT language, completed_at
+         FROM area_completions
+         WHERE user_id = ?
+         ORDER BY completed_at, language`,
+      )
+      .bind(userId)
+      .all<{ language: string; completed_at: string }>();
+    return results.map((row) => {
+      // 読めない時刻を黙って通さない。表示側で Invalid Date になるより、ここで落とす（RULE-004）。
+      if (Number.isNaN(Date.parse(row.completed_at))) {
+        throw new Error(`area_completions contains invalid data (language=${row.language})`);
+      }
+      return { language: row.language, completedAt: row.completed_at };
+    });
+  }
+
+  async record(userId: string, languages: readonly string[], completedAt: string): Promise<void> {
+    if (languages.length === 0) return;
+    // OR IGNORE で、既に記録済みの分野は素通りする。再実行しても件数が増えず、
+    // 最初の達成時刻が後の時刻で上書きされない。
+    await this.db.batch(
+      languages.map((language) =>
+        this.db
+          .prepare(
+            `INSERT OR IGNORE INTO area_completions (user_id, language, completed_at)
+             VALUES (?, ?, ?)`,
+          )
+          .bind(userId, language, completedAt),
+      ),
+    );
   }
 }
 

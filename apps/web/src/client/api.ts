@@ -120,7 +120,7 @@ export function createSubmitGuard() {
  * 2xx でも本文の解析に失敗したら失敗として扱う（RULE-004）。
  */
 async function sendJson<T>(
-  method: "PUT" | "DELETE",
+  method: "POST" | "PUT" | "DELETE",
   path: string,
   payload: unknown,
   fetcher: typeof fetch,
@@ -163,6 +163,16 @@ export function putJson<T>(
   timeoutMs = 10_000,
 ): Promise<T> {
   return sendJson("PUT", path, payload, fetcher, timeoutMs);
+}
+
+/**
+ * 本文を持たない POST を送る。
+ *
+ * サーバー側で判定して記録する経路（分野コンプリートの判定）に使う。
+ * 送る値が無くても GET にしない。記録を書きうるためである。
+ */
+export function postJson<T>(path: string, fetcher: typeof fetch = fetch, timeoutMs = 10_000) {
+  return sendJson<T>("POST", path, undefined, fetcher, timeoutMs);
 }
 
 /** 学習データの削除など、本文を持たない DELETE を送る。 */
