@@ -12,7 +12,7 @@ import { takeLoginRetry } from "../../../session.js";
 
 /**
  * ダウンロードは object URL を経由する。Web は学習データのコピーを持たない
- * （docs/architecture.md「クライアント側に残るコピー」）ため、取得した値は
+ * （docs/data-privacy.md「クライアント側に残るコピー」）ため、取得した値は
  * ファイルへ流すだけで、画面やストレージへ残さない。
  */
 function downloadJson(payload: unknown, fileName: string) {
@@ -33,7 +33,7 @@ function downloadJson(payload: unknown, fileName: string) {
  * 削除は取り消せないため、実行の前に画面内で確認を挟む。
  * Web から消せるのはサーバー側だけで、他の端末に残るコピーは
  * それぞれの端末が次回の同期で追従して消す
- * （docs/architecture.md「クライアント側に残るコピー」）。
+ * （docs/data-privacy.md「クライアント側に残るコピー」）。
  */
 function DataSettings() {
   const router = useRouter();

@@ -28,7 +28,7 @@ test("任意項目を含むイベントを受理する", () => {
 });
 
 test("コード本文のような未知のフィールドは剥がさずに拒否する", () => {
-  // LearningEvent にコード本文の置き場所は無い（docs/architecture.md のプライバシー二段階）。
+  // LearningEvent にコード本文の置き場所は無い（docs/data-privacy.md のプライバシー二段階）。
   // 黙って捨てると、送信側は保存されたと誤解したまま気づけない。
   const result = v.safeParse(learningEventSchema, {
     ...validEvent,

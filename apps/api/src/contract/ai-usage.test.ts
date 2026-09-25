@@ -28,9 +28,9 @@ describe("モデルの allowlist", () => {
   });
 });
 
-describe("上限値（docs/architecture.md の写し）", () => {
+describe("上限値（docs/ai-limits.md の写し）", () => {
   it("政策値が正本と一致する", () => {
-    // 数字を動かすときは docs/architecture.md を先に直す。
+    // 数字を動かすときは docs/ai-limits.md を先に直す。
     expect(AI_USAGE_LIMITS).toEqual({
       monthlyRequests: 150,
       dailyRequests: 15,

@@ -205,7 +205,7 @@ export type DeleteOutcome =
  * `syncEvent` と同じく例外を投げず、失敗は理由付きの `ok: false` で返す。
  * 呼び出し側は `ok: true` の場合だけローカルのコピーを消す。順序をこの向きに
  * するのは、サーバー側の削除が失敗したときに手元だけ消えて
- * 「消えたように見える」状態を作らないためである（docs/architecture.md
+ * 「消えたように見える」状態を作らないためである（docs/data-privacy.md
  * 「クライアント側に残るコピー」）。
  */
 export async function deleteServerLearningData(

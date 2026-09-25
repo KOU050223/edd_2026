@@ -4,7 +4,7 @@ import { takeLoginRetry } from "../../../session.js";
 
 /**
  * 現在のプラン。当面 Free のみなので、実装済みの事実だけを並べる
- * （docs/architecture.md「決定: 当面 Free のみ。Pro は作らない」）。
+ * （docs/ai-limits.md「決定: 当面 Free のみ。Pro は作らない」）。
  *
  * 支払い方法や請求履歴の欄は置かない。未実装の空欄は利用者から見れば壊れているのと
  * 区別がつかない（Issue #123）。Pro の予告だけはその例外として出すが、

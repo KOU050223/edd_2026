@@ -129,7 +129,7 @@ describe("DELETE /v1/me", () => {
   it("退会で監査ログも一緒に消える", async () => {
     // audit_log は users(id) を ON DELETE CASCADE で参照している。
     // 「退会したのに操作の記録だけ残る」は、アカウントごと全データを消す
-    // 方針に反する（docs/architecture.md「監視・監査ログ・障害時の再送」）。
+    // 方針に反する（docs/api-ops.md「監視・監査ログ・障害時の再送」）。
     const deps = buildDeps();
     await deps.identity.ensureUser({ userId: "auth0|user-a", nowMs: 0 });
     await deps.audit.record({
@@ -146,7 +146,7 @@ describe("DELETE /v1/me", () => {
 
   it("退会の完了は構造化ログに残す", async () => {
     // audit_log は users 行と一緒に消えるため、退会そのものの証跡は
-    // Workers のログで追う（docs/architecture.md「監視・監査ログ・障害時の再送」）。
+    // Workers のログで追う（docs/api-ops.md「監視・監査ログ・障害時の再送」）。
     const consoleInfo = vi.spyOn(console, "info").mockImplementation(() => {});
     const deps = buildDeps();
     deps.identity.users.set("auth0|user-a", { createdAtMs: 0 });

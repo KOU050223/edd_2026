@@ -6,7 +6,7 @@
 
 ## 前提
 
-- Node.js 22.13.0 以上（ESLint 10 の要求）
+- Node.js は `.node-version` の 24.20.0（ESLint 10 は 22.13.0 以上を要求する）
 - 初回のみ `npm install`
 
 ## 1. コマンドラインでの確認
@@ -156,7 +156,7 @@ VS Code の外（ブラウザ、Slack、PDF、他のアプリ）でコピーし�
 ## 6. 送信の同意の確認（基盤/07 #119）
 
 この拡張が外へ何かを送る前に、何が誰へ送られるかを提示して同意を取る経路。
-送信先ごとの内容は [architecture.md](architecture.md) の「何が誰へ送られるか」が正本で、
+送信先ごとの内容は [data-privacy.md](data-privacy.md) の「何が誰へ送られるか」が正本で、
 ダイアログの文面は `packages/domain/src/consent.ts` がそれを要約している。
 
 同意は `globalState` に記録される。**設定には出ない**ので、設定画面を探しても見つからないのが正しい。
@@ -212,7 +212,7 @@ VS Code の外（ブラウザ、Slack、PDF、他のアプリ）でコピーし�
 ### Desktop / Web の同意（基盤/11 #174）
 
 同じ文面・同じ版の同意を、Desktop と Web にも展開したもの。記録先はクライアントごとに違う
-（architecture.md「同意を取るまで送らない」が正本）。
+（data-privacy.md「同意を取るまで送らない」が正本）。
 
 **Desktop**: 同意の記録は `userData` 直下の `consent.json`。消すと未同意に戻る。
 
@@ -276,7 +276,7 @@ API キーは VS Code の SecretStorage にだけ保存され、設定ファイ�
 | ショートカットが反応しない       | エディタ本体にフォーカスが必要。ターミナルやサイドバーにフォーカスがあると発火しない  |
 | コードを直したのに反映されない   | `tsc -watch` は自動で再ビルドするが、開発ホスト側は `Ctrl + R` でリロードが必要       |
 | `F5` でビルドが走らない          | `.vscode/tasks.json` の watch タスクが動いているか確認する                            |
-| `npm install` で EBADENGINE 警告 | Node が 22.13.0 未満。22.13 以上か 24 LTS に上げる                                    |
+| `npm install` で EBADENGINE 警告 | Node が古い。`.node-version` の 24.20.0 に合わせる                                    |
 | ターミナルで押しても反応しない   | `when: terminalFocus` のため、ターミナルにフォーカスが必要                            |
 | 貼り付けたら元の内容が消えていた | クリップボードの復元が失敗している。不具合として報告する                              |
 | `Ask Clipboard` が候補に出ない   | `package.json` の変更はリロードでは反映されない。デバッグを停止して `F5` で起動し直す |

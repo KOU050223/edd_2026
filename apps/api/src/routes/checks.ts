@@ -247,7 +247,7 @@ export function createChecksRoute(resolve: ChecksDepsResolver) {
 
     // 生成のコストは `ai_usage` に載らない。**唯一の記録がこのログである。**
     // 148 件を埋めるまでの総量を後から数えられるよう、1件ずつ残す
-    // （docs/architecture.md「監視・監査ログ・障害時の再送」）。
+    // （docs/api-ops.md「監視・監査ログ・障害時の再送」）。
     // トークン数が取れなければ 0 で埋めず、取れなかったこととして残す。
     console.info("check generation completed", {
       conceptId,

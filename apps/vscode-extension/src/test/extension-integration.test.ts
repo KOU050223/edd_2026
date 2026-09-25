@@ -787,7 +787,7 @@ const LEARNER_PROFILE_KEY = "gakushuSochi.learnerProfile";
 const APPLIED_RESET_KEY = "gakushuSochi.appliedHistoryResetAtMs";
 
 test("削除コマンドはサーバー削除の成功後にローカルのコピーを消す", async () => {
-  // docs/architecture.md「クライアント側に残るコピー」: サーバー側の成功を
+  // docs/data-privacy.md「クライアント側に残るコピー」: サーバー側の成功を
   // 確かめてから globalState を空にする。
   showWarningMessage.mockResolvedValueOnce("削除する");
   deleteServerLearningData.mockResolvedValueOnce({

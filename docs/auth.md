@@ -122,6 +122,9 @@ grant type とアプリ登録数の上限を記載していない。
 なお、いずれも一般的な grant 設定であって有料機能として案内されている形跡は無いため、
 使える見込みは高いと考えているが、**確認していないことは確認していないと書いておく。**
 
+**追記（Auth/01 で確認済み）**: 3アプリ + API 1つの登録、Device Code グラントの有効化、
+`Allow Offline Access` ともに Free プランで動作した（§5 の client_id 一覧）。
+
 ## 3. 全体構成
 
 ```text
@@ -160,9 +163,10 @@ grant type とアプリ登録数の上限を記載していない。
 
 **この約束を守る。** `AuthenticatedUser` / `AuthVariables` の形とハンドラ
 （sync / profile / activity / ai）は変えず、`devAuth` を `requireAuth` に差し替える。
-ただし完全な無差分ではない。検証の実体を注入するため、`app.ts:75` の
-`app.use("/v1/*", devAuth)` が `app.use("/v1/*", createAuth((env) => …))` になる。
-**変わるのはこの組み立て1行だけ**である。
+ただし完全な無差分ではない。検証の実体を注入するため、`app.ts` の
+`app.use("/v1/*", devAuth)` が `app.use("/v1/*", requireAuth)` になった
+（`requireAuth` は `createAuth((env) => resolveVerifier(env))`、middleware.ts）。
+**変わったのはこの組み立て1行だけ**である。
 
 ```ts
 export interface AuthenticatedUser {
@@ -506,12 +510,12 @@ Gemini 3.5 Flash の単価（入力 $1.50 / 出力 $9.00）なら同じ上限で
 
 **上限値そのものは決定済みである。** Free / Pro の区分と、Managed AI の
 日次・月次のトークン上限、上限到達時の挙動は
-[`docs/architecture.md`](architecture.md)「Free / Pro の境界と Managed AI の利用上限」が正典である
+[`docs/ai-limits.md`](ai-limits.md)が正典である
 （**当面 Free のみ。1人あたり月 150 回 / 日 15 回、かつ1回あたり入力 6,000 + 出力 2,048 tokens。
 上限到達時は Managed AI だけを 429 で止め、Copilot / BYOK へ案内する**）。
 **月150回は仮置きで、利用実績が取れたら見直す前提の数字である。**
 この節は「上限が無いと何が起きるか」を示す側であり、**数字を変えるときは
-`architecture.md` を直す。** Auth/10 が実装する上限値はそこから読む。
+`ai-limits.md` を直す。** Auth/10 が実装する上限値はそこから読む。
 
 これが「認証方式の違いによるお金の心配」への答えである。
 心配すべきは IdP の料金ではなく、**個人を識別できないと支出に上限を掛けられないこと**。
@@ -558,7 +562,7 @@ Gemini API の利用規約では、**無料枠は Google が送信内容と生�
 （レビュー前にアカウントと API キーからは切り離される）。
 有料枠では「プロンプトや応答をプロダクト改善に利用しない」と明示されている。
 
-`docs/architecture.md`「データとプライバシー」は、選択範囲・質問本文・診断メッセージに
+`docs/data-privacy.md` は、選択範囲・質問本文・診断メッセージに
 **業務上の機密情報や個人情報が含まれうる**と認めている。
 `routes/ai.ts` が Google へ送っているのは、まさにその `selection` と `question` である。
 
@@ -566,7 +570,7 @@ Gemini API の利用規約では、**無料枠は Google が送信内容と生�
 有料枠への移行は「請求が発生する変更」であると同時に「送信内容が学習に使われなくなる
 変更」でもあり、後者のほうが重い。移行時期はこの順序で評価する。
 それまでの間は、送信内容の扱いを利用者へ明示する責任がある
-（`architecture.md`「コード・質問本文を送信／保存する際の同意UI」）。
+（`docs/data-privacy.md`「同意を取るまで送らない」）。
 
 **有料枠へ移る前に Auth/10（利用量の計測と上限）を先に入れること。**
 無料枠はレート制限が事実上の防波堤になっているが、有料枠にすればその壁が外れ、
