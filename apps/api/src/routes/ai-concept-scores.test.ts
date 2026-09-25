@@ -77,6 +77,34 @@ test("Concept ごとの score と、閾値を超えた Concept ID を返す", as
   expect(typeof body.latencyMs).toBe("number");
 });
 
+test("判定結果を Workers Logs から追えるよう、採用結果と計測値をログに残す", async () => {
+  const run = stubJev({ "go.defer": 0.9, "go.channel": 0.1 });
+  const { app } = buildApp({ ai: { run } as unknown as Ai });
+  const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+  const response = await ask(app, { selection: "defer f()", languageId: "go" });
+
+  expect(response.status).toBe(200);
+  // 比較材料として全 Concept の score を残す。コード本文・質問文は
+  // プライバシー方針上ログへ出さない（docs/architecture.md「データとプライバシー」）。
+  expect(log).toHaveBeenCalledWith(
+    "ai concept scoring completed",
+    expect.objectContaining({
+      userId: "user-a",
+      model: "jev-1.13.0",
+      languageId: "go",
+      threshold: DEFAULT_CONCEPT_THRESHOLD,
+      conceptIds: ["go.defer"],
+      usage: { inputTokens: 500, outputTokens: 60 },
+      latencyMs: 0,
+    }),
+  );
+  const scores = (log.mock.calls[0]?.[1] as ConceptScoresBody).scores;
+  expect(scores).toContainEqual({ conceptId: "go.defer", score: 0.9 });
+  expect(JSON.stringify(log.mock.calls[0]?.[1])).not.toContain("defer f()");
+  log.mockRestore();
+});
+
 test("Concept ごとに noul の質問を組み立て、languageId に対応する Concept だけを問い合わせる", async () => {
   const run = stubJev({});
   const { app } = buildApp({ ai: { run } as unknown as Ai });

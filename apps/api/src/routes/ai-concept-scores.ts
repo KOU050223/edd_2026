@@ -231,14 +231,32 @@ export function createAiConceptScoresRoute(resolve: ConceptScoresDepsResolver) {
     }
 
     const threshold = body.threshold ?? DEFAULT_CONCEPT_THRESHOLD;
+    const adopted = scores
+      .filter((score) => score.score >= threshold)
+      .map((score) => score.conceptId);
+    const model = readModel(response);
+    const usage = readUsage(response);
+    // PoC の比較材料を Workers Logs から取れるよう、判定結果を丸ごと残す。
+    // scores・usage・latency が既存方式との比較（精度・token・latency）の
+    // 一次情報になる。コード本文・質問文・ファイル名はプライバシー方針上
+    // ログへ出さない（docs/architecture.md「データとプライバシー」）。
+    console.log("ai concept scoring completed", {
+      userId,
+      model,
+      languageId: body.languageId,
+      conceptCount: conceptIds.length,
+      threshold,
+      conceptIds: adopted,
+      scores,
+      usage,
+      latencyMs,
+    });
     const result: ConceptScoresBody = {
-      model: readModel(response),
+      model,
       threshold,
       scores,
-      conceptIds: scores
-        .filter((score) => score.score >= threshold)
-        .map((score) => score.conceptId),
-      usage: readUsage(response),
+      conceptIds: adopted,
+      usage,
       latencyMs,
     };
     return c.json(result);
