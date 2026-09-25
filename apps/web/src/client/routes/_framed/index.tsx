@@ -122,6 +122,16 @@ function AreaIndex() {
                     style={{ width: `${(summary.learning / summary.total) * 100}%` }}
                   />
                 </div>
+                {/* Concept 1 つを 1 つのブロックで出す。帯は割合しか見せないので、
+                    「あと何個か」が数えられるようにこちらも並べる。 */}
+                <span className="area-blocks" aria-hidden="true">
+                  {tree.nodes.map((node) => (
+                    <i
+                      key={node.conceptId}
+                      className={concepts.get(node.conceptId)?.status ?? "unobserved"}
+                    />
+                  ))}
+                </span>
                 <p className="area-counts">
                   {summary.complete ? (
                     <span className="area-complete">全 {summary.total} Concept を確認済み</span>
