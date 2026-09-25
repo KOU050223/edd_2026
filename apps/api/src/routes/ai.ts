@@ -36,6 +36,12 @@ import {
   type AiUsageSummary,
 } from "../contract/ai-usage.js";
 import type { AiUsageRepository, IdentityRepository } from "../repository/types.js";
+import {
+  MAX_CONVERSATIONS_PER_ANALYSIS,
+  historyAnalysisRequestSchema,
+  historyObservationSchema,
+  type HistoryAnalysisResponse,
+} from "../contract/history-import.js";
 
 // persona の上限は domain が正本。desktop の設定画面と VSCode 拡張の設定も同じ値を使う。
 const requestSchema = v.object({
@@ -392,7 +398,244 @@ export function createAiRoute(resolve: AiDepsResolver) {
     });
   });
 
+  /**
+   * `POST /v1/ai/history-analysis`（Issue #157）。外部履歴の分析を
+   * Managed AI で行う経路。ローカルルールとユーザー所有 AI で
+   * カバーしきれない場合の fallback であり、同じ利用枠を消費する。
+   *
+   * 会話本文は保存しない。上流へ渡して応答を受けた時点で破棄される
+   * （docs/architecture.md「必要以上に保存・送信しない」）。
+   * 応答は構造化した観測だけであり、自由文をそのまま返さない。
+   */
+  route.post(
+    "/ai/history-analysis",
+    vValidator("json", historyAnalysisRequestSchema),
+    async (c) => {
+      const { conversations, knownConceptIds } = c.req.valid("json");
+      const deps = resolve(c.env);
+      if (!deps.apiKey) {
+        console.error("ai service is not configured", { path: c.req.path });
+        return c.json({ error: "AI service is not configured" }, 503);
+      }
+
+      const model = deps.model ?? ALLOWED_MODELS[0];
+      if (!isAllowedModel(model)) {
+        console.error("configured GEMINI_MODEL is not in the allowlist", { model });
+        return c.json({ error: "model is not allowed" }, 503);
+      }
+
+      const prompt = buildHistoryAnalysisPrompt(conversations, knownConceptIds);
+      const estimatedInputTokens = estimateInputTokens(prompt);
+      if (estimatedInputTokens > AI_USAGE_LIMITS.inputTokensPerRequest) {
+        return c.json(
+          {
+            error: "input is too large",
+            message: `入力が1回あたりの上限を超える見積もりです。会話の件数を減らしてください。`,
+            limitTokens: AI_USAGE_LIMITS.inputTokensPerRequest,
+            estimatedTokens: estimatedInputTokens,
+          },
+          400,
+        );
+      }
+
+      const userId = c.get("user").userId;
+      const now = deps.now();
+      const monthKey = utcMonthKey(now);
+      const dayKey = utcDayKey(now);
+
+      await deps.identity.ensureUser({ userId, nowMs: now.getTime() });
+
+      const before = await deps.usage.get({ userId, monthKey, dayKey });
+      if (before.monthlyTokens >= AI_USAGE_LIMITS.monthlyTokens) {
+        console.warn("ai usage token safety valve reached", {
+          userId,
+          monthKey,
+          monthlyTokens: before.monthlyTokens,
+          limit: AI_USAGE_LIMITS.monthlyTokens,
+        });
+        return c.json(limitReached("tokens", now), 429);
+      }
+      const { reserved, usage: after } = await deps.usage.reserve({
+        userId,
+        monthKey,
+        dayKey,
+        updatedAt: now.toISOString(),
+        limits: {
+          dailyRequests: AI_USAGE_LIMITS.dailyRequests,
+          monthlyRequests: AI_USAGE_LIMITS.monthlyRequests,
+        },
+      });
+      if (!reserved) {
+        const kind: AiUsageLimitKind =
+          after.monthlyRequests >= AI_USAGE_LIMITS.monthlyRequests ? "monthly" : "daily";
+        return c.json(limitReached(kind, now), 429);
+      }
+
+      let upstream: Response;
+      try {
+        // 分析は JSON を1回だけ受け取るため、ストリーミングではなく
+        // 同期的な generateContent を使う。
+        upstream = await deps.fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+          {
+            method: "POST",
+            headers: { "x-goog-api-key": deps.apiKey, "Content-Type": "application/json" },
+            // 資格情報を転送先へ流さない（RULE-002）。
+            redirect: "error",
+            // 複数会話の分析は時間がかかるが、応答が戻らないまま予約した
+            // 回数枠をぶら下げ続けさせない（RULE-001）。
+            signal: AbortSignal.timeout(120_000),
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: prompt }] }],
+              generationConfig: {
+                responseMimeType: "application/json",
+                maxOutputTokens: AI_USAGE_LIMITS.outputTokensPerRequest,
+              },
+            }),
+          },
+        );
+      } catch (cause) {
+        console.error("ai upstream request failed", { userId, model, cause });
+        return c.json({ error: "AI upstream request failed" }, 502);
+      }
+
+      if (!upstream.ok) {
+        console.error("ai upstream request failed", { userId, model, status: upstream.status });
+        return c.json({ error: "AI upstream request failed" }, 502);
+      }
+
+      let upstreamBody: unknown;
+      try {
+        upstreamBody = await upstream.json();
+      } catch (cause) {
+        // 2xx で本文が読めないのは失敗として扱う。空の観測を返すと
+        // 「分析したが何も見つからなかった」と区別がつかない（RULE-004）。
+        console.error("ai analysis response is not valid JSON", { userId, model, cause });
+        return c.json({ error: "AI analysis response was invalid" }, 502);
+      }
+
+      const text = extractGenerateContentText(upstreamBody);
+      if (text === null) {
+        console.error("ai analysis response has no text", { userId, model });
+        return c.json({ error: "AI analysis response was invalid" }, 502);
+      }
+
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(text);
+      } catch (cause) {
+        console.error("ai analysis output is not valid JSON", { userId, model, cause });
+        return c.json({ error: "AI analysis response was invalid" }, 502);
+      }
+      const rawObservations = (parsed as { observations?: unknown }).observations;
+      if (!Array.isArray(rawObservations)) {
+        console.error("ai analysis output has no observations array", { userId, model });
+        return c.json({ error: "AI analysis response was invalid" }, 502);
+      }
+
+      // 構造の合わない観測は黙って捨てず、件数を応答へ載せる。
+      const observations: HistoryAnalysisResponse["observations"] = [];
+      let dropped = 0;
+      for (const item of rawObservations) {
+        const observation = v.safeParse(historyObservationSchema, item);
+        if (observation.success) observations.push(observation.output);
+        else dropped += 1;
+      }
+
+      // 実消費のトークンを蓄積する。非ストリームなので応答本文から
+      // usageMetadata を読める。取れなければ見積もりを足して記録する
+      // （0 で済ませると安全弁が効かない）。
+      const totalTokens = readUsageMetadataTokens(upstreamBody);
+      const tokens = totalTokens ?? estimatedInputTokens + AI_USAGE_LIMITS.outputTokensPerRequest;
+      if (totalTokens === null) {
+        console.warn("ai analysis returned no usageMetadata; recording an estimate", {
+          userId,
+          monthKey,
+          model,
+          estimatedTokens: tokens,
+        });
+      }
+      try {
+        await deps.usage.addTokens({
+          userId,
+          monthKey,
+          dayKey,
+          tokens,
+          updatedAt: deps.now().toISOString(),
+        });
+      } catch (cause) {
+        console.error("failed to record ai token usage", { userId, monthKey, tokens, cause });
+      }
+
+      const body: HistoryAnalysisResponse = { observations, droppedObservations: dropped };
+      return c.json(body);
+    },
+  );
+
   return route;
+}
+
+/**
+ * 履歴分析のプロンプト。
+ *
+ * `knownConceptIds` を「選んでよい候補」として渡す。一覧に無い話題を
+ * 既存 Concept へ押し込まないよう、一覧に無い候補は自然言語の名前のまま
+ * 返してよいことを明示する。
+ */
+function buildHistoryAnalysisPrompt(
+  conversations: readonly { sourceId: string; title?: string; body: string; observedAt?: string }[],
+  knownConceptIds: readonly string[],
+): string {
+  const lines = conversations.map((conversation) =>
+    [
+      `--- conversation ${conversation.sourceId} ---`,
+      conversation.title === undefined ? "" : `title: ${conversation.title}`,
+      conversation.observedAt === undefined ? "" : `observedAt: ${conversation.observedAt}`,
+      conversation.body,
+    ]
+      .filter((line) => line.length > 0)
+      .join("\n"),
+  );
+  return [
+    "あなたは学習履歴の分析器です。以下の会話履歴を読み、各会話で学習者が触れた概念を抽出してください。",
+    '出力は JSON オブジェクト1つだけで、{"observations": [...]} の形にしてください。',
+    "observations の各要素は次の形です:",
+    '{ "sourceId": "会話のID（入力のものをそのまま）", "conceptCandidates": ["概念の候補"], "kind": "question|debugging|explanation|implementation|verification", "confidence": 0.0〜1.0, "observedAt": "ISO 8601（分かれば）" }',
+    "conceptCandidates には、分かる場合は次の既知の Concept ID を使ってください:",
+    knownConceptIds.join(", "),
+    '一覧に合うものが無い場合は、無理に当てはめず短い名前（例: "kubernetes"）をそのまま返してください。',
+    `会話数の上限は ${String(MAX_CONVERSATIONS_PER_ANALYSIS)} 件です。1会話につき観測は最大3件まで。`,
+    "プログラミングと無関係な会話からは観測を作らないでください。",
+    "",
+    ...lines,
+  ].join("\n");
+}
+
+/** generateContent の応答から本文テキストを取り出す。取れなければ null。 */
+function extractGenerateContentText(body: unknown): string | null {
+  if (typeof body !== "object" || body === null) return null;
+  const candidates = (body as { candidates?: unknown }).candidates;
+  if (!Array.isArray(candidates)) return null;
+  const parts: string[] = [];
+  for (const candidate of candidates) {
+    const content = (candidate as { content?: unknown }).content;
+    const partList = (content as { parts?: unknown })?.parts;
+    if (!Array.isArray(partList)) continue;
+    for (const part of partList) {
+      const text = (part as { text?: unknown }).text;
+      if (typeof text === "string") parts.push(text);
+    }
+  }
+  return parts.length === 0 ? null : parts.join("");
+}
+
+/** generateContent の応答から usageMetadata.totalTokenCount を読む。 */
+function readUsageMetadataTokens(body: unknown): number | null {
+  if (typeof body !== "object" || body === null) return null;
+  const usage = (body as { usageMetadata?: unknown }).usageMetadata;
+  if (typeof usage !== "object" || usage === null) return null;
+  const total = (usage as { totalTokenCount?: unknown }).totalTokenCount;
+  return typeof total === "number" && Number.isFinite(total) ? total : null;
 }
 
 /**

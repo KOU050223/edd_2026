@@ -10,10 +10,16 @@
  * この境界の外へその都合を漏らさない。
  */
 
-import type { LearningEvent } from "@gakushu-sochi/domain";
-import type { MasteryStatus } from "@gakushu-sochi/domain";
+import type {
+  HistoryProviderId,
+  LearningEvent,
+  LearningEvidence,
+  MasteryStatus,
+  UnmappedCandidate,
+} from "@gakushu-sochi/domain";
 import type { AreaCompletion } from "../contract/area-completions.js";
 import type { UserSettings, UserSettingsInput } from "../contract/user-settings.js";
+import type { ImportSessionView } from "../contract/history-import.js";
 
 /** 退会済みの sub を、発行済みアクセストークンの寿命を超えて再利用可能にする期間。 */
 export const ACCOUNT_DELETION_TOMBSTONE_TTL_MS = 60 * 60 * 1_000;
@@ -142,6 +148,101 @@ export interface LearningEventRepository {
   latestResetAtMs(userId: string): Promise<number | null>;
 }
 
+/**
+ * 外部履歴から取り込んだ Evidence の永続化（Issue #157）。
+ *
+ * `LearningEventRepository` とは別の表にする。LearningEvent は「実際の
+ * 学習行動」の正本であり、外部履歴の「触れた形跡」と同じ意味で混ぜると、
+ * 習熟度の導出が外部履歴の量に引きずられる（docs/concepts.md）。
+ */
+export interface LearningEvidenceRepository {
+  /** 1ユーザーの全 Evidence を読む。Familiarity の導出と出典表示に使う。 */
+  listByUser(userId: string): Promise<LearningEvidence[]>;
+
+  /** 1つの Import Session に属する Evidence を読む（詳細表示・Undo の確認）。 */
+  listBySession(userId: string, sessionId: string): Promise<LearningEvidence[]>;
+
+  /**
+   * 指定した履歴ソース由来の Evidence を全件消す（ソース管理の削除）。
+   *
+   * 消した結果、Evidence が残らなくなった Session は `undone` に倒す。
+   * @returns 消した件数と、undone に倒した Session の件数。
+   */
+  deleteByProvider(
+    userId: string,
+    provider: HistoryProviderId,
+    updatedAt: string,
+  ): Promise<{ deletedCount: number; sessionsMarkedUndone: number }>;
+
+  /**
+   * 1ユーザーの全 Evidence を消す（学習履歴の削除に追随）。
+   * @returns 消した件数。0件でも成功とする。
+   */
+  deleteAllByUser(userId: string): Promise<number>;
+}
+
+/** `POST /v1/import-sessions` が保存する Session の入力。 */
+export interface StoredImportSessionInput {
+  id: string;
+  importedBy: string;
+  providers: readonly string[];
+  conversationCount: number;
+  ignoredCount: number;
+  unmappedCandidates: readonly UnmappedCandidate[];
+  evidenceCount: number;
+  conceptCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * Import Session の永続化（Issue #157）。
+ *
+ * Session と Evidence の作成を1つの操作にまとめる。別々にすると、
+ * Session だけが残る「中身の無い Import」か、Session の無い Evidence が
+ * 書ける中途半端な状態を作りうる。
+ */
+export interface ImportSessionRepository {
+  /**
+   * Session と Evidence を1トランザクションで作る。
+   *
+   * 同じ `id` の Session が既にある場合は何も書かず `alreadyExisted: true`
+   * を返す（再送の正常系）。Evidence も `(user_id, id)` で冪等にする。
+   */
+  createWithEvidence(
+    userId: string,
+    session: StoredImportSessionInput,
+    evidence: readonly LearningEvidence[],
+  ): Promise<{ alreadyExisted: boolean }>;
+
+  /** 1ユーザーの Session を新しい順に列挙する。 */
+  listByUser(userId: string): Promise<ImportSessionView[]>;
+
+  /** Session 1件と、その Evidence。無ければ `null`。 */
+  getById(
+    userId: string,
+    id: string,
+  ): Promise<{ session: ImportSessionView; unmappedCandidates: UnmappedCandidate[] } | null>;
+
+  /**
+   * `applied` の Session を `undone` にし、その Evidence を消す（Undo）。
+   *
+   * @returns 現在の状態。消した Evidence の件数は `deletedEvidenceCount`。
+   *   既に undone なら `deletedEvidenceCount: 0` で `undone` を返す。
+   *   undone へ遷移できない状態（scanning 等）でも現在の status を
+   *   `deletedEvidenceCount: 0` とともに返し、呼び出し側が 409 を判断する。
+   *   `null` は Session が無い場合に限る（呼び出し側が 404 にする）。
+   */
+  undo(
+    userId: string,
+    sessionId: string,
+    updatedAt: string,
+  ): Promise<{ status: string; deletedEvidenceCount: number } | null>;
+
+  /** 1ユーザーの全 Session を消す（学習履歴の削除に追随）。消した件数を返す。 */
+  deleteAllByUser(userId: string): Promise<number>;
+}
+
 export interface MasteryOverride {
   status: MasteryStatus;
   updatedAt: string;
@@ -260,7 +361,11 @@ export interface AiUsageRepository {
  * 正本なので二重に持たない。対象の増減は docs/architecture.md の
  * 「監視・監査ログ・障害時の再送」と一緒に変える。
  */
-export type AuditAction = "learning_events.exported" | "learning_events.deleted";
+export type AuditAction =
+  | "learning_events.exported"
+  | "learning_events.deleted"
+  | "learning_evidence.exported"
+  | "learning_evidence.deleted";
 
 /** 監査ログの1件。 */
 export interface AuditLogEntry {

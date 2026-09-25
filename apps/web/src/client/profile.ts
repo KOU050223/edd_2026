@@ -1,3 +1,5 @@
+import type { ConceptFamiliarity } from "@gakushu-sochi/domain";
+
 export interface Concept {
   conceptId: string;
   label?: string;
@@ -9,6 +11,16 @@ export interface Concept {
     /** 直近で観測したイベントの時刻。ISO 8601。現在地の判定に使う。 */
     lastObservedAt?: string;
   };
+}
+
+/**
+ * 外部履歴由来の「触れた形跡」（Issue #157）。
+ *
+ * API の `learning-profile` 応答の `familiarity` 要素。
+ * Mastery（現在理解している）とは別の軸で、Concept の status には混ぜない。
+ */
+export interface Familiarity extends ConceptFamiliarity {
+  label?: string;
 }
 
 export function summarizeConcepts<T extends Pick<Concept, "conceptId" | "status">>(

@@ -10,7 +10,7 @@ export default [
   {
     files: ["src/renderer/**/*.js"],
     languageOptions: {
-      globals: { document: "readonly", window: "readonly" },
+      globals: { document: "readonly", window: "readonly", navigator: "readonly" },
     },
   },
 ];

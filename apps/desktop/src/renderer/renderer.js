@@ -1,5 +1,6 @@
 import { renderMarkdown } from "./markdown.js";
 import { AUTH_LABELS, authStatusLabel, shouldApplyAuthState } from "./auth-status.js";
+import { setupImportWizard } from "./history.js";
 
 const $ = (id) => document.getElementById(id);
 const error = $("error"),
@@ -248,6 +249,9 @@ const openSettings = async () => {
   $("api-base-url").focus();
 };
 
+// 履歴インポート wizard（Issue #157）。inert 対象は設定シートと同じ。
+const importWizard = setupImportWizard({ showError, showNotice, inertTargets: backdrop });
+
 // 閉じる経路は 3 つ（キャンセル・保存・Escape）ある。inert の解除と
 // フォーカス復帰を取りこぼさないよう、必ずここを通す。
 const closeSettings = () => {
@@ -284,9 +288,13 @@ form.onsubmit = async (event) => {
 };
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
-    // 設定シートが開いていれば、まずそれだけ閉じる。
+    // モーダルが開いていれば、まずそれだけ閉じる。
     if (!form.hidden) {
       closeSettings();
+      return;
+    }
+    if (importWizard.isOpen()) {
+      importWizard.close();
       return;
     }
     window.desktop.close();

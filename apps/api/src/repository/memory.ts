@@ -7,15 +7,24 @@
  * SQL 側と一致させてある。
  */
 
-import type { LearningEvent } from "@gakushu-sochi/domain";
+import type {
+  HistoryProviderId,
+  LearningEvent,
+  LearningEvidence,
+  UnmappedCandidate,
+} from "@gakushu-sochi/domain";
+import type { ImportSessionView } from "../contract/history-import.js";
 import { ACCOUNT_DELETION_TOMBSTONE_TTL_MS } from "./types.js";
 import type {
   AppendResult,
   AuditLogEntry,
   AuditLogRepository,
   IdentityRepository,
+  ImportSessionRepository,
   LearningEventRepository,
+  LearningEvidenceRepository,
   StoredEventInput,
+  StoredImportSessionInput,
 } from "./types.js";
 
 export interface InMemoryRepositoryStore {
@@ -27,6 +36,17 @@ export interface InMemoryRepositoryStore {
   readonly historyResets: Map<string, number>;
   /** D1 の audit_log に対応する。追記のみ。 */
   readonly auditLog: AuditLogEntry[];
+  /** userId -> (evidenceId -> evidence)。D1 の learning_evidence に対応する。 */
+  readonly evidenceByUser: Map<string, Map<string, LearningEvidence>>;
+  /**
+   * userId -> (sessionId -> session)。
+   * D1 の import_sessions に対応する。view に session の入力をそのまま持ち、
+   * unmappedCandidates は view に含まれないため別途持つ。
+   */
+  readonly importSessionsByUser: Map<
+    string,
+    Map<string, { session: ImportSessionView; unmappedCandidates: UnmappedCandidate[] }>
+  >;
 }
 
 export function createInMemoryRepositoryStore(): InMemoryRepositoryStore {
@@ -37,6 +57,8 @@ export function createInMemoryRepositoryStore(): InMemoryRepositoryStore {
     deletingUsers: new Map(),
     historyResets: new Map(),
     auditLog: [],
+    evidenceByUser: new Map(),
+    importSessionsByUser: new Map(),
   };
 }
 
@@ -190,6 +212,9 @@ export class InMemoryIdentityRepository implements IdentityRepository {
     this.devicesByUser.delete(userId);
     this.store.eventsByUser.delete(userId);
     this.store.historyResets.delete(userId);
+    // learning_evidence / import_sessions も users(id) を CASCADE で参照する。
+    this.store.evidenceByUser.delete(userId);
+    this.store.importSessionsByUser.delete(userId);
     // D1 の audit_log は users(id) を ON DELETE CASCADE で参照している。
     // 退会で監査ログも消えるという実際の振る舞いに合わせる。
     for (let i = this.store.auditLog.length - 1; i >= 0; i--) {
@@ -227,5 +252,184 @@ export class InMemoryAuditLogRepository implements AuditLogRepository {
   record(entry: AuditLogEntry): Promise<void> {
     this.store.auditLog.push(entry);
     return Promise.resolve();
+  }
+}
+
+/**
+ * `LearningEvidenceRepository` のインメモリ実装。テスト用。
+ *
+ * D1 実装と同じく、セッション単位・ソース単位・全件の削除を持つ。
+ */
+export class InMemoryLearningEvidenceRepository implements LearningEvidenceRepository {
+  private readonly byUser: Map<string, Map<string, LearningEvidence>>;
+
+  constructor(private readonly store = createInMemoryRepositoryStore()) {
+    this.byUser = store.evidenceByUser;
+  }
+
+  listByUser(userId: string): Promise<LearningEvidence[]> {
+    const items = [...(this.byUser.get(userId)?.values() ?? [])];
+    items.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    return Promise.resolve(items);
+  }
+
+  listBySession(userId: string, sessionId: string): Promise<LearningEvidence[]> {
+    const items = [...(this.byUser.get(userId)?.values() ?? [])]
+      .filter((item) => item.importSessionId === sessionId)
+      .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    return Promise.resolve(items);
+  }
+
+  deleteByProvider(
+    userId: string,
+    provider: HistoryProviderId,
+    updatedAt: string,
+  ): Promise<{ deletedCount: number; sessionsMarkedUndone: number }> {
+    const items = this.byUser.get(userId);
+    let deletedCount = 0;
+    if (items !== undefined) {
+      for (const [id, item] of items) {
+        if (item.source.provider === provider) {
+          items.delete(id);
+          deletedCount += 1;
+        }
+      }
+    }
+    // D1 と同じく、Evidence が残らなくなった applied の Session を undone に倒す。
+    let sessionsMarkedUndone = 0;
+    const sessions = this.store.importSessionsByUser.get(userId);
+    if (sessions !== undefined) {
+      for (const [sessionId, record] of sessions) {
+        if (record.session.status !== "applied") continue;
+        const remaining = [...(this.byUser.get(userId)?.values() ?? [])].some(
+          (item) => item.importSessionId === sessionId,
+        );
+        if (!remaining) {
+          record.session = { ...record.session, status: "undone", updatedAt };
+          sessionsMarkedUndone += 1;
+        }
+      }
+    }
+    return Promise.resolve({ deletedCount, sessionsMarkedUndone });
+  }
+
+  deleteAllByUser(userId: string): Promise<number> {
+    const count = this.byUser.get(userId)?.size ?? 0;
+    this.byUser.delete(userId);
+    return Promise.resolve(count);
+  }
+}
+
+/**
+ * `ImportSessionRepository` のインメモリ実装。テスト用。
+ */
+export class InMemoryImportSessionRepository implements ImportSessionRepository {
+  private readonly byUser: Map<
+    string,
+    Map<string, { session: ImportSessionView; unmappedCandidates: UnmappedCandidate[] }>
+  >;
+
+  constructor(private readonly store = createInMemoryRepositoryStore()) {
+    this.byUser = store.importSessionsByUser;
+  }
+
+  createWithEvidence(
+    userId: string,
+    session: StoredImportSessionInput,
+    evidence: readonly LearningEvidence[],
+  ): Promise<{ alreadyExisted: boolean }> {
+    if (isDeletionActive(this.store, userId, Date.now())) {
+      return Promise.reject(new Error("user deletion is in progress"));
+    }
+    let sessions = this.byUser.get(userId);
+    if (sessions === undefined) {
+      sessions = new Map();
+      this.byUser.set(userId, sessions);
+    }
+    if (sessions.has(session.id)) {
+      // 再送の正常系。D1 の ON CONFLICT DO NOTHING と同じく何も書き足さない。
+      return Promise.resolve({ alreadyExisted: true });
+    }
+
+    const view: ImportSessionView = {
+      id: session.id,
+      status: "applied",
+      importedBy: session.importedBy as ImportSessionView["importedBy"],
+      providers: session.providers as ImportSessionView["providers"],
+      conversationCount: session.conversationCount,
+      ignoredCount: session.ignoredCount,
+      evidenceCount: session.evidenceCount,
+      conceptCount: session.conceptCount,
+      createdAt: session.createdAt,
+      updatedAt: session.updatedAt,
+    };
+    sessions.set(session.id, {
+      session: view,
+      unmappedCandidates: [...session.unmappedCandidates],
+    });
+
+    let items = this.store.evidenceByUser.get(userId);
+    if (items === undefined) {
+      items = new Map();
+      this.store.evidenceByUser.set(userId, items);
+    }
+    for (const item of evidence) {
+      // Evidence も (user_id, id) で冪等。既存を上書きしない。
+      if (!items.has(item.id)) items.set(item.id, item);
+    }
+    return Promise.resolve({ alreadyExisted: false });
+  }
+
+  listByUser(userId: string): Promise<ImportSessionView[]> {
+    const sessions = [...(this.byUser.get(userId)?.values() ?? [])].map((record) => record.session);
+    // D1 側の ORDER BY created_at DESC, id ASC に合わせる。
+    sessions.sort(
+      (a, b) =>
+        Date.parse(b.createdAt) - Date.parse(a.createdAt) ||
+        (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+    );
+    return Promise.resolve(sessions);
+  }
+
+  getById(
+    userId: string,
+    id: string,
+  ): Promise<{ session: ImportSessionView; unmappedCandidates: UnmappedCandidate[] } | null> {
+    const record = this.byUser.get(userId)?.get(id);
+    return Promise.resolve(record ?? null);
+  }
+
+  undo(
+    userId: string,
+    sessionId: string,
+    updatedAt: string,
+  ): Promise<{ status: string; deletedEvidenceCount: number } | null> {
+    const record = this.byUser.get(userId)?.get(sessionId);
+    if (record === undefined) return Promise.resolve(null);
+    if (record.session.status === "undone") {
+      return Promise.resolve({ status: "undone", deletedEvidenceCount: 0 });
+    }
+    if (record.session.status !== "applied") {
+      return Promise.resolve({ status: record.session.status, deletedEvidenceCount: 0 });
+    }
+
+    const items = this.store.evidenceByUser.get(userId);
+    let deletedEvidenceCount = 0;
+    if (items !== undefined) {
+      for (const [id, item] of items) {
+        if (item.importSessionId === sessionId) {
+          items.delete(id);
+          deletedEvidenceCount += 1;
+        }
+      }
+    }
+    record.session = { ...record.session, status: "undone", updatedAt };
+    return Promise.resolve({ status: "undone", deletedEvidenceCount });
+  }
+
+  deleteAllByUser(userId: string): Promise<number> {
+    const count = this.byUser.get(userId)?.size ?? 0;
+    this.byUser.delete(userId);
+    return Promise.resolve(count);
   }
 }

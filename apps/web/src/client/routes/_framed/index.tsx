@@ -1,5 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useRef } from "react";
+import { suggestNextConcepts } from "@gakushu-sochi/domain";
+import type { ConceptFamiliarity, MasteryStatusView } from "@gakushu-sochi/domain";
 import {
   AREAS,
   CompleteBadge,
@@ -41,6 +43,19 @@ function AreaIndex() {
   // 件数はサーバーの記録を正とする。記録は Concept が増えても消えないので、
   // いま全件 確認済みかどうかとは一致しないことがある（RULE-004 の理由で理由も出す）。
   const celebrated = completions?.newlyCompleted ?? [];
+
+  // 外部履歴の形跡があるのに確認されていない Concept を「次に学ぶ候補」にする
+  // （Issue #157）。履歴は Mastery へは混ぜず、候補の提示にだけ使う。
+  const nextCandidates = suggestNextConcepts({
+    familiarity: Object.fromEntries(
+      (profile?.familiarity ?? []).map((entry) => [entry.conceptId, entry]),
+    ) as Record<string, ConceptFamiliarity | undefined>,
+    // 手動修正を反映した status（conceptList）を見る。自動算出のままだと
+    // 「確認済みに直した Concept」が候補に残ってしまう。
+    mastery: Object.fromEntries(
+      conceptList.map((concept) => [concept.conceptId, { status: concept.status }]),
+    ) as Record<string, MasteryStatusView | undefined>,
+  }).filter((id) => concepts.has(id));
 
   // 狭い画面では詳細が一覧の下に回るので、選んだことが見えるところまで送る。
   const selectedConceptId = selected?.conceptId;
@@ -160,6 +175,19 @@ function AreaIndex() {
           />
         )}
       </div>
+      {nextCandidates.length > 0 && (
+        <section className="position" aria-label="次に学ぶ候補">
+          <span className="muted">過去の履歴から、次に学ぶ候補</span>
+          {nextCandidates.map((id) => {
+            const concept = concepts.get(id);
+            return (
+              <button className="link" key={id} onClick={() => goToConcept(id)}>
+                {concept ? nameOf(concept) : id}
+              </button>
+            );
+          })}
+        </section>
+      )}
       {unmapped.length > 0 && (
         <section className="position unmapped" aria-label="地図に無い Concept">
           <span className="muted">地図に無い Concept</span>

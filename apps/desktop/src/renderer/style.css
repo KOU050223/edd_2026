@@ -620,3 +620,102 @@ button:disabled {
     width: auto;
   }
 }
+
+/* — 履歴インポート wizard（Issue #157） — */
+#import {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  justify-content: flex-end;
+  background: color-mix(in srgb, var(--color-neutral-900) 35%, transparent);
+}
+#import[hidden] {
+  display: none;
+}
+
+.import-panel {
+  width: min(480px, 100%);
+}
+
+.import-lead {
+  margin: 0;
+  font-size: 13px;
+  color: var(--color-text);
+}
+
+#import-error {
+  margin: 0;
+  font-size: 12px;
+  color: var(--color-danger, #b00020);
+}
+
+.import-sources,
+.import-concepts,
+#import-warnings,
+#import-unmapped {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: 13px;
+}
+
+.import-sources label,
+.import-concepts label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.import-file {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 12px;
+}
+
+#import-file-name {
+  color: var(--color-text-secondary, #666);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.import-note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--color-text-secondary, #666);
+}
+
+.progress {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--color-neutral-200, #e2e0e0);
+  overflow: hidden;
+}
+
+.progress-bar {
+  height: 100%;
+  width: 0;
+  background: var(--color-accent);
+  transition: width 0.3s ease;
+}
+
+#import-paste {
+  width: 100%;
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+}
+
+#import-paste-area {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+#import-paste-area[hidden] {
+  display: none;
+}

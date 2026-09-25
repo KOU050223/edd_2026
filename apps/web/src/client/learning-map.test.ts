@@ -2,15 +2,18 @@ import type { Concept as ConceptDefinition } from "@gakushu-sochi/domain";
 import { CONCEPTS } from "@gakushu-sochi/domain";
 import { expect, test } from "vitest";
 import {
+  attachFamiliarity,
   completeConcepts,
   conceptAreas,
+  describeFamiliarity,
   findCurrentPosition,
+  historySourceLabel,
   layoutTrees,
   linkConcepts,
   summarizeTree,
 } from "./learning-map.js";
 import { applyOverrides } from "./overrides.js";
-import type { Concept } from "./profile.js";
+import type { Concept, Familiarity } from "./profile.js";
 
 const definition = (id: string, prerequisites: string[] = []): ConceptDefinition => ({
   id,
@@ -206,6 +209,50 @@ test("Concept ID から属する領域を引ける。地図に無い Concept は
   expect(areas.get("go.a")).toBe("go");
   expect(areas.get("ts.a")).toBe("ts");
   expect(areas.has("go.removed")).toBe(false);
+});
+
+const familiarity = (conceptId: string): Familiarity => ({
+  conceptId,
+  observationCount: 7,
+  lastObservedAt: "2026-09-20T00:00:00.000Z",
+  maxConfidence: 0.9,
+  sources: [{ provider: "codex", count: 7, lastObservedAt: "2026-09-20T00:00:00.000Z" }],
+});
+
+test("Familiarity は Concept に結ぶだけで Mastery の値を変えない", () => {
+  const concepts = attachFamiliarity(
+    applyOverrides(completeConcepts([observed("go.a", "confirmed")], DEFINITIONS), {}),
+    [familiarity("go.b")],
+  );
+  const b = concepts.find((concept) => concept.conceptId === "go.b");
+
+  expect(b?.familiarity?.observationCount).toBe(7);
+  expect(b?.status).toBe("unobserved");
+  expect(b?.score).toBeNull();
+});
+
+test("形跡の無い Concept へは familiarity を付けない", () => {
+  const concepts = attachFamiliarity(completeConcepts([], DEFINITIONS), [familiarity("go.a")]);
+
+  expect(concepts.find((concept) => concept.conceptId === "go.a")?.familiarity).toBeDefined();
+  expect(concepts.find((concept) => concept.conceptId === "go.b")?.familiarity).toBeUndefined();
+});
+
+test("既知のソースは表示名へ、未知のソースは ID をそのまま返す", () => {
+  expect(historySourceLabel("codex")).toBe("Codex");
+  expect(historySourceLabel("claude-code")).toBe("Claude Code");
+  expect(historySourceLabel("unknown-source" as "codex")).toBe("unknown-source");
+});
+
+test("「なぜ」の説明はソースの内訳と最後に触れた日付を含む", () => {
+  expect(describeFamiliarity(familiarity("go.a"))).toBe("Codex 7件、最後に触れたのは 2026-09-20");
+});
+
+test("最後に触れた時刻が無ければ日付の説明を省略する", () => {
+  const without = familiarity("go.a");
+  delete without.lastObservedAt;
+
+  expect(describeFamiliarity(without)).toBe("Codex 7件");
 });
 
 test("領域の集計は木に載っている Concept だけを数える", () => {

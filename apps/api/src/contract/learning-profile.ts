@@ -10,7 +10,7 @@
  * 「必要以上に保存・送信しない」方針と噛み合わない。
  */
 
-import type { ConceptMastery, MasteryStatus } from "@gakushu-sochi/domain";
+import type { ConceptFamiliarity, ConceptMastery, MasteryStatus } from "@gakushu-sochi/domain";
 
 /** 読み取りモデルのスキーマバージョン。破壊的変更のときに上げる。 */
 export const LEARNING_PROFILE_RESPONSE_VERSION = 1;
@@ -32,6 +32,18 @@ export interface ConceptMasteryView extends ConceptMastery {
   label?: string;
 }
 
+/**
+ * 外部履歴由来の「触れた形跡」の読み取りモデル（Issue #157）。
+ *
+ * `ConceptFamiliarity` に表示用の `label` を足したもの。Mastery とは
+ * 別の軸であり、`concepts` へ混ぜない。「過去に触れた」ことと
+ * 「現在理解している」ことを区別するためである。
+ */
+export interface ConceptFamiliarityView extends ConceptFamiliarity {
+  /** 表示名。Concept 一覧に無い ID の場合は `undefined`。 */
+  label?: string;
+}
+
 export interface LearningProfileResponse {
   version: number;
   /** サーバーが導出した時刻。ISO 8601。 */
@@ -47,6 +59,11 @@ export interface LearningProfileResponse {
   concepts: ConceptMasteryView[];
   /** 導出の根拠になったイベントの総件数。イベント本体は返さない。 */
   eventCount: number;
+  /**
+   * 外部履歴由来の Familiarity（Issue #157）。
+   * `concepts` と同じく、観測のある Concept だけを並べる。
+   */
+  familiarity: ConceptFamiliarityView[];
 }
 
 /**

@@ -1,12 +1,17 @@
 import { createFileRoute, useRouter } from "@tanstack/react-router";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ApiError, createSubmitGuard } from "../../../api.js";
 import {
+  deleteEvidenceByProvider,
   deleteLearningData,
   exportFileName,
+  fetchImportSessions,
   fetchLearningDataExport,
+  undoImportSession,
   type DeleteLearningDataResult,
+  type ImportSessionView,
 } from "../../../learning-data.js";
+import { historySourceLabel } from "../../../learning-map.js";
 import { toErrorText } from "../../../errors.js";
 import { takeLoginRetry } from "../../../session.js";
 
@@ -172,7 +177,167 @@ function DataSettings() {
           </p>
         )}
       </article>
+
+      <ImportSessionsCard />
     </section>
+  );
+}
+
+/**
+ * 履歴インポートの管理（Issue #157）。
+ *
+ * 「どのソースのデータが残っているか」を見せ、Import 単位の Undo と
+ * ソース単位の削除を提供する。取り込み自体はデスクトップアプリが担う。
+ */
+function ImportSessionsCard() {
+  const router = useRouter();
+  const submitGuard = useRef(createSubmitGuard());
+  const [sessions, setSessions] = useState<ImportSessionView[]>();
+  const [loadError, setLoadError] = useState<string>();
+  const [actionError, setActionError] = useState<string>();
+  const [confirmProvider, setConfirmProvider] = useState<string>();
+
+  const reload = () => {
+    fetchImportSessions(fetch, takeLoginRetry())
+      .then(setSessions)
+      .catch((value: unknown) => {
+        if (value instanceof ApiError && value.kind === "login_required") return;
+        setLoadError(toErrorText(value));
+      });
+  };
+
+  // 設定画面を開いたタイミングで一度だけ取る。一覧は操作ごとに取り直す。
+  useEffect(reload, []);
+
+  const providers = [...new Set((sessions ?? []).flatMap((session) => session.providers))].sort();
+
+  const undo = (id: string) => {
+    if (submitGuard.current.isRunning(`undo:${id}`)) return;
+    setActionError(undefined);
+    void submitGuard.current.run(`undo:${id}`, async () => {
+      try {
+        await undoImportSession(fetch, id);
+        reload();
+        await router.invalidate();
+      } catch (value: unknown) {
+        if (value instanceof ApiError && value.kind === "session_expired") {
+          window.location.href = "/login";
+          return;
+        }
+        setActionError(toErrorText(value));
+      }
+    });
+  };
+
+  const deleteProvider = (provider: string) => {
+    if (submitGuard.current.isRunning(`provider:${provider}`)) return;
+    setActionError(undefined);
+    void submitGuard.current.run(`provider:${provider}`, async () => {
+      try {
+        await deleteEvidenceByProvider(fetch, provider);
+        setConfirmProvider(undefined);
+        reload();
+        await router.invalidate();
+      } catch (value: unknown) {
+        if (value instanceof ApiError && value.kind === "session_expired") {
+          window.location.href = "/login";
+          return;
+        }
+        setActionError(toErrorText(value));
+      }
+    });
+  };
+
+  if (loadError) {
+    return (
+      <article className="plan-card">
+        <h3>履歴インポート</h3>
+        <p className="error-text" role="alert">
+          取り込み履歴を取得できませんでした：{loadError}
+        </p>
+      </article>
+    );
+  }
+
+  return (
+    <article className="plan-card">
+      <h3>履歴インポート</h3>
+      <p className="muted">
+        デスクトップアプリが取り込んだ外部 AI の学習履歴の記録です。 Import を取り消すと、その
+        Import で追加された観測がすべて取り除かれます。
+      </p>
+      {sessions === undefined ? (
+        <p className="muted">読み込み中…</p>
+      ) : sessions.length === 0 ? (
+        <p className="muted">取り込まれた履歴はありません。</p>
+      ) : (
+        <ul>
+          {sessions.map((session) => (
+            <li key={session.id}>
+              {new Date(session.createdAt).toLocaleString("ja-JP")}・
+              {session.providers.map(historySourceLabel).join("・")}・観測 {session.evidenceCount}{" "}
+              件・
+              {session.status === "applied"
+                ? "適用済み"
+                : session.status === "undone"
+                  ? "取り消し済み"
+                  : session.status}
+              {session.status === "applied" && (
+                <>
+                  {" "}
+                  <button type="button" className="link" onClick={() => undo(session.id)}>
+                    取り消す
+                  </button>
+                </>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {providers.length > 0 && (
+        <>
+          <h4>ソース単位の削除</h4>
+          <ul>
+            {providers.map((provider) => (
+              <li key={provider}>
+                {historySourceLabel(provider)}{" "}
+                {confirmProvider === provider ? (
+                  <>
+                    <button
+                      type="button"
+                      className="danger"
+                      onClick={() => deleteProvider(provider)}
+                    >
+                      本当に削除する
+                    </button>{" "}
+                    <button
+                      type="button"
+                      className="link"
+                      onClick={() => setConfirmProvider(undefined)}
+                    >
+                      やめる
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    className="link"
+                    onClick={() => setConfirmProvider(provider)}
+                  >
+                    このソースのデータを削除
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      {actionError && (
+        <p className="error-text" role="alert">
+          操作に失敗しました：{actionError}
+        </p>
+      )}
+    </article>
   );
 }
 
