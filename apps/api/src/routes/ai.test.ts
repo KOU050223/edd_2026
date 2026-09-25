@@ -415,7 +415,7 @@ describe("POST /v1/ai/responses", () => {
     });
   });
 
-  describe("1回あたりの上限（docs/architecture.md）", () => {
+  describe("1回あたりの上限（docs/ai-limits.md）", () => {
     it("入力が上限を超えたら、切り捨てずに理由付きで拒否する", async () => {
       const fetchMock = stubUpstream(SSE_WITH_USAGE);
       const harness = buildApp();
@@ -621,7 +621,7 @@ describe("POST /v1/ai/responses", () => {
       const body = (await response.json()) as { message: string };
 
       expect(body.message).toContain("上限");
-      // 上限を BYOK / Copilot への出口にする（docs/architecture.md）。
+      // 上限を BYOK / Copilot への出口にする（docs/ai-limits.md）。
       expect(body.message).toContain("BYOK");
       vi.unstubAllGlobals();
     });
@@ -668,7 +668,7 @@ describe("POST /v1/ai/responses", () => {
       const body = (await response.json()) as { message: string };
 
       expect(response.status).toBe(429);
-      // 内部の別勘定を利用者へ説明しない（docs/architecture.md「利用者への見せ方」）。
+      // 内部の別勘定を利用者へ説明しない（docs/ai-limits.md「利用者への見せ方」）。
       expect(body.message).not.toContain("token");
       // 当たったこと自体が「想定が外れた」という信号なので、記録する。
       expect(warn).toHaveBeenCalled();

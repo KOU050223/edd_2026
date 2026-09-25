@@ -642,7 +642,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // Issue #124: 学習データの削除。サーバー側を消してからこの端末のコピーを消す。
   // 順序をこの向きにするのは、サーバー側の削除が失敗したときに手元だけ消えて
   // 「消えたように見える」状態を作らないためである
-  // （docs/architecture.md「クライアント側に残るコピー」）。
+  // （docs/data-privacy.md「クライアント側に残るコピー」）。
   // このコマンドを呼ばなかった他端末は、同期応答の historyResetAtMs で追従する。
   let deletingLearningData = false;
   const deleteLearningDataCommand = vscode.commands.registerCommand(

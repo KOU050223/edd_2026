@@ -156,7 +156,7 @@ VS Code の外（ブラウザ、Slack、PDF、他のアプリ）でコピーし�
 ## 6. 送信の同意の確認（基盤/07 #119）
 
 この拡張が外へ何かを送る前に、何が誰へ送られるかを提示して同意を取る経路。
-送信先ごとの内容は [architecture.md](architecture.md) の「何が誰へ送られるか」が正本で、
+送信先ごとの内容は [data-privacy.md](data-privacy.md) の「何が誰へ送られるか」が正本で、
 ダイアログの文面は `packages/domain/src/consent.ts` がそれを要約している。
 
 同意は `globalState` に記録される。**設定には出ない**ので、設定画面を探しても見つからないのが正しい。
@@ -212,7 +212,7 @@ VS Code の外（ブラウザ、Slack、PDF、他のアプリ）でコピーし�
 ### Desktop / Web の同意（基盤/11 #174）
 
 同じ文面・同じ版の同意を、Desktop と Web にも展開したもの。記録先はクライアントごとに違う
-（architecture.md「同意を取るまで送らない」が正本）。
+（data-privacy.md「同意を取るまで送らない」が正本）。
 
 **Desktop**: 同意の記録は `userData` 直下の `consent.json`。消すと未同意に戻る。
 

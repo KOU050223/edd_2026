@@ -78,7 +78,7 @@ test("上限を超えたら429にする", async () => {
 });
 
 test("上限への到達はどの経路で誰が止まったかをログに残す", async () => {
-  // レート制限到達数は監視指標の1つ（docs/architecture.md）。
+  // レート制限到達数は監視指標の1つ（docs/api-ops.md）。
   // 429 の応答だけではダッシュボードから経路と利用者が読めない。
   const { limiter } = fakeLimiter(1);
   const request = buildApp(limiter);

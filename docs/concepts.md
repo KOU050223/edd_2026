@@ -382,7 +382,7 @@ Learner Profile はプロジェクトではなく人に紐づくため、`worksp
 `gakushuSochi.consent`（同意の記録）、`gakushuSochi.appliedHistoryResetAtMs`（同期状態）は
 学習データではないため残す。
 サーバー側の削除との順序と、他端末への追従は
-[architecture.md](architecture.md)「クライアント側に残るコピー」を参照。
+[data-privacy.md](data-privacy.md)「クライアント側に残るコピー」を参照。
 
 ### 型を JSON serializable に保つ
 

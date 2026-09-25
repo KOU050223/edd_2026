@@ -1,7 +1,7 @@
 /**
  * 学習データのエクスポートと削除（Issue #173）。
  *
- * Web は学習データのコピーを持たない（docs/architecture.md「クライアント側に残る
+ * Web は学習データのコピーを持たない（docs/data-privacy.md「クライアント側に残る
  * コピー」）ため、ここでの操作はサーバー呼び出しに閉じる。取得した
  * `LearnerProfile` はダウンロードへ流すだけで、localStorage などへ残さない。
  *

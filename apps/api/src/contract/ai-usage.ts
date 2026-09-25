@@ -1,10 +1,10 @@
 /**
  * Managed AI の利用上限と、許可するモデルの契約（Issue #89 / Auth/10）。
  *
- * **政策値の正本は [`docs/architecture.md`](../../../../docs/architecture.md)
- * 「Free / Pro の境界と Managed AI の利用上限」である。** このファイルはそこに
+ * **政策値の正本は [`docs/ai-limits.md`](../../../../docs/ai-limits.md)
+ * である。** このファイルはそこに
  * 書かれた数字を実装へ写したものであり、ここだけを書き換えてはならない。
- * 数字を動かすときは先に architecture.md の表を直し、その値をここへ反映する。
+ * 数字を動かすときは先に ai-limits.md の表を直し、その値をここへ反映する。
  *
  * 上限が無いと何が起きるかは [`docs/auth.md`](../../../../docs/auth.md) §10.1 にある
  * （1ユーザーの日次 約$3,000 / 月 約$91,000）。この契約はその1人月を $1.83 にする。
@@ -29,7 +29,7 @@ export type AllowedModel = (typeof ALLOWED_MODELS)[number];
  * 出典: <https://ai.google.dev/gemini-api/docs/pricing>（有料枠）。
  *
  * **2027-01-01 に倍額になる。** 回数で上限を掛けているため、同じ上限のまま
- * 上限額だけが2倍になる。2026-12 中に architecture.md の試算ごと見直すこと。
+ * 上限額だけが2倍になる。2026-12 中に ai-limits.md の試算ごと見直すこと。
  *
  * 現時点では請求の計算には使っていない。allowlist へモデルを足すときに、
  * 単価を確認せずに足すことを防ぐために置いてある。
@@ -48,7 +48,7 @@ export function isAllowedModel(model: string): model is AllowedModel {
 }
 
 /**
- * Managed AI の上限。政策値（docs/architecture.md）。
+ * Managed AI の上限。政策値（docs/ai-limits.md）。
  *
  * 日次を併記するのは、月次だけだと初日に1ヶ月分を使い切られるため。
  * 15回 × 31日 = 465回 で月次（150回）が先に効くので、
@@ -69,7 +69,7 @@ export const AI_USAGE_LIMITS = {
    * 月150回 × 1回の上限 8,048 tokens = 1,207,200 が理論上の最大で、
    * その約1.08倍に置いてある。**通常は回数が先に尽きる。**
    * この上限に当たること自体が「1回あたりの想定が外れた」という信号なので、
-   * 当たったらログへ残し、政策値を見直す（docs/architecture.md）。
+   * 当たったらログへ残し、政策値を見直す（docs/ai-limits.md）。
    */
   monthlyTokens: 1_300_000,
 } as const;
@@ -109,7 +109,7 @@ export type AiUsageLimitKind = "daily" | "monthly" | "tokens";
 /**
  * 上限到達時に返す本文。
  *
- * **残量は回数で示す**（docs/architecture.md「利用者への見せ方」）。
+ * **残量は回数で示す**（docs/ai-limits.md「利用者への見せ方」）。
  * トークンの安全弁に当たった場合も、利用者へは回数と同じ扱いで見せる。
  * 内部の別勘定を利用者へ説明しない。
  */
@@ -146,7 +146,7 @@ export function nextUtcMonth(now: Date): Date {
 }
 
 /**
- * 利用者が契約しているプラン。**当面 Free のみ**（docs/architecture.md
+ * 利用者が契約しているプラン。**当面 Free のみ**（docs/ai-limits.md
  * 「決定: 当面 Free のみ。Pro は作らない」）。Pro を作るときにここへ足す。
  */
 export type Plan = "free";
@@ -163,7 +163,7 @@ export interface AiUsagePeriod {
  * `GET /v1/ai/usage` の本文。Web の「使用状況」「プラン」画面が読む。
  *
  * **トークン数を含めない。** `monthlyTokens` は利用者へ見せない安全弁であり、
- * 残量は回数で示す（docs/architecture.md「利用者への見せ方」）。
+ * 残量は回数で示す（docs/ai-limits.md「利用者への見せ方」）。
  */
 export interface AiUsageSummary {
   plan: Plan;

@@ -175,7 +175,8 @@ AI Provider
 
 学習履歴は巨大なRAGやVector DBを使わず、イベントの追記ログを正本として
 API Server（D1）へ同期する。クライアントが持つのはオフライン用のローカルキャッシュである。
-同期の契約（冪等性・削除・再送方針）は `docs/architecture.md` が正典である。
+同期の契約（冪等性）は `docs/architecture.md`「オフラインと競合」、削除は
+`docs/data-privacy.md`、再送方針は `docs/api-ops.md` が正典である。
 
 ---
 

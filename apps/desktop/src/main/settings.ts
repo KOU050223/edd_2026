@@ -3,8 +3,8 @@ import { PERSONA_MAX_LENGTH } from "@gakushu-sochi/domain";
 /**
  * Managed AI の1回あたりの出力上限（tokens）。
  *
- * サーバー側の政策値と揃える（docs/architecture.md「Free / Pro の境界と
- * Managed AI の利用上限」/ apps/api/src/contract/ai-usage.ts）。ここを緩めると、
+ * サーバー側の政策値と揃える（docs/ai-limits.md /
+ * apps/api/src/contract/ai-usage.ts）。ここを緩めると、
  * 保存できるのに送信すると必ず 400 で弾かれる設定を利用者に作らせることになる。
  * **サーバー側を直すときは、この値も一緒に動かす。**
  */
@@ -60,7 +60,7 @@ export const DEFAULT_SETTINGS: DesktopSettings = {
 function migrateTightenedPolicies(value: Record<string, unknown>): Record<string, unknown> {
   const migrated = { ...value };
 
-  // 出力上限: 上限を 16,384 から 2,048 へ絞った（docs/architecture.md）。
+  // 出力上限: 上限を 16,384 から 2,048 へ絞った（docs/ai-limits.md）。
   // 大きすぎる値は既定へ戻さず、現在の上限へ丸める。利用者が「大きめ」を
   // 選んでいた意図は、上限いっぱいという形で残るほうが近い。
   if (

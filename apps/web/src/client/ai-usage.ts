@@ -10,7 +10,7 @@ import { ApiError, requestJson } from "./api.js";
 
 export const AI_USAGE_PATH = "/api/v1/ai/usage";
 
-/** 当面 Free のみ（docs/architecture.md「決定: 当面 Free のみ。Pro は作らない」）。 */
+/** 当面 Free のみ（docs/ai-limits.md「決定: 当面 Free のみ。Pro は作らない」）。 */
 export type Plan = "free";
 
 export interface AiUsagePeriod {

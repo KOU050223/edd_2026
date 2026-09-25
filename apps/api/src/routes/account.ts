@@ -76,7 +76,7 @@ export function createAccountRoute(resolve: AccountDepsResolver) {
 
     // 退会の証跡。監査ログ（audit_log）は users 行と一緒に消えるため、
     // 「いつ退会したか」はここの構造化ログで追う
-    // （docs/architecture.md「監視・監査ログ・障害時の再送」）。
+    // （docs/api-ops.md「監視・監査ログ・障害時の再送」）。
     console.info("account deleted", { userId });
     return c.body(null, 204);
   });

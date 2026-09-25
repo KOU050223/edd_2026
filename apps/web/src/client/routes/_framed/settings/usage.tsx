@@ -37,7 +37,7 @@ function UsageCard({
  * Managed AI の使用状況。上限に当たる前に残量を確かめられるようにする。
  *
  * 回数だけを出す。トークン数は利用者へ見せない安全弁であり、API も返さない
- * （docs/architecture.md「利用者への見せ方」）。
+ * （docs/ai-limits.md「利用者への見せ方」）。
  */
 function Usage() {
   const usage = Route.useLoaderData();

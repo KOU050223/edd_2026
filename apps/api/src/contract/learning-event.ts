@@ -85,7 +85,7 @@ const conceptIdSchema = v.pipe(
  *
  * `v.object` ではなく `v.strictObject` を使う。未知のキーを黙って捨てるのではなく
  * 拒否するためである。`LearningEvent` にはコード本文・質問文・AI回答を置く場所が無く
- * （docs/architecture.md のプライバシー二段階の方針）、クライアントがそれらを
+ * （docs/data-privacy.md のプライバシー二段階の方針）、クライアントがそれらを
  * 送ってきた場合は受理せずに理由を返す必要がある。剥がして受理すると、送信側は
  * 保存されたと誤解したまま気づけない。
  */

@@ -4,7 +4,7 @@
  *
  * この経路だけが外部プロバイダの単価に直結する。上限を掛けないまま開けておくと、
  * 1ユーザーで月 約$91,000 に達しうる（docs/auth.md §10.1）。
- * 上限値の正本は docs/architecture.md「Free / Pro の境界と Managed AI の利用上限」で、
+ * 上限値の正本は docs/ai-limits.md で、
  * 実装が読む数字は `contract/ai-usage.ts` に写してある。
  *
  * ここが守るものは4つある。
@@ -46,7 +46,7 @@ const requestSchema = v.object({
   temperature: v.optional(v.pipe(v.number(), v.minValue(0), v.maxValue(2))),
   // `maxTokens` の上限は政策値に揃える。スキーマで弾けるものをハンドラまで
   // 持ち込まない。ここを緩めると1回あたりの単価の上限が崩れ、
-  // 回数上限から引いた月額の試算が成り立たなくなる（docs/architecture.md）。
+  // 回数上限から引いた月額の試算が成り立たなくなる（docs/ai-limits.md）。
   maxTokens: v.optional(
     v.pipe(
       v.number(),
@@ -77,7 +77,7 @@ export type AiDepsResolver = (env: CloudflareBindings) => AiDeps;
 /** 上限到達時の応答。理由と回復時刻を利用者へ伝える（完了条件）。 */
 function limitReached(kind: AiUsageLimitKind, now: Date): AiUsageLimitBody {
   // トークンの安全弁に当たった場合も、利用者へは回数と同じ扱いで見せる。
-  // 内部の別勘定を説明しない（docs/architecture.md「利用者への見せ方」）。
+  // 内部の別勘定を説明しない（docs/ai-limits.md「利用者への見せ方」）。
   // 回復は月次と同じ暦月の境界になる。
   const resetAt = kind === "daily" ? nextUtcDay(now) : nextUtcMonth(now);
   const when = kind === "daily" ? "明日 UTC 0時" : "翌月 UTC 1日 0時";
@@ -115,7 +115,7 @@ export function createAiRoute(resolve: AiDepsResolver) {
       dayKey: utcDayKey(now),
     });
     // 返す項目を1つずつ書き出す。`usage` を広げて返すと、利用者へ見せない
-    // `monthlyTokens` まで載る（docs/architecture.md「利用者への見せ方」）。
+    // `monthlyTokens` まで載る（docs/ai-limits.md「利用者への見せ方」）。
     // 上限は必ず `AI_USAGE_LIMITS` から取る。Web に数字を持たせると、
     // 政策値を動かしたときに画面だけが古い上限を示す。
     const body: AiUsageSummary = {
@@ -130,7 +130,7 @@ export function createAiRoute(resolve: AiDepsResolver) {
           // トークンの安全弁に当たっていれば、回数が残っていても `POST` は
           // 翌月まで拒否する。そのまま回数を返すと「まだ使える」と表示される。
           // 利用者へは回数を使い切ったのと同じ扱いで見せる。トークン数そのものは
-          // 出さない（docs/architecture.md「利用者への見せ方」）。
+          // 出さない（docs/ai-limits.md「利用者への見せ方」）。
           used:
             usage.monthlyTokens >= AI_USAGE_LIMITS.monthlyTokens
               ? Math.max(usage.monthlyRequests, AI_USAGE_LIMITS.monthlyRequests)
@@ -159,7 +159,7 @@ export function createAiRoute(resolve: AiDepsResolver) {
     if (!deps.apiKey) {
       // 設定漏れは利用者の失敗ではなく運営側の障害である。503 の応答だけでは
       // Workers のログから区別できないため残す
-      // （docs/architecture.md「監視・監査ログ・障害時の再送」）。
+      // （docs/api-ops.md「監視・監査ログ・障害時の再送」）。
       console.error("ai service is not configured", { path: c.req.path });
       return c.json({ error: "AI service is not configured" }, 503);
     }
@@ -181,7 +181,7 @@ export function createAiRoute(resolve: AiDepsResolver) {
     }
 
     // 入力の超過は切り捨てず拒否する。黙って切ると、利用者から見て AI が文脈を
-    // 読み落とした状態になり、原因が分からない（RULE-004 / docs/architecture.md）。
+    // 読み落とした状態になり、原因が分からない（RULE-004 / docs/ai-limits.md）。
     const prompt = `選択テキスト:\n${selection}\n\n質問:\n${normalizedQuestion}`;
     // persona は contents と分けて systemInstruction へ載せる。「どう答えるか」の
     // 口調・人物像であり、本文の質問と混ぜない。自由記述をそのまま指示として
@@ -235,7 +235,7 @@ export function createAiRoute(resolve: AiDepsResolver) {
     if (before.monthlyTokens >= AI_USAGE_LIMITS.monthlyTokens) {
       // 通常は回数が先に尽きる。ここに来ること自体が「1回あたりの想定が
       // 外れた」という信号なので、政策値を見直すために記録する
-      // （docs/architecture.md）。
+      // （docs/ai-limits.md）。
       console.warn("ai usage token safety valve reached", {
         userId,
         monthKey,
@@ -297,7 +297,7 @@ export function createAiRoute(resolve: AiDepsResolver) {
     } catch (cause) {
       // fetch の拒否（ネットワーク断、`redirect: "error"` の拒否）は下の
       // !ok 分岐に届かない。AI 経路の失敗として数えられるよう、応答を返す
-      // 前に構造化ログを出す（docs/architecture.md「監視・監査ログ・障害時の再送」）。
+      // 前に構造化ログを出す（docs/api-ops.md「監視・監査ログ・障害時の再送」）。
       console.error("ai upstream request failed", { userId, model, cause });
       return c.json({ error: "AI upstream request failed" }, 502);
     }
@@ -382,7 +382,7 @@ export function createAiRoute(resolve: AiDepsResolver) {
         "Content-Type": "text/event-stream; charset=utf-8",
         "Cache-Control": "no-cache, no-transform",
         "X-Accel-Buffering": "no",
-        // 残量は回数で示す（docs/architecture.md「利用者への見せ方」）。
+        // 残量は回数で示す（docs/ai-limits.md「利用者への見せ方」）。
         // トークン数は見せない。
         "X-AI-Requests-Remaining": String(
           Math.max(0, AI_USAGE_LIMITS.monthlyRequests - after.monthlyRequests),
