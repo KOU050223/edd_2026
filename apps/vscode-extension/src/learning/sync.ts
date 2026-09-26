@@ -88,8 +88,9 @@ const TIMEOUT_MS = 10_000;
  * トークンが盗聴されうる。https: を基本とし、ローカル開発（apps/api の
  * `npm run dev` は http://localhost:8787）だけ例外として認める。
  * apps/desktop の isSafeApiBaseUrl と同じ判断基準を用いる。
+ * conversations/sync.ts など他の送信経路からも使うため export する。
  */
-function isSafeApiBaseUrl(value: string): boolean {
+export function isSafeApiBaseUrl(value: string): boolean {
   try {
     const url = new URL(value);
     if (url.protocol === "https:") return true;

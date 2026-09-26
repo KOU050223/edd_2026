@@ -6,6 +6,9 @@
  */
 
 import type {
+  Conversation,
+  ConversationMessage,
+  ConversationOrigin,
   EvidenceImportedBy,
   EvidenceKind,
   EventOrigin,
@@ -24,6 +27,7 @@ import {
 } from "../contract/user-settings.js";
 import { ACCOUNT_DELETION_TOMBSTONE_TTL_MS } from "./types.js";
 import type { ImportSessionView } from "../contract/history-import.js";
+import type { ConversationSummary } from "../contract/conversations.js";
 import type {
   AiUsage,
   AiUsageRepository,
@@ -31,6 +35,8 @@ import type {
   AreaCompletionRepository,
   AuditLogEntry,
   AuditLogRepository,
+  ConversationListParams,
+  ConversationRepository,
   IdentityRepository,
   ImportSessionRepository,
   LearningEventRepository,
@@ -417,33 +423,50 @@ export class D1UserSettingsRepository implements UserSettingsRepository {
   async get(userId: string): Promise<UserSettings | null> {
     const row = await this.db
       .prepare(
-        "SELECT display_name, activity_period_days, updated_at FROM user_settings WHERE user_id = ?",
+        `SELECT display_name, activity_period_days, save_conversation_history, updated_at
+         FROM user_settings WHERE user_id = ?`,
       )
       .bind(userId)
-      .first<{ display_name: string | null; activity_period_days: number; updated_at: string }>();
+      .first<{
+        display_name: string | null;
+        activity_period_days: number;
+        save_conversation_history: number;
+        updated_at: string;
+      }>();
     if (row === null) return null;
     // 読めない行を既定値へ丸めない。丸めると、利用者が保存した設定が
     // 黙って別の値に化ける（.agents/rules/rules.md RULE-004）。
     // 書き込み時に CHECK 制約を通しているので、ここが失敗したなら DB の破損である。
-    if (!isActivityPeriodDays(row.activity_period_days) || Number.isNaN(Date.parse(row.updated_at)))
+    if (
+      !isActivityPeriodDays(row.activity_period_days) ||
+      !is0or1(row.save_conversation_history) ||
+      Number.isNaN(Date.parse(row.updated_at))
+    )
       throw new Error(`user_settings contains invalid data (user_id=${userId})`);
     return {
       version: USER_SETTINGS_VERSION,
       displayName: row.display_name,
       activityPeriodDays: row.activity_period_days,
+      saveConversationHistory: row.save_conversation_history === 1,
       updatedAt: row.updated_at,
     };
   }
 
-  async put(userId: string, input: UserSettingsInput, updatedAt: string): Promise<UserSettings> {
+  async put(
+    userId: string,
+    input: Required<UserSettingsInput>,
+    updatedAt: string,
+  ): Promise<UserSettings> {
     // 退会中のユーザーの行を作らない。`mastery_overrides` と同じ守り方で、
     // 削除の最中に users 行が復活する窓を塞ぐ（repository/types.ts の
     // `startUserDeletion` の説明を参照）。
     const nowMs = Date.now();
     const result = await this.db
       .prepare(
-        `INSERT INTO user_settings (user_id, display_name, activity_period_days, updated_at)
-         SELECT ?, ?, ?, ?
+        `INSERT INTO user_settings (
+           user_id, display_name, activity_period_days, save_conversation_history, updated_at
+         )
+         SELECT ?, ?, ?, ?, ?
          WHERE NOT EXISTS (
            SELECT 1 FROM account_deletions
            WHERE user_id = ? AND started_at_ms > ?
@@ -451,12 +474,14 @@ export class D1UserSettingsRepository implements UserSettingsRepository {
          ON CONFLICT (user_id) DO UPDATE SET
            display_name = excluded.display_name,
            activity_period_days = excluded.activity_period_days,
+           save_conversation_history = excluded.save_conversation_history,
            updated_at = excluded.updated_at`,
       )
       .bind(
         userId,
         input.displayName,
         input.activityPeriodDays,
+        input.saveConversationHistory ? 1 : 0,
         updatedAt,
         userId,
         nowMs - ACCOUNT_DELETION_TOMBSTONE_TTL_MS,
@@ -466,6 +491,238 @@ export class D1UserSettingsRepository implements UserSettingsRepository {
       throw new Error("user deletion is in progress");
     }
     return { version: USER_SETTINGS_VERSION, ...input, updatedAt };
+  }
+}
+
+/** INTEGER で保存する 0/1 フラグの読み取り検査。 */
+function is0or1(value: unknown): value is 0 | 1 {
+  return value === 0 || value === 1;
+}
+
+/** conversations の1行。SELECT する列と対応させる。 */
+interface ConversationRow {
+  id: string;
+  origin: string;
+  client_id: string | null;
+  title: string | null;
+  language: string | null;
+  file_name: string | null;
+  messages: string;
+  message_count: number;
+  complete: number;
+  occurred_at: string;
+  occurred_at_ms: number;
+  updated_at: string;
+  updated_at_ms: number;
+}
+
+const CONVERSATION_COLUMNS = `id, origin, client_id, title, language, file_name,
+  messages, message_count, complete, occurred_at, occurred_at_ms, updated_at, updated_at_ms`;
+
+/**
+ * D1 の行を `Conversation` へ戻す。
+ *
+ * `messages` のパースに失敗したら例外にする。空配列へ丸めると、消えた履歴が
+ * 件数だけは残る「壊れた一覧」になる。書き込み時に契約側で検証済みなので、
+ * ここが失敗したなら DB の破損である（toLearningEvent と同じ方針）。
+ */
+function toConversation(row: ConversationRow): Conversation {
+  let messages: unknown;
+  try {
+    messages = JSON.parse(row.messages);
+  } catch (cause) {
+    throw new Error(`conversations.messages is not valid JSON (id=${row.id})`, { cause });
+  }
+  if (
+    !Array.isArray(messages) ||
+    messages.some(
+      (message) =>
+        typeof message !== "object" ||
+        message === null ||
+        typeof message.role !== "string" ||
+        typeof message.text !== "string" ||
+        typeof message.at !== "string",
+    )
+  ) {
+    throw new Error(`conversations.messages is not ConversationMessage[] (id=${row.id})`);
+  }
+
+  return {
+    id: row.id,
+    // 書き込み時に契約側の picklist で検証済み。
+    origin: row.origin as ConversationOrigin,
+    ...(row.client_id === null ? {} : { clientId: row.client_id }),
+    ...(row.title === null ? {} : { title: row.title }),
+    ...(row.language === null ? {} : { language: row.language }),
+    ...(row.file_name === null ? {} : { fileName: row.file_name }),
+    occurredAt: row.occurred_at,
+    updatedAt: row.updated_at,
+    complete: row.complete === 1,
+    messages: messages as ConversationMessage[],
+  };
+}
+
+function toConversationSummary(row: ConversationRow): ConversationSummary {
+  return {
+    id: row.id,
+    origin: row.origin,
+    ...(row.client_id === null ? {} : { clientId: row.client_id }),
+    ...(row.title === null ? {} : { title: row.title }),
+    ...(row.language === null ? {} : { language: row.language }),
+    ...(row.file_name === null ? {} : { fileName: row.file_name }),
+    occurredAt: row.occurred_at,
+    updatedAt: row.updated_at,
+    messageCount: row.message_count,
+    complete: row.complete === 1,
+  };
+}
+
+/**
+ * `ConversationRepository` の D1 実装（Issue #204）。
+ */
+export class D1ConversationRepository implements ConversationRepository {
+  constructor(private readonly db: D1Database) {}
+
+  async upsert(
+    userId: string,
+    conversation: Conversation,
+    receivedAtMs: number,
+  ): Promise<{ saved: boolean }> {
+    // 既存のほうが新しい会話を古いスナップショットで巻き戻さないため、
+    // 更新は届いた updated_at_ms が既存以上のときだけに絞る。
+    // INSERT か UPDATE か・書けたかは changes で判定する。
+    const nowMs = Date.now();
+    const result = await this.db
+      .prepare(
+        `INSERT INTO conversations (
+           id, user_id, origin, client_id, title, language, file_name,
+           messages, message_count, complete,
+           occurred_at, occurred_at_ms, updated_at, updated_at_ms, received_at_ms
+         )
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+         WHERE NOT EXISTS (
+           SELECT 1 FROM account_deletions
+           WHERE user_id = ? AND started_at_ms > ?
+         )
+         ON CONFLICT (user_id, id) DO UPDATE SET
+           origin = excluded.origin,
+           client_id = excluded.client_id,
+           title = excluded.title,
+           language = excluded.language,
+           file_name = excluded.file_name,
+           messages = excluded.messages,
+           message_count = excluded.message_count,
+           complete = excluded.complete,
+           occurred_at = excluded.occurred_at,
+           occurred_at_ms = excluded.occurred_at_ms,
+           updated_at = excluded.updated_at,
+           updated_at_ms = excluded.updated_at_ms,
+           received_at_ms = excluded.received_at_ms
+         WHERE excluded.updated_at_ms >= conversations.updated_at_ms`,
+      )
+      .bind(
+        conversation.id,
+        userId,
+        conversation.origin,
+        conversation.clientId ?? null,
+        conversation.title ?? null,
+        conversation.language ?? null,
+        conversation.fileName ?? null,
+        JSON.stringify(conversation.messages),
+        conversation.messages.length,
+        conversation.complete ? 1 : 0,
+        conversation.occurredAt,
+        // 契約側で Date.parse できることを検証済みのため NaN にはならない。
+        Date.parse(conversation.occurredAt),
+        conversation.updatedAt,
+        Date.parse(conversation.updatedAt),
+        receivedAtMs,
+        userId,
+        nowMs - ACCOUNT_DELETION_TOMBSTONE_TTL_MS,
+      )
+      .run();
+
+    if (result.meta.changes === 0 && (await hasActiveDeletion(this.db, userId, nowMs))) {
+      throw new Error("user deletion is in progress");
+    }
+    return { saved: result.meta.changes > 0 };
+  }
+
+  async listByUser(userId: string, params: ConversationListParams): Promise<ConversationSummary[]> {
+    // カーソルの有無で2通りの文に分ける。片方の文に NULL 許容の条件を織り込むと、
+    // 比較が NULL で偽になる扱いを読み手が追う必要がある。
+    const rows = params.cursor
+      ? await this.db
+          .prepare(
+            `SELECT ${CONVERSATION_COLUMNS} FROM conversations
+             WHERE user_id = ?
+               AND (updated_at_ms < ? OR (updated_at_ms = ? AND id > ?))
+             ORDER BY updated_at_ms DESC, id ASC
+             LIMIT ?`,
+          )
+          .bind(
+            userId,
+            params.cursor.updatedAtMs,
+            params.cursor.updatedAtMs,
+            params.cursor.id,
+            params.limit,
+          )
+          .all<ConversationRow>()
+      : await this.db
+          .prepare(
+            `SELECT ${CONVERSATION_COLUMNS} FROM conversations
+             WHERE user_id = ?
+             ORDER BY updated_at_ms DESC, id ASC
+             LIMIT ?`,
+          )
+          .bind(userId, params.limit)
+          .all<ConversationRow>();
+    return rows.results.map(toConversationSummary);
+  }
+
+  async getById(userId: string, id: string): Promise<Conversation | null> {
+    const row = await this.db
+      .prepare(`SELECT ${CONVERSATION_COLUMNS} FROM conversations WHERE user_id = ? AND id = ?`)
+      .bind(userId, id)
+      .first<ConversationRow>();
+    return row === null ? null : toConversation(row);
+  }
+
+  async deleteById(userId: string, id: string): Promise<number> {
+    const result = await this.db
+      .prepare(`DELETE FROM conversations WHERE user_id = ? AND id = ?`)
+      .bind(userId, id)
+      .run();
+    // 件数が取れなければ既定値で埋めない（RULE-004）。
+    const changes = result.meta.changes;
+    if (typeof changes !== "number") {
+      throw new Error("D1 delete result has no meta.changes");
+    }
+    return changes;
+  }
+
+  async deleteAllByUser(userId: string): Promise<number> {
+    const result = await this.db
+      .prepare(`DELETE FROM conversations WHERE user_id = ?`)
+      .bind(userId)
+      .run();
+    const changes = result.meta.changes;
+    if (typeof changes !== "number") {
+      throw new Error("D1 delete result has no meta.changes");
+    }
+    return changes;
+  }
+
+  async listAllByUser(userId: string): Promise<Conversation[]> {
+    const { results } = await this.db
+      .prepare(
+        `SELECT ${CONVERSATION_COLUMNS} FROM conversations
+         WHERE user_id = ?
+         ORDER BY updated_at_ms DESC, id ASC`,
+      )
+      .bind(userId)
+      .all<ConversationRow>();
+    return results.map(toConversation);
   }
 }
 

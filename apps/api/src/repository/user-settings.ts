@@ -13,7 +13,11 @@ export class InMemoryUserSettingsRepository implements UserSettingsRepository {
     return Promise.resolve(this.byUser.get(userId) ?? null);
   }
 
-  put(userId: string, input: UserSettingsInput, updatedAt: string): Promise<UserSettings> {
+  put(
+    userId: string,
+    input: Required<UserSettingsInput>,
+    updatedAt: string,
+  ): Promise<UserSettings> {
     const settings: UserSettings = { version: USER_SETTINGS_VERSION, ...input, updatedAt };
     this.byUser.set(userId, settings);
     return Promise.resolve(settings);

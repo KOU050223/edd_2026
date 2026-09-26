@@ -48,6 +48,7 @@ test("未保存のユーザーには既定値を返す（404 にしない）", a
     version: 1,
     displayName: null,
     activityPeriodDays: 30,
+    saveConversationHistory: false,
     updatedAt: null,
   });
 });
@@ -65,6 +66,7 @@ test("設定を保存し、再読み込みで同じ値が返る", async () => {
     version: 1,
     displayName: "こう",
     activityPeriodDays: 7,
+    saveConversationHistory: false,
     updatedAt: "2026-09-22T00:00:00.000Z",
   };
   await expect(saved.json()).resolves.toEqual(expected);
@@ -110,6 +112,23 @@ test("不正な値は保存せず 400 を返す", async () => {
 
   // 1件も保存されていないこと。検証に落ちた要求が部分的に書き込んではならない。
   await expect(repository.get("user-a")).resolves.toBeNull();
+});
+
+test("省略した saveConversationHistory は保存済みの値を維持する", async () => {
+  // 「履歴を保存するか」だけを変えたい呼び出しと、表示名だけを変えたい
+  // 呼び出しが互いの値を潰さないようにするため（Issue #204）。
+  const { app } = buildApp();
+
+  const enabled = await put(app as never, {
+    displayName: null,
+    activityPeriodDays: 30,
+    saveConversationHistory: true,
+  });
+  await expect(enabled.json()).resolves.toMatchObject({ saveConversationHistory: true });
+
+  // 別項目だけを更新した保存で、オプトインが黙って false に戻らないこと。
+  const renamed = await put(app as never, { displayName: "こう", activityPeriodDays: 30 });
+  await expect(renamed.json()).resolves.toMatchObject({ saveConversationHistory: true });
 });
 
 test("本文が JSON でなければ 400 を返す", async () => {

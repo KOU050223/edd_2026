@@ -49,3 +49,35 @@ test("上限ちょうどの表示名は受理する", () => {
     ok: true,
   });
 });
+
+test("saveConversationHistory は省略でき、指定すれば受理する", () => {
+  // 「履歴を保存するか」だけを切り替えたい呼び出しが表示名などを持たないため、
+  // この項目だけ省略可能にする（Issue #204）。
+  expect(validateUserSettings({ displayName: null, activityPeriodDays: 30 })).toEqual({
+    ok: true,
+    value: { displayName: null, activityPeriodDays: 30 },
+  });
+  expect(
+    validateUserSettings({
+      displayName: null,
+      activityPeriodDays: 30,
+      saveConversationHistory: true,
+    }),
+  ).toEqual({
+    ok: true,
+    value: { displayName: null, activityPeriodDays: 30, saveConversationHistory: true },
+  });
+});
+
+test("saveConversationHistory が真偽値でなければ拒否する", () => {
+  for (const value of ["true", 1, null]) {
+    expect(
+      validateUserSettings({
+        displayName: null,
+        activityPeriodDays: 30,
+        saveConversationHistory: value,
+      }),
+      JSON.stringify(value),
+    ).toMatchObject({ ok: false });
+  }
+});

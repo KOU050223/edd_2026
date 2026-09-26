@@ -31,6 +31,16 @@ export interface DesktopSettings {
   launchAtLogin: boolean;
   /** 応答の人物像・口調（自由記述）。空文字は未設定。 */
   persona: string;
+  /**
+   * 「質問履歴の保存」オプトインのローカルキャッシュ（Issue #204）。
+   *
+   * 正はサーバーの `user_settings.saveConversationHistory`。本文を送る前の
+   * プリチェックに使うだけで、キャッシュが true でもサーバー側が無効なら
+   * `PUT /v1/conversations` は 403 で拒否される（docs/conversation-history.md）。
+   * ここが true に偽装されても本文の保存は増えず、古い true のまま残ると
+   * 無意味な送信が毎回失敗するため、403 が返ったら false へ戻す。
+   */
+  saveConversationHistory: boolean;
 }
 
 export const DEFAULT_SETTINGS: DesktopSettings = {
@@ -42,6 +52,7 @@ export const DEFAULT_SETTINGS: DesktopSettings = {
   restoreClipboard: true,
   launchAtLogin: false,
   persona: "",
+  saveConversationHistory: false,
 };
 
 /**
@@ -92,6 +103,13 @@ export function normalizeSettings(value: unknown): DesktopSettings {
     migrated.persona = DEFAULT_SETTINGS.persona;
   }
 
+  // saveConversationHistory も後から足した項目。欠損・型違いは安全側の
+  // false へ倒す（サーバー側でもオプトインを強制するので、ここが true に
+  // 化けても本文は増えない）。
+  if (typeof migrated.saveConversationHistory !== "boolean") {
+    migrated.saveConversationHistory = DEFAULT_SETTINGS.saveConversationHistory;
+  }
+
   if (!isSettings(migrated)) return { ...DEFAULT_SETTINGS };
   return migrated;
 }
@@ -121,7 +139,8 @@ function isSettings(value: unknown): value is DesktopSettings {
     typeof settings.restoreClipboard === "boolean" &&
     typeof settings.launchAtLogin === "boolean" &&
     typeof settings.persona === "string" &&
-    settings.persona.length <= PERSONA_MAX_LENGTH
+    settings.persona.length <= PERSONA_MAX_LENGTH &&
+    typeof settings.saveConversationHistory === "boolean"
   );
 }
 

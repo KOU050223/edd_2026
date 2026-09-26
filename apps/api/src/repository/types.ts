@@ -11,6 +11,7 @@
  */
 
 import type {
+  Conversation,
   HistoryProviderId,
   LearningEvent,
   LearningEvidence,
@@ -18,6 +19,7 @@ import type {
   UnmappedCandidate,
 } from "@gakushu-sochi/domain";
 import type { AreaCompletion } from "../contract/area-completions.js";
+import type { ConversationSummary } from "../contract/conversations.js";
 import type { UserSettings, UserSettingsInput } from "../contract/user-settings.js";
 import type { ImportSessionView } from "../contract/history-import.js";
 
@@ -285,7 +287,75 @@ export interface AreaCompletionRepository {
  */
 export interface UserSettingsRepository {
   get(userId: string): Promise<UserSettings | null>;
-  put(userId: string, input: UserSettingsInput, updatedAt: string): Promise<UserSettings>;
+  /**
+   * 設定を上書き保存する。
+   *
+   * `Required<UserSettingsInput>` を受け取るのは、省略可能な
+   * `saveConversationHistory` の「省略=現状維持」をここより前
+   * （ルート側のマージ）で解決済みにするため。未解決の入力を
+   * 受け付けると、省略が黙って `false` に倒れうる。
+   */
+  put(userId: string, input: Required<UserSettingsInput>, updatedAt: string): Promise<UserSettings>;
+}
+
+/** `GET /v1/conversations` の一覧読み出し条件。 */
+export interface ConversationListParams {
+  /**
+   * 読み取る件数。次頁の有無を判定するため、呼び出し側は
+   * 表示したい件数 + 1 で要求する。
+   */
+  limit: number;
+  /**
+   * この行より後ろ（一覧では下）だけを読むカーソル。
+   * 並び順は更新時刻の降順・同時刻は ID の昇順で固定する。
+   */
+  cursor?: { updatedAtMs: number; id: string };
+}
+
+/**
+ * 会話履歴の永続化（Issue #204）。
+ *
+ * LearningEvent とは別の表にする。本文を持つデータであり、習熟度の
+ * 導出には一切関与しない。設計の正本は docs/conversation-history.md。
+ */
+export interface ConversationRepository {
+  /**
+   * 会話を upsert する。
+   *
+   * 同じ `(userId, id)` の行があり、既存の `updatedAt` が届いた会話より
+   * 新しい場合は書き換えず `{ saved: false }` を返す。遅延した再送や
+   * 古いスナップショットで新しい履歴が巻き戻るのを防ぐ。
+   * 呼び出し前に `users` 行が存在している必要がある（外部キー）。
+   */
+  upsert(
+    userId: string,
+    conversation: Conversation,
+    receivedAtMs: number,
+  ): Promise<{ saved: boolean }>;
+
+  /**
+   * 一覧用の要約を更新時刻の降順（同時刻は ID の昇順）で読む。
+   * 本文（`messages`）は返さない。
+   */
+  listByUser(userId: string, params: ConversationListParams): Promise<ConversationSummary[]>;
+
+  /** 会話1件。本文込み。無ければ `null`。 */
+  getById(userId: string, id: string): Promise<Conversation | null>;
+
+  /**
+   * 会話1件を消す。
+   * @returns 消した件数（0 か 1）。対象が無くても成功とする。
+   */
+  deleteById(userId: string, id: string): Promise<number>;
+
+  /**
+   * 1ユーザーの全会話を消す（履歴の全件削除・学習履歴の削除への追随）。
+   * @returns 消した件数。0件でも成功とする。
+   */
+  deleteAllByUser(userId: string): Promise<number>;
+
+  /** エクスポート用。全会話を本文込み・更新時刻の降順で返す。 */
+  listAllByUser(userId: string): Promise<Conversation[]>;
 }
 
 /**
@@ -365,7 +435,9 @@ export type AuditAction =
   | "learning_events.exported"
   | "learning_events.deleted"
   | "learning_evidence.exported"
-  | "learning_evidence.deleted";
+  | "learning_evidence.deleted"
+  | "conversations.exported"
+  | "conversations.deleted";
 
 /** 監査ログの1件。 */
 export interface AuditLogEntry {

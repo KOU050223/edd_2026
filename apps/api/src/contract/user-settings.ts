@@ -35,6 +35,15 @@ export interface UserSettings {
   displayName: string | null;
   /** `/activity` を開いたときの既定の期間（日）。 */
   activityPeriodDays: ActivityPeriodDays;
+  /**
+   * 「質問履歴の保存」オプトイン（Issue #204）。
+   *
+   * 有効な場合だけ `PUT /v1/conversations/:id` が本文を保存する。
+   * サーバー側でも判定するのは、クライアントが持つ値が古くても
+   * オプトイン無しの本文が保存されないようにするため
+   * （docs/conversation-history.md「二重のゲート」）。
+   */
+  saveConversationHistory: boolean;
   /** 最後に保存した時刻。ISO 8601。一度も保存していなければ `null`。 */
   updatedAt: string | null;
 }
@@ -44,6 +53,7 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
   version: USER_SETTINGS_VERSION,
   displayName: null,
   activityPeriodDays: 30,
+  saveConversationHistory: false,
   updatedAt: null,
 };
 
@@ -51,10 +61,18 @@ export function isActivityPeriodDays(value: unknown): value is ActivityPeriodDay
   return typeof value === "number" && ACTIVITY_PERIOD_DAYS.includes(value as ActivityPeriodDays);
 }
 
-/** `PUT` が受け取る本文。保存する値だけを持ち、`updatedAt` はサーバーが決める。 */
+/**
+ * `PUT` が受け取る本文。保存する値だけを持ち、`updatedAt` はサーバーが決める。
+ *
+ * `saveConversationHistory` だけ省略可能にする。他項目は上書きの対象として
+ * 常に入力が必要だが、この項目は「履歴を保存するか」の切り替えだけをしたい
+ * 呼び出しが表示名などを持たないため。省略されたときは保存済みの値を維持する
+ * （上書きで黙って `false` に戻さない。ルート側が現在値とマージしてから書く）。
+ */
 export interface UserSettingsInput {
   displayName: string | null;
   activityPeriodDays: ActivityPeriodDays;
+  saveConversationHistory?: boolean;
 }
 
 export type SettingsValidation =
@@ -75,9 +93,10 @@ export function validateUserSettings(payload: unknown): SettingsValidation {
   if (typeof payload !== "object" || payload === null) {
     return { ok: false, message: "invalid request body" };
   }
-  const { displayName, activityPeriodDays } = payload as {
+  const { displayName, activityPeriodDays, saveConversationHistory } = payload as {
     displayName?: unknown;
     activityPeriodDays?: unknown;
+    saveConversationHistory?: unknown;
   };
 
   if (displayName !== null && typeof displayName !== "string") {
@@ -98,11 +117,16 @@ export function validateUserSettings(payload: unknown): SettingsValidation {
     };
   }
 
+  if (saveConversationHistory !== undefined && typeof saveConversationHistory !== "boolean") {
+    return { ok: false, message: "saveConversationHistory must be a boolean" };
+  }
+
   return {
     ok: true,
     value: {
       displayName: trimmed === null || trimmed.length === 0 ? null : trimmed,
       activityPeriodDays,
+      ...(saveConversationHistory === undefined ? {} : { saveConversationHistory }),
     },
   };
 }
