@@ -14,7 +14,7 @@
   "categories": [
     "Education"
   ],
-  "main": "./out/extension.js",
+  "main": "./dist/extension.js",
   "activationEvents": [],
   "contributes": {
     "chatParticipants": [
@@ -142,12 +142,13 @@
     }
   },
   "scripts": {
-    "compile": "tsc -p ./",
+    "compile": "tsc -p ./ && npm run bundle",
+    "bundle": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --format=cjs --platform=node --target=es2022 --external:vscode --sourcemap",
     "package": "npm run compile --workspace=@gakushu-sochi/domain && npm run compile && npx --no-install @vscode/vsce package --no-dependencies",
     "test:unit": "npm run compile --workspace=@gakushu-sochi/domain && vitest run src",
     "test:watch": "npm run compile --workspace=@gakushu-sochi/domain && vitest src",
     "test": "npm run test:unit",
-    "watch": "npm run compile --workspace=@gakushu-sochi/domain && tsc -watch -p ./",
+    "watch": "npm run compile --workspace=@gakushu-sochi/domain && npm run bundle -- --watch=forever",
     "lint": "eslint src",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
@@ -161,6 +162,7 @@
     "@types/node": "^24.0.0",
     "@types/vscode": "^1.90.0",
     "@vscode/vsce": "3.9.2",
+    "esbuild": "^0.28.1",
     "eslint": "^10.9.1",
     "eslint-config-prettier": "^10.1.8",
     "lefthook": "^2.1.12",

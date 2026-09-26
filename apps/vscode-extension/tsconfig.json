@@ -7,9 +7,8 @@
     // dom は入れない。fetch や localStorage など実行時に存在しない API が
     // 補完に出て、動かないコードが書けてしまうため。
     "types": ["node", "vscode"],
-    "outDir": "out",
-    "rootDir": "src",
-    "sourceMap": true,
+    // 出力は esbuild のバンドル（npm run bundle → dist/）が担う。tsc は型検査専用。
+    "noEmit": true,
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
@@ -18,5 +17,5 @@
     "skipLibCheck": true
   },
   "include": ["src"],
-  "exclude": ["node_modules", "out"]
+  "exclude": ["node_modules", "dist"]
 }
