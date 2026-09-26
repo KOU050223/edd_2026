@@ -490,11 +490,6 @@ button.link:disabled {
   font-size: 11px;
   font-style: normal;
 }
-footer {
-  margin-top: 24px;
-  color: #64748b;
-  font-size: 13px;
-}
 .message {
   max-width: 700px;
   margin: 80px auto;
