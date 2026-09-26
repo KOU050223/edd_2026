@@ -2,9 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import { createAuth, type AuthVariables } from "../auth/middleware.js";
 import type { AuthVerifier } from "../auth/verifier.js";
+import { storedCheck } from "../checks/test-check.js";
 import {
   createInMemoryRepositoryStore,
   InMemoryAuditLogRepository,
+  InMemoryConceptCheckRepository,
   InMemoryIdentityRepository,
   InMemoryLearningEventRepository,
 } from "../repository/memory.js";
@@ -142,6 +144,21 @@ describe("DELETE /v1/me", () => {
 
     expect(response.status).toBe(204);
     expect(deps.store.auditLog).toEqual([]);
+  });
+
+  it("退会しても、保存した確認問題は消えない", async () => {
+    // concept_checks は全利用者共有の問題であり、個人データではない（#185）。
+    // users(id) を CASCADE で参照させると、最初に生成させた利用者の退会で全員分が消える。
+    const deps = buildDeps();
+    await deps.identity.ensureUser({ userId: "auth0|user-a", nowMs: 0 });
+    const checks = new InMemoryConceptCheckRepository(deps.store);
+    await checks.put(storedCheck("go.defer"));
+
+    const response = await request(buildApp(deps));
+
+    expect(response.status).toBe(204);
+    expect(deps.identity.users.has("auth0|user-a")).toBe(false);
+    await expect(checks.get("go.defer")).resolves.toEqual(storedCheck("go.defer"));
   });
 
   it("退会の完了は構造化ログに残す", async () => {

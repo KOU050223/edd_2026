@@ -8,6 +8,7 @@ import {
   D1AiUsageRepository,
   D1AreaCompletionRepository,
   D1AuditLogRepository,
+  D1ConceptCheckRepository,
   D1IdentityRepository,
   D1ImportSessionRepository,
   D1LearningEventRepository,
@@ -21,6 +22,7 @@ import { createLearningDataRoute } from "./routes/learning-data.js";
 import { createLearningActivityRoute } from "./routes/learning-activity.js";
 import { createImportSessionsRoute } from "./routes/import-sessions.js";
 import { createAiRoute } from "./routes/ai.js";
+import { createChecksRoute } from "./routes/checks.js";
 import { createAccountRoute } from "./routes/account.js";
 import { createManagementUsers } from "./auth/management.js";
 import { createAreaCompletionsRoute } from "./routes/area-completions.js";
@@ -169,13 +171,21 @@ app.route(
   })),
 );
 
-// 確認問題の生成（#184、`routes/checks.ts`）はここへ繋がない。
-//
-// 歯止めの本体は「保存済みの問題があれば生成しない」であり、**それを実装するのは #185** である。
-// 生成だけを先に開けると、`ai_usage` の回数上限の外で毎回生成が走る経路になる。
-// #185 の D1 キャッシュと同時に `app.route` し、そのとき `app.test.ts` の
-// 「公開しない」テストを書き換える。レート制限はルート側が自分で掛けている
-// （繋いでいないルートの上限をここへ置くと、参照先の無い設定になるため）。
+// 確認問題（#184 / #185）。保存済みがあれば生成せず、無ければ生成して保存する。
+// 生成は `ai_usage` の回数上限の対象外で、歯止めの本体はこの保存である（`routes/checks.ts`）。
+// レート制限はルート側が自分で掛けている。
+app.route(
+  "/v1",
+  createChecksRoute((env) => ({
+    apiKey: env.GEMINI_API_KEY,
+    model: env.GEMINI_MODEL,
+    fetch: (input, init) => globalThis.fetch(input, init),
+    // 全利用者で共有する問題なので、users(id) を参照しない表に置く
+    // （migrations/0009_concept_checks.sql）。
+    checks: new D1ConceptCheckRepository(env.DB),
+    now: () => new Date(),
+  })),
+);
 
 /**
  * Repository の実体を D1 に結び付ける唯一の場所。

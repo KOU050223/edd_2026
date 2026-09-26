@@ -6,30 +6,31 @@
  * 既存の経路は `selection`（コード選択、1〜20,000文字）が必須で、コード選択を
  * 前提としたスキーマである。問題生成には渡すべき `selection` が無い。
  *
+ * ## 保存済みがあれば生成しない（#185）
+ *
+ * 生成した1組は D1（`concept_checks`）へ保存し、全利用者で使い回す。
+ * 保存済みで、かつ Concept の定義とプロンプトが生成時から変わっていなければ（`checks/cache.ts`）、
+ * **上流を叩かずに保存済みを返す。** 変わっていれば生成し直して上書きする。
+ * 保存する問題は個人データではないので、利用者には紐づけない
+ * （migrations/0009_concept_checks.sql）。
+ *
  * ## `ai_usage` の回数上限の対象外である
  *
- * 生成した問題は全利用者で使い回す（#185）。1 Concept につき1回の呼び出しで2問を作り、
- * Concept は 148 件の有限集合なので、**生成量は利用者数に比例しない。**
- * 全員が使う問題を作るコストを、最初にアクセスした利用者の枠（日 15 回 / 月 150 回）から
- * 引く理由が無い。したがってこのルートは `AiUsageRepository` を持たず、加算もしない。
+ * 1 Concept につき1回の呼び出しで2問を作り、Concept は有限集合なので、
+ * **生成量は利用者数に比例しない。** 全員が使う問題を作るコストを、最初にアクセスした
+ * 利用者の枠（日 15 回 / 月 150 回）から引く理由が無い。したがってこのルートは
+ * `AiUsageRepository` を持たず、加算もしない。
  *
  * **外すのは回数の勘定だけである。** 代わりの歯止めは全部効かせる。
  *
+ * - 保存済みがあれば生成しない（上の節）
  * - 既知の `conceptId` だけを受理する（`checkPromptInputFor`）
  * - 利用者ごとのレート制限（30 回/分）
  * - model allowlist と、1回あたりの入力・出力トークン上限
  * - 上流への単発リクエストにタイムアウト（RULE-001）
  *
- * ## #185 より先に有効化しない
- *
- * 歯止めの本体は「保存済みがあれば生成しない」であり、それを実装するのは #185 である。
- * **このルートは `app.ts` へまだ繋いでいない。** 単独で開けると `ai_usage` の外で
- * 毎回生成が走る経路になる。#185 のキャッシュ確認とセットで有効化する
- * （`app.test.ts` が、公開されていないことを検査している）。
- *
- * レート制限をこのファイルで掛けているのはそのためである。他のルートの上限は
- * `app.ts` に並んでいるが、まだ `app.route` していないルートの上限だけを
- * `app.ts` へ置くと、参照先の無い設定になる。**上限をルートと一緒に持ち歩かせる。**
+ * レート制限はこのファイルで掛けている。上限をルートと一緒に持ち歩かせ、
+ * 保存済みを返すだけの要求にも同じ上限を効かせる。
  */
 
 import { Hono } from "hono";
@@ -44,6 +45,7 @@ import {
   estimateInputTokens,
   isAllowedModel,
 } from "../contract/ai-usage.js";
+import { CHECK_FORMAT_VERSION, isCurrent, promptSha256 } from "../checks/cache.js";
 import { buildCheckPrompt, checkPromptInputFor } from "../checks/prompt.js";
 import {
   parseConceptCheck,
@@ -51,6 +53,7 @@ import {
   type CheckParseFailure,
   type GeneratedTextFailure,
 } from "../checks/response.js";
+import type { ConceptCheckRepository } from "../repository/types.js";
 
 /**
  * 上流への単発リクエストのタイムアウト（RULE-001）。
@@ -79,6 +82,8 @@ export interface ChecksDeps {
   apiKey?: string;
   model?: string;
   fetch: typeof fetch;
+  /** 生成した問題の保存先。全利用者で共有する（#185）。 */
+  checks: ConceptCheckRepository;
   now: () => Date;
 }
 
@@ -150,6 +155,25 @@ export function createChecksRoute(resolve: ChecksDepsResolver) {
       return c.json({ error: "concept definition is incomplete" }, 500);
     }
 
+    const prompt = buildCheckPrompt(resolved.input);
+    const currentPromptSha256 = await promptSha256(prompt);
+
+    // 保存済みで、定義もプロンプトも生成時から変わっていなければ上流を叩かない。
+    // API キーやモデルの設定より先に見る。保存済みを返すだけなら AI は要らない。
+    const stored = await deps.checks.get(conceptId);
+    if (stored !== null && isCurrent(stored, currentPromptSha256)) {
+      return c.json(stored.check, 200, { "cache-control": "no-store" });
+    }
+    if (stored !== null) {
+      // 作り直しは生成のコストが再び掛かる。定義の変更が何件の再生成を招いたかを数えられるよう残す。
+      console.info("stored check is outdated; regenerating", {
+        conceptId,
+        storedFormatVersion: stored.formatVersion,
+        currentFormatVersion: CHECK_FORMAT_VERSION,
+        promptChanged: stored.promptSha256 !== currentPromptSha256,
+      });
+    }
+
     if (!deps.apiKey) {
       // 設定漏れは運営側の障害である。503 だけでは Workers のログから区別できない。
       console.error("ai service is not configured", { path: c.req.path });
@@ -164,7 +188,6 @@ export function createChecksRoute(resolve: ChecksDepsResolver) {
       return c.json({ error: "AI service is not configured" }, 503);
     }
 
-    const prompt = buildCheckPrompt(resolved.input);
     const estimatedInputTokens = estimateInputTokens(prompt);
     if (estimatedInputTokens > AI_USAGE_LIMITS.inputTokensPerRequest) {
       // 入力は Concept の定義から組み立てたもので、利用者が渡した文字列ではない。
@@ -266,15 +289,20 @@ export function createChecksRoute(resolve: ChecksDepsResolver) {
       return c.json(failureBody(parsed.reason), 502);
     }
 
-    return c.json(
-      {
-        ...parsed.check,
-        model: generated.modelVersion ?? model,
-        generatedAt: deps.now().toISOString(),
-      },
-      200,
-      { "cache-control": "no-store" },
-    );
+    const check = {
+      ...parsed.check,
+      model: generated.modelVersion ?? model,
+      generatedAt: deps.now().toISOString(),
+    };
+    // 保存に失敗したら例外のまま 500 にする。問題だけ返して保存の失敗を飲み込むと、
+    // 以後のアクセスが毎回生成に進み、歯止めが黙って外れる（RULE-004）。
+    await deps.checks.put({
+      check,
+      formatVersion: CHECK_FORMAT_VERSION,
+      promptSha256: currentPromptSha256,
+    });
+
+    return c.json(check, 200, { "cache-control": "no-store" });
   });
 
   return route;
