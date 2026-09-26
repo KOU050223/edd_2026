@@ -59,7 +59,7 @@ Gakushu Sochi の中心的な資産は、単発のAI回答ではなく、ユー�
 VS Code Extension、Desktop App、Web App、将来のCLIや他IDE連携を指す。
 
 - 各環境からコード文脈・診断・ユーザー操作を収集する
-- 回答を表示し、Hint → 自力解決 → Answer の対話を成立させる
+- 回答を表示し、質問から自力解決までの対話を成立させる
 - 学習イベントを生成し、送信できないものはローカルキューに残す
 - ユーザー持ち込みAIを使う場合は、各クライアントから直接呼ぶ
 
@@ -157,7 +157,7 @@ Managed AI を導入しても、他の経路を置き換えない。回答時に
 
 ```text
 Client が観測する事実
-  question_asked / hint_used / solved_independently / check_passed ...
+  question_asked / answer_viewed / solved_independently / check_passed ...
                          │
                          ▼
                API Server が追記・検証
@@ -262,7 +262,7 @@ APIの外部契約は `apps/api` に置き、複数クライアントで実際�
 
 ### Phase 1: 最初の学習ループを完成させる
 
-- `question_asked`、`hint_used`、`solved_independently` などを正確に記録する
+- `question_asked`、`answer_viewed`、`solved_independently` などを正確に記録する
 - 同期済みProfileを VS Code で表示する
 - Web にログインと読み取り専用の Learning Map を置く
 - 失敗を理由別にユーザーへ表示し、詳細をログへ残す

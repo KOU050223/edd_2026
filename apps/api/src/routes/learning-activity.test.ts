@@ -51,7 +51,7 @@ async function getActivity(query = "") {
 
 test("UTC の日ごと・イベント種別ごとに集計し、観測のある日だけを返す", async () => {
   await seed("user-a", [
-    { occurredAt: "2026-09-05T23:59:59.999Z", type: "hint_used" },
+    { occurredAt: "2026-09-05T23:59:59.999Z", type: "answer_viewed" },
     { occurredAt: "2026-09-06T00:00:00.000Z", type: "solved_independently" },
     { occurredAt: "2026-09-06T10:00:00.000Z", type: "solved_independently" },
   ]);
@@ -65,7 +65,7 @@ test("UTC の日ごと・イベント種別ごとに集計し、観測のある�
     from: "2026-09-05",
     to: "2026-09-06",
     days: [
-      { date: "2026-09-05", counts: { hint_used: 1 } },
+      { date: "2026-09-05", counts: { answer_viewed: 1 } },
       { date: "2026-09-06", counts: { solved_independently: 2 } },
     ],
   });

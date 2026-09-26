@@ -88,11 +88,9 @@ export interface Concept {
 export type LearningEventType =
   /** 質問した。習熟度を上げる根拠にはならない。 */
   | "question_asked"
-  /** ヒントを見た。答えの閲覧より弱い依存。 */
-  | "hint_used"
   /** 答えを見た。自力解決には至らなかった。 */
   | "answer_viewed"
-  /** ヒントの後に自力で解決した。習熟度を上げる主要な根拠。 */
+  /** 自力で解決した。習熟度を上げる主要な根拠。 */
   | "solved_independently"
   /** 同じ Concept のエラーが再発した。習熟度を下げる根拠。 */
   | "error_recurred"
@@ -131,7 +129,7 @@ export interface LearningEvent {
   diagnosticCode?: string;
   /**
    * 一連のやり取りをまとめる ID。
-   * Hint → 自力解決 の流れを、独立した2件ではなく1つの試行として辿れるようにする。
+   * 質問 → 自力解決 の流れを、独立した2件ではなく1つの試行として辿れるようにする。
    */
   sessionId?: string;
 }
@@ -173,11 +171,10 @@ export const MASTERY_SCORE_RANGE: Record<MasteryStatus, { min: number; max: numb
  *
  * 「何回 AI を使ったか」ではなく「何を理解したか」を示すため、
  * status と score をこの数値から導けるようにする。UI の
- * 「Pointer 学習中（Hintで2回解決）」のような表示もここを参照する。
+ * 「Pointer 学習中（自力で2回解決）」のような表示もここを参照する。
  */
 export interface MasteryEvidence {
   questionCount: number;
-  hintCount: number;
   answerViewCount: number;
   solvedIndependentlyCount: number;
   errorRecurrenceCount: number;

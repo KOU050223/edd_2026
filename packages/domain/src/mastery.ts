@@ -37,7 +37,6 @@ import {
  */
 const SCORE_DELTA: Record<LearningEventType, number> = {
   question_asked: 0,
-  hint_used: 0.05,
   answer_viewed: 0,
   solved_independently: 0.25,
   error_recurred: -0.2,
@@ -53,7 +52,6 @@ const EVENT_HISTORY_LIMIT = 1000;
 
 const EMPTY_EVIDENCE: MasteryEvidence = {
   questionCount: 0,
-  hintCount: 0,
   answerViewCount: 0,
   solvedIndependentlyCount: 0,
   errorRecurrenceCount: 0,
@@ -92,8 +90,6 @@ function incrementEvidenceCount(
   switch (type) {
     case "question_asked":
       return { ...evidence, questionCount: evidence.questionCount + 1 };
-    case "hint_used":
-      return { ...evidence, hintCount: evidence.hintCount + 1 };
     case "answer_viewed":
       return { ...evidence, answerViewCount: evidence.answerViewCount + 1 };
     case "solved_independently":

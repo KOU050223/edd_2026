@@ -21,7 +21,6 @@ import { CONCEPT_ID_PATTERN, isIsoDateTime, type LearningEvent } from "@gakushu-
  */
 const EVENT_TYPES = [
   "question_asked",
-  "hint_used",
   "answer_viewed",
   "solved_independently",
   "error_recurred",

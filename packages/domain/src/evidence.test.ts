@@ -87,7 +87,6 @@ function mastery(status: ConceptMastery["status"]): ConceptMastery {
     score: 0.5,
     evidence: {
       questionCount: 0,
-      hintCount: 0,
       answerViewCount: 0,
       solvedIndependentlyCount: 0,
       errorRecurrenceCount: 0,

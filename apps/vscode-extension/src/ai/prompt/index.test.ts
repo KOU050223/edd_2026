@@ -2,7 +2,6 @@ import { describe, expect, test } from "vitest";
 import { buildPrompt } from ".";
 
 const baseRequest = {
-  mode: "explain" as const,
   context: {
     code: "const total = items.reduce((sum, item) => sum + item.price, 0);",
     source: "editor" as const,
@@ -26,20 +25,6 @@ describe("buildPrompt", () => {
     expect(prompt).toContain("--- 参照した定義 ---");
   });
 
-  test("Hintは段階を保持せず、会話履歴を踏まえた次の一手だけを示す", () => {
-    const prompt = buildPrompt({
-      ...baseRequest,
-      mode: "hint",
-      history: [{ role: "assistant", text: "変数の型を確認してください。" }],
-    });
-
-    expect(prompt).toContain("会話履歴");
-    expect(prompt).toContain("次に試す一手だけ");
-    expect(prompt).not.toContain("Hint 1");
-    expect(prompt).not.toContain("Hint 2");
-    expect(prompt).not.toContain("### Answer");
-  });
-
   test("DiagnosticsがあればError Explainを選び、原因・確認箇所・次の一手を求める", () => {
     const prompt = buildPrompt({
       ...baseRequest,
@@ -54,7 +39,6 @@ describe("buildPrompt", () => {
 
   test("Lv1とコードではない入力では、前提不足を明示して断定を避ける", () => {
     const prompt = buildPrompt({
-      mode: "explain",
       question: "goroutine",
       context: {
         code: "goroutine",
@@ -84,12 +68,6 @@ describe("質問の優先", () => {
 
     expect(prompt.indexOf("この関数の戻り値の型は？")).toBeLessThan(prompt.indexOf("### Explain"));
     expect(prompt).toContain("質問より優先しないでください");
-  });
-
-  test("Hintモードでも、質問は preset より前に置かれる", () => {
-    const prompt = buildPrompt({ ...baseRequest, mode: "hint", question: "次に何を確認する？" });
-
-    expect(prompt.indexOf("次に何を確認する？")).toBeLessThan(prompt.indexOf("### Hint"));
   });
 
   test("出力形式の指示は、質問があっても末尾に残る", () => {

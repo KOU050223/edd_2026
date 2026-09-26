@@ -559,9 +559,6 @@ footer {
 .solved_independently {
   background: #14b8a6;
 }
-.hint_used {
-  background: #f59e0b;
-}
 .error_recurred {
   background: #ef4444;
 }

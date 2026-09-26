@@ -5,7 +5,7 @@ import { deleteServerLearningData, syncEvent } from "./sync";
 const EVENT: LearningEvent = {
   id: "event-1",
   occurredAt: "2026-09-06T00:00:00.000Z",
-  type: "hint_used",
+  type: "answer_viewed",
   origin: "vscode",
   conceptIds: ["go.defer"],
 };

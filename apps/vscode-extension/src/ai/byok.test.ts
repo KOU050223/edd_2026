@@ -4,7 +4,6 @@ import { BYOKProvider, byokSecretKey, isByokVendor, isSafeByokBaseUrl } from "./
 import { META_MARKER } from "./prompt";
 
 const REQUEST: AIRequest = {
-  mode: "explain",
   context: {
     code: "const answer = 42;",
     source: "editor",

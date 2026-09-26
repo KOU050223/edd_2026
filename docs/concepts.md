@@ -206,13 +206,11 @@ Concept を1つ足すたびに型ファイルが変更され、並行して動�
 | ---------------------- | -------------- |
 | `solved_independently` | +0.25          |
 | `check_passed`         | +0.20          |
-| `hint_used`            | +0.05          |
 | `answer_viewed`        | 0              |
 | `check_failed`         | −0.15          |
 | `error_recurred`       | −0.20          |
 | `question_asked`       | 0              |
 
-`hint_used` をわずかに正とするのは、ヒントで前進した事実は完全な無情報ではないため。
 `answer_viewed` を 0 とするのは、答えを見たこと自体は理解を示さないため。
 
 クライアント（VS Code の globalState）では、`score` はイベントごとの加減算を

@@ -6,17 +6,8 @@
  * デモ時の Fallback ではなく、開発中の既定実装として使う。
  */
 
-import type { AIError, AIRequest, AIResponse } from "./types";
+import type { AIError, AIResponse } from "./types";
 import type { AIProvider } from "./provider";
-
-const MOCK_HINT_TEXT = [
-  "【Hint】",
-  "答えは書きません。次の一手だけ示します。",
-  "",
-  "1. 選択したコードで、値が変わっている変数を探してください。",
-  "2. その変数がどこで宣言されているかを確認してください。",
-  "3. 宣言と使用箇所で、扱っている型が一致しているかを見てください。",
-].join("\n");
 
 const MOCK_EXPLAIN_TEXT = [
   "【Explain】",
@@ -45,7 +36,7 @@ export class MockProvider implements AIProvider {
 
   constructor(private readonly options: MockProviderOptions = {}) {}
 
-  async ask(request: AIRequest): Promise<AIResponse> {
+  async ask(): Promise<AIResponse> {
     const { delayMs = 0, failWith } = this.options;
 
     if (delayMs > 0) {
@@ -59,11 +50,10 @@ export class MockProvider implements AIProvider {
     return {
       ok: true,
       answer: {
-        text: request.mode === "hint" ? MOCK_HINT_TEXT : MOCK_EXPLAIN_TEXT,
+        text: MOCK_EXPLAIN_TEXT,
         // Concept の抽出は AI 側の仕事であり、Mock は推測しない。
         // 空配列でも学習イベントの記録が破綻しないことをここで確認できる。
         conceptIds: [],
-        mode: request.mode,
         model: this.id,
       },
     };

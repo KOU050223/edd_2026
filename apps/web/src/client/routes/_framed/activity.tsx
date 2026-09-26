@@ -12,7 +12,7 @@ import { takeLoginRetry } from "../../session.js";
 type Activity = { from: string; to: string; days: ActivityDay[] };
 
 function Chart({ days }: { days: ActivityDay[] }) {
-  const kinds = ["solved_independently", "hint_used", "error_recurred"];
+  const kinds = ["solved_independently", "error_recurred"];
   const max = Math.max(
     1,
     ...days.map((day) => Object.values(day.counts).reduce((sum, count) => sum + count, 0)),
@@ -64,8 +64,7 @@ function ActivityView() {
           <Chart days={days} />
           <p className="legend">
             <i className="solved_independently" />
-            自力解決 <i className="hint_used" />
-            ヒント利用 <i className="error_recurred" />
+            自力解決 <i className="error_recurred" />
             エラー再発
           </p>
         </>

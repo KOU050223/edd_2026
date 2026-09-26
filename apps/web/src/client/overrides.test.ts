@@ -8,13 +8,13 @@ const CONCEPTS: Concept[] = [
     label: "ポインタ",
     status: "learning",
     score: 0.4,
-    evidence: { solvedIndependentlyCount: 1, hintUsedCount: 3 },
+    evidence: { solvedIndependentlyCount: 1 },
   },
   {
     conceptId: "go.defer",
     status: "unobserved",
     score: 0,
-    evidence: { solvedIndependentlyCount: 0, hintUsedCount: 0 },
+    evidence: { solvedIndependentlyCount: 0 },
   },
 ];
 
@@ -24,7 +24,7 @@ test("手動で理解度を変えても自動算出の evidence は書き換え�
   });
 
   expect(overlaid[0]?.status).toBe("confirmed");
-  expect(overlaid[0]?.evidence).toEqual({ solvedIndependentlyCount: 1, hintUsedCount: 3 });
+  expect(overlaid[0]?.evidence).toEqual({ solvedIndependentlyCount: 1 });
 });
 
 test("手動で変えた Concept は自動算出の値を併せて保持する", () => {

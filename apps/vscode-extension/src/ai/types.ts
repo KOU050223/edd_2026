@@ -8,7 +8,6 @@ export type {
   AIErrorReason,
   AIRequest,
   AIResponse,
-  AskMode,
   ConversationTurn,
   ProfileSummary,
 } from "@gakushu-sochi/domain";
