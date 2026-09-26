@@ -186,7 +186,7 @@ Client が観測する事実
 | Learning Query | `GET /v1/learning-profile` / `GET /v1/learning-activity`                          | 導出済みのLearning Mapと根拠、日次の集計を返す                                 |
 | Learner Data   | `GET/PUT /v1/mastery-overrides` / `GET/PUT /v1/user-settings`                     | 習熟度の手動上書きとユーザー設定（利用者自身の宣言であり行動記録ではない）     |
 | AI Gateway     | `POST /v1/ai/responses` / `GET /v1/ai/usage`                                      | Managed AI の実行・利用制限・課金と、残量の提示を扱う                          |
-| Check Content  | `POST /v1/checks:generate`                                                        | 確認問題（2問1組）を Concept の定義から生成する                                |
+| Check Content  | `POST /v1/checks:generate`                                                        | 確認問題（2問1組）を返す。保存済みを全利用者で使い回し、無ければ生成して保存   |
 | Data Rights    | `GET /v1/learning-events:export` / `DELETE /v1/learning-events` / `DELETE /v1/me` | 自分の学習データを取り出す／消す／退会（[`data-privacy.md`](data-privacy.md)） |
 
 端末をユーザーへ結びつける処理は Identity の責務であり、独立した `/devices` という
