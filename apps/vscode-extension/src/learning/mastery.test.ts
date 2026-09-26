@@ -23,7 +23,7 @@ test("イベントが無いConceptはmasteryに現れない(unobserved相当)", 
 test("自力解決を2回積むとconfirmedになる", () => {
   let profile = createEmptyProfile("2026-09-05T00:00:00.000Z");
 
-  profile = applyEvent(profile, event({ type: "hint_used" }));
+  profile = applyEvent(profile, event({ type: "answer_viewed" }));
   profile = applyEvent(profile, event({ type: "solved_independently" }));
   profile = applyEvent(profile, event({ type: "solved_independently" }));
 

@@ -39,7 +39,7 @@ const observed = (
   conceptId,
   status,
   score: status === "confirmed" ? 0.8 : 0.3,
-  evidence: { solvedIndependentlyCount: 1, hintUsedCount: 2, lastObservedAt },
+  evidence: { solvedIndependentlyCount: 1, lastObservedAt },
 });
 
 test("応答に無い Concept を未観測として補い、定義順に並べる", () => {
@@ -52,7 +52,7 @@ test("応答に無い Concept を未観測として補い、定義順に並べ�
     ["go.d", "unobserved"],
     ["ts.a", "unobserved"],
   ]);
-  expect(concepts[0]?.evidence).toEqual({ solvedIndependentlyCount: 0, hintUsedCount: 0 });
+  expect(concepts[0]?.evidence).toEqual({ solvedIndependentlyCount: 0 });
 });
 
 test("イベントが 0 件でも全 Concept を未観測として出し、割合は表示しない", () => {

@@ -25,7 +25,6 @@ interface SampleConcept {
   score: number;
   evidence: {
     solvedIndependentlyCount: number;
-    hintUsedCount: number;
     lastObservedAt?: string;
   };
 }
@@ -36,14 +35,13 @@ const observed = (
   status: SampleConcept["status"],
   score: number,
   solved: number,
-  hints: number,
   lastObservedAt: string,
 ): SampleConcept => ({
   conceptId,
   label,
   status,
   score,
-  evidence: { solvedIndependentlyCount: solved, hintUsedCount: hints, lastObservedAt },
+  evidence: { solvedIndependentlyCount: solved, lastObservedAt },
 });
 
 /**
@@ -59,7 +57,6 @@ const SAMPLE_CONCEPTS: SampleConcept[] = [
     "confirmed",
     0.92,
     6,
-    0,
     "2026-09-10T02:10:00.000Z",
   ),
   observed(
@@ -68,7 +65,6 @@ const SAMPLE_CONCEPTS: SampleConcept[] = [
     "confirmed",
     0.88,
     5,
-    1,
     "2026-09-11T05:20:00.000Z",
   ),
   observed(
@@ -77,7 +73,6 @@ const SAMPLE_CONCEPTS: SampleConcept[] = [
     "confirmed",
     0.85,
     4,
-    1,
     "2026-09-12T01:40:00.000Z",
   ),
   observed(
@@ -86,7 +81,6 @@ const SAMPLE_CONCEPTS: SampleConcept[] = [
     "confirmed",
     0.83,
     5,
-    2,
     "2026-09-15T03:05:00.000Z",
   ),
   observed(
@@ -95,7 +89,6 @@ const SAMPLE_CONCEPTS: SampleConcept[] = [
     "confirmed",
     0.79,
     3,
-    1,
     "2026-09-16T06:30:00.000Z",
   ),
   observed(
@@ -104,7 +97,6 @@ const SAMPLE_CONCEPTS: SampleConcept[] = [
     "confirmed",
     0.81,
     4,
-    1,
     "2026-09-17T02:55:00.000Z",
   ),
   observed(
@@ -113,7 +105,6 @@ const SAMPLE_CONCEPTS: SampleConcept[] = [
     "confirmed",
     0.76,
     3,
-    2,
     "2026-09-18T07:15:00.000Z",
   ),
   observed(
@@ -122,7 +113,6 @@ const SAMPLE_CONCEPTS: SampleConcept[] = [
     "confirmed",
     0.74,
     3,
-    2,
     "2026-09-19T04:45:00.000Z",
   ),
   observed(
@@ -131,7 +121,6 @@ const SAMPLE_CONCEPTS: SampleConcept[] = [
     "learning",
     0.35,
     1,
-    3,
     "2026-09-22T08:00:00.000Z",
   ),
   // 現在地。学習中のうち最後に観測したものが選ばれる。
@@ -141,7 +130,6 @@ const SAMPLE_CONCEPTS: SampleConcept[] = [
     "learning",
     0.4,
     3,
-    2,
     "2026-09-25T09:12:00.000Z",
   ),
   observed(
@@ -150,35 +138,17 @@ const SAMPLE_CONCEPTS: SampleConcept[] = [
     "confirmed",
     0.9,
     4,
-    0,
     "2026-09-08T01:00:00.000Z",
   ),
-  observed(
-    "git.staging",
-    "add とステージング",
-    "confirmed",
-    0.86,
-    5,
-    0,
-    "2026-09-08T02:00:00.000Z",
-  ),
-  observed(
-    "git.commit",
-    "コミットとメッセージ",
-    "confirmed",
-    0.84,
-    6,
-    1,
-    "2026-09-09T02:30:00.000Z",
-  ),
-  observed("git.branch", "ブランチと切り替え", "learning", 0.3, 1, 2, "2026-09-20T05:00:00.000Z"),
+  observed("git.staging", "add とステージング", "confirmed", 0.86, 5, "2026-09-08T02:00:00.000Z"),
+  observed("git.commit", "コミットとメッセージ", "confirmed", 0.84, 6, "2026-09-09T02:30:00.000Z"),
+  observed("git.branch", "ブランチと切り替え", "learning", 0.3, 1, "2026-09-20T05:00:00.000Z"),
   observed(
     "http.request_response",
     "リクエストとレスポンスの構造",
     "confirmed",
     0.72,
     2,
-    1,
     "2026-09-14T03:20:00.000Z",
   ),
   // HTTP は全 7 件を確認済みにしてある。コンプリートの表示を確かめるため。
@@ -188,7 +158,6 @@ const SAMPLE_CONCEPTS: SampleConcept[] = [
     "confirmed",
     0.78,
     3,
-    0,
     "2026-09-14T04:00:00.000Z",
   ),
   observed(
@@ -197,7 +166,6 @@ const SAMPLE_CONCEPTS: SampleConcept[] = [
     "confirmed",
     0.8,
     3,
-    1,
     "2026-09-15T01:00:00.000Z",
   ),
   observed(
@@ -206,20 +174,11 @@ const SAMPLE_CONCEPTS: SampleConcept[] = [
     "confirmed",
     0.75,
     2,
-    1,
     "2026-09-16T02:00:00.000Z",
   ),
-  observed("http.rest", "REST のリソース指向", "confirmed", 0.73, 2, 2, "2026-09-18T05:00:00.000Z"),
-  observed("http.cors", "CORS とオリジン", "confirmed", 0.71, 2, 3, "2026-09-19T06:00:00.000Z"),
-  observed(
-    "http.auth",
-    "認証ヘッダとトークン",
-    "confirmed",
-    0.77,
-    3,
-    1,
-    "2026-09-21T07:00:00.000Z",
-  ),
+  observed("http.rest", "REST のリソース指向", "confirmed", 0.73, 2, "2026-09-18T05:00:00.000Z"),
+  observed("http.cors", "CORS とオリジン", "confirmed", 0.71, 2, "2026-09-19T06:00:00.000Z"),
+  observed("http.auth", "認証ヘッダとトークン", "confirmed", 0.77, 3, "2026-09-21T07:00:00.000Z"),
 ];
 
 const PROFILE = {

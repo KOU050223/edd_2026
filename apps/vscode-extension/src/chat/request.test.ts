@@ -19,7 +19,6 @@ test("Chatの質問とLSP文脈をVS Code非依存のAIRequestへ変換する", 
   };
 
   expect(createChatAIRequest(context, "この関数は何をしていますか？")).toEqual({
-    mode: "explain",
     question: "この関数は何をしていますか？",
     context,
   });
@@ -38,7 +37,6 @@ test("会話履歴を渡すとAIRequestのhistoryへそのまま載る", () => {
   ];
 
   expect(createChatAIRequest(context, "分かりました", history)).toEqual({
-    mode: "explain",
     question: "分かりました",
     context,
     history,
@@ -70,7 +68,6 @@ test("選択範囲にあるDiagnosticsをAIRequestへ引き継ぐ", () => {
   const diagnostics = ["Type 'string' is not assignable to type 'number'."];
 
   expect(createChatAIRequest(context, "なぜですか？", [], diagnostics)).toMatchObject({
-    mode: "explain",
     diagnostics,
   });
 });

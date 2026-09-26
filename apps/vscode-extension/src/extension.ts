@@ -496,7 +496,7 @@ export function activate(context: vscode.ExtensionContext): void {
       response.markdown(aiResponse.answer.text);
 
       // MVP/02 (#23): 自己申告ではなく、行動と結果から習熟度を組み立てる。
-      // ここでは「質問に答えた」事実を記録する。ヒントか解説かで種別を分ける。
+      // ここでは「答えを見た」事実を記録する。
       const sessionId = randomUUID();
 
       // 診断/02 (#76): 時間窓の内に解説したエラーが再び解説対象になったら、
@@ -509,7 +509,7 @@ export function activate(context: vscode.ExtensionContext): void {
       await persistEvent({
         id: randomUUID(),
         occurredAt: nowIso(),
-        type: aiResponse.answer.mode === "hint" ? "hint_used" : "answer_viewed",
+        type: "answer_viewed",
         origin: "vscode",
         conceptIds: aiResponse.answer.conceptIds,
         language: codeContext.languageId,

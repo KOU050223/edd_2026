@@ -445,7 +445,6 @@ export class BYOKProvider implements AIProvider {
         answer: {
           text: parsed.text,
           conceptIds: parsed.conceptIds,
-          mode: request.mode,
           model,
           ...(parsed.resolution ? { resolution: parsed.resolution } : {}),
         },
