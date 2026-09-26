@@ -13,6 +13,12 @@
 明示したオプトインにする。ユーザーがデータをエクスポート・削除できるAPIも、同期機能と
 同じ設計単位で検討する。
 
+「質問履歴の保存」（Issue #204）はこの要件を実装したオプトインである。既定は off で、
+利用者が明示的に有効にした場合だけ、質問文・選択テキスト・AI の回答本文が
+`conversations` としてサーバーへ保存される。送信の可否はクライアント側のキャッシュと
+サーバー側の `user_settings.saveConversationHistory` で二重に判定する。詳細は
+[`docs/conversation-history.md`](conversation-history.md) を参照する。
+
 ## 保存期間と削除
 
 学習イベントは**無期限に保存する**。自動で消す期限は設けない。
@@ -25,11 +31,16 @@
 その代わり、利用者がいつでも自分で取り出し・消せる経路を用意する（#79）。
 「決めていない」ではなく「無期限、ただし本人がいつでも消せる」を方針とする。
 
-| 操作         | API                              | 消える／返るもの                                     |
-| ------------ | -------------------------------- | ---------------------------------------------------- |
-| エクスポート | `GET /v1/learning-events:export` | 自分の学習イベント全件と、そこから導出した習熟度     |
-| 履歴の削除   | `DELETE /v1/learning-events`     | 自分の学習イベント全件。アカウント・端末・設定は残す |
-| 退会         | `DELETE /v1/me`                  | アカウントごと全データ（docs/auth.md §8）            |
+| 操作                   | API                                                        | 消える／返るもの                                                   |
+| ---------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------ |
+| エクスポート           | `GET /v1/learning-events:export`                           | 自分の学習イベント全件と、そこから導出した習熟度                   |
+| 履歴の削除             | `DELETE /v1/learning-events`                               | 自分の学習イベント全件と会話履歴全件。アカウント・端末・設定は残す |
+| 会話履歴のエクスポート | `GET /v1/conversations:export`                             | 自分の会話履歴全件（本文込み）                                     |
+| 会話履歴の削除         | `DELETE /v1/conversations`・`DELETE /v1/conversations/:id` | 質問履歴だけを1件または全件で消せる（習熟度の根拠ではないため）    |
+| 退会                   | `DELETE /v1/me`                                            | アカウントごと全データ（docs/auth.md §8）                          |
+
+- **`DELETE /v1/learning-events` は会話履歴も一緒に消す。** 「履歴を消したのに
+  質問履歴が残る」状態を作らないためである（#157 で Evidence を畳み込んだのと同じ判断）。
 
 - **エクスポートの形式は `packages/domain` の `LearnerProfile` そのものである。**
   VS Code 拡張が `globalState` に持つ形と同じで、独自形式を作らない。
@@ -62,8 +73,9 @@
 | VS Code 拡張 | `globalState` に残る。`gakushuSochi.learnerProfile`・旧キー `codeCompanion.learnerProfile`・`gakushuSochi.explainedErrors` の3キー。 |
 
 `globalState` のうち `gakushuSochi.clientId`（端末の識別子）、`gakushuSochi.consent`（同意の記録）、
-`gakushuSochi.appliedHistoryResetAtMs`（同期状態）は学習データではなく、削除の対象外である。
-SecretStorage の資格情報も同様（#87 が持つ）。
+`gakushuSochi.appliedHistoryResetAtMs`（同期状態）、
+`gakushuSochi.saveConversationHistory`（質問履歴オプトインのキャッシュ）は
+学習データではなく、削除の対象外である。SecretStorage の資格情報も同様（#87 が持つ）。
 
 VS Code 拡張の `globalState` は、サーバーとは独立した手元の履歴である。サーバーだけ消して手元に残すと、
 利用者から見て「削除した」ことにならない。そのため**削除の操作は両方を消す**方針とする。
@@ -108,19 +120,23 @@ VS Code 拡張の `globalState` は、サーバーとは独立した手元の履
 利用者が VS Code へ登録した BYOK（Anthropic / OpenAI / Google など）やローカルモデルが
 選ばれることがある。どれへ送られるかは利用者の VS Code の設定で決まる。
 保存の有無はその提供元の規約に従う。同意の文面はこの事実を含む
-（`CONSENT_NOTICE_VERSION` は 4。#121 で送信先が増えたため版を上げ、
-#174 で Desktop / Web の経路を文面へ含めてさらに版を上げ、同意を取り直す）。
+（`CONSENT_NOTICE_VERSION` は 6。#121 で送信先が増えたため版を上げ、
+#174 で Desktop / Web の経路を文面へ含めてさらに版を上げ、#204 で質問履歴の
+オプトイン保存を文面へ含めて同意を取り直す）。
 
 ### API Server（Cloudflare Workers / D1）
 
-|                | 内容                                                                                                                               |
-| -------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| 送るもの       | Concept ID、言語ID、イベント種別、発生時刻、イベントID、セッションID、端末ID（`clientId`）、`Authorization: Bearer` の短命トークン |
-| 保存されるもの | 上記のメタデータのみ                                                                                                               |
+|                | 内容                                                                                                                                                                                                                                               |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 送るもの       | Concept ID、言語ID、イベント種別、発生時刻、イベントID、セッションID、端末ID（`clientId`）、`Authorization: Bearer` の短命トークン。<br>**「質問履歴の保存」が有効なときだけ**、質問文・選択テキスト・AI の回答本文（`PUT /v1/conversations/:id`） |
+| 保存されるもの | 上記のメタデータ。オプトイン有効時のみ会話本文（`conversations` テーブル、削除するまで残る）                                                                                                                                                       |
 
-**コード本文・周辺コード・質問本文・AI回答全文は送らない。** 上の保存方針を
-そのまま送信境界にも適用している。実装は
-`apps/vscode-extension/src/learning/sync.ts`、契約は `apps/api/src/contract/learning-event.ts`。
+**既定ではコード本文・周辺コード・質問本文・AI回答全文は送らない。** 上の保存方針を
+そのまま送信境界にも適用している。「質問履歴の保存」を有効にした場合でも、送る本文は
+選択テキストと質問・回答だけであり、周辺コード・他ファイルの定義・diagnostics は
+履歴へ含めない。実装は `apps/vscode-extension/src/learning/sync.ts` と
+`apps/vscode-extension/src/conversations/`、契約は `apps/api/src/contract/learning-event.ts`
+と `apps/api/src/contract/conversations.ts`。
 
 ### Managed AI（Gemini 経由、Desktop が使用）
 

@@ -112,6 +112,24 @@ test("同意の確認と取り消しを利用者がコマンドから行える",
   );
 });
 
+test("質問履歴の保存を利用者がコマンドから切り替えられる", () => {
+  // #204: オプトインの切り替えはコマンド経由にする。設定項目として生やすと
+  // 開いたリポジトリの .vscode/settings.json が送信可否を偽装できるため。
+  expect(manifest.contributes.commands).toEqual(
+    expect.arrayContaining([
+      {
+        command: "gakushuSochi.toggleConversationHistory",
+        title: "Gakushu Sochi: 質問履歴の保存を切り替える",
+      },
+    ]),
+  );
+  // 送信可否を左右する値はワークスペース設定として持たない（RULE-006）。
+  const historySettings = Object.keys(manifest.contributes.configuration.properties).filter(
+    (key) => key.toLowerCase().includes("history") || key.toLowerCase().includes("conversation"),
+  );
+  expect(historySettings).toEqual([]);
+});
+
 test("同意の状態をワークスペース設定から書き換えられない", () => {
   // 同意は globalState にしか置かない。設定項目として生やすと、開いたリポジトリの
   // .vscode/settings.json が同意を偽装できてしまう（RULE-006）。

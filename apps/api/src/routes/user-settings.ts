@@ -44,8 +44,22 @@ export function createUserSettingsRoute(resolve: UserSettingsDepsResolver) {
     // `user_settings.user_id` は `users(id)` を参照しており、D1 は外部キーを
     // 実際に強制する。行が無いまま INSERT すると FOREIGN KEY constraint failed で落ちる
     // （repository/types.ts の `ensureUser` の説明を参照）。
-    await deps.identity.ensureUser({ userId: c.get("user").userId, nowMs: deps.nowMs() });
-    const saved = await deps.repository.put(c.get("user").userId, validated.value, deps.nowIso());
+    const userId = c.get("user").userId;
+    await deps.identity.ensureUser({ userId, nowMs: deps.nowMs() });
+
+    // saveConversationHistory が省略されたときは保存済みの値を維持する。
+    // 省略を false として書くと、「履歴を保存するか」以外を直すたびに
+    // オプトインが黙って外れる（contract/user-settings.ts を参照）。
+    const current = await deps.repository.get(userId);
+    const saved = await deps.repository.put(
+      userId,
+      {
+        ...validated.value,
+        saveConversationHistory:
+          validated.value.saveConversationHistory ?? current?.saveConversationHistory ?? false,
+      },
+      deps.nowIso(),
+    );
     // 保存後の値をそのまま返す。画面はこれを採用するので、
     // 表示している内容と保存された内容が食い違わない。
     return c.json(saved, 200, { "cache-control": "no-store" });

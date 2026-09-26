@@ -8,17 +8,21 @@
  */
 
 import type {
+  Conversation,
   HistoryProviderId,
   LearningEvent,
   LearningEvidence,
   UnmappedCandidate,
 } from "@gakushu-sochi/domain";
 import type { ImportSessionView } from "../contract/history-import.js";
+import type { ConversationSummary } from "../contract/conversations.js";
 import { ACCOUNT_DELETION_TOMBSTONE_TTL_MS } from "./types.js";
 import type {
   AppendResult,
   AuditLogEntry,
   AuditLogRepository,
+  ConversationListParams,
+  ConversationRepository,
   IdentityRepository,
   ImportSessionRepository,
   LearningEventRepository,
@@ -47,6 +51,8 @@ export interface InMemoryRepositoryStore {
     string,
     Map<string, { session: ImportSessionView; unmappedCandidates: UnmappedCandidate[] }>
   >;
+  /** userId -> (conversationId -> conversation)。D1 の conversations に対応する。 */
+  readonly conversationsByUser: Map<string, Map<string, Conversation>>;
 }
 
 export function createInMemoryRepositoryStore(): InMemoryRepositoryStore {
@@ -59,6 +65,7 @@ export function createInMemoryRepositoryStore(): InMemoryRepositoryStore {
     auditLog: [],
     evidenceByUser: new Map(),
     importSessionsByUser: new Map(),
+    conversationsByUser: new Map(),
   };
 }
 
@@ -212,9 +219,11 @@ export class InMemoryIdentityRepository implements IdentityRepository {
     this.devicesByUser.delete(userId);
     this.store.eventsByUser.delete(userId);
     this.store.historyResets.delete(userId);
-    // learning_evidence / import_sessions も users(id) を CASCADE で参照する。
+    // learning_evidence / import_sessions / conversations も users(id) を
+    // CASCADE で参照する。
     this.store.evidenceByUser.delete(userId);
     this.store.importSessionsByUser.delete(userId);
+    this.store.conversationsByUser.delete(userId);
     // D1 の audit_log は users(id) を ON DELETE CASCADE で参照している。
     // 退会で監査ログも消えるという実際の振る舞いに合わせる。
     for (let i = this.store.auditLog.length - 1; i >= 0; i--) {
@@ -318,6 +327,107 @@ export class InMemoryLearningEvidenceRepository implements LearningEvidenceRepos
     this.byUser.delete(userId);
     return Promise.resolve(count);
   }
+}
+
+/**
+ * `ConversationRepository` のインメモリ実装。テスト用（Issue #204）。
+ *
+ * D1 実装との差異が出ないよう、upsert の「既存のほうが新しければ
+ * 書き換えない」判定と、一覧の並び順（更新時刻の降順・同時刻は ID 昇順）、
+ * カーソルの切り方を SQL 側と一致させてある。
+ */
+export class InMemoryConversationRepository implements ConversationRepository {
+  private readonly byUser: Map<string, Map<string, Conversation>>;
+
+  constructor(private readonly store = createInMemoryRepositoryStore()) {
+    this.byUser = store.conversationsByUser;
+  }
+
+  upsert(
+    userId: string,
+    conversation: Conversation,
+    receivedAtMs: number,
+  ): Promise<{ saved: boolean }> {
+    // 受信時刻を「今」としてトゥームストーンを判定する（ルート側で nowMs を渡す）。
+    if (isDeletionActive(this.store, userId, receivedAtMs)) {
+      return Promise.reject(new Error("user deletion is in progress"));
+    }
+    let items = this.byUser.get(userId);
+    if (items === undefined) {
+      items = new Map();
+      this.byUser.set(userId, items);
+    }
+
+    const existing = items.get(conversation.id);
+    // 既存のほうが新しい会話を古いスナップショットで巻き戻さない。
+    // 同時刻は書き換える（同じ内容の再送は冪等）。
+    if (
+      existing !== undefined &&
+      Date.parse(existing.updatedAt) > Date.parse(conversation.updatedAt)
+    ) {
+      return Promise.resolve({ saved: false });
+    }
+    items.set(conversation.id, conversation);
+    return Promise.resolve({ saved: true });
+  }
+
+  listByUser(userId: string, params: ConversationListParams): Promise<ConversationSummary[]> {
+    const sorted = sortedConversations(this.byUser.get(userId));
+    const filtered = params.cursor
+      ? sorted.filter((conversation) => {
+          const updatedAtMs = Date.parse(conversation.updatedAt);
+          if (updatedAtMs !== params.cursor!.updatedAtMs) {
+            return updatedAtMs < params.cursor!.updatedAtMs;
+          }
+          return conversation.id > params.cursor!.id;
+        })
+      : sorted;
+    return Promise.resolve(filtered.slice(0, params.limit).map(toSummary));
+  }
+
+  getById(userId: string, id: string): Promise<Conversation | null> {
+    return Promise.resolve(this.byUser.get(userId)?.get(id) ?? null);
+  }
+
+  deleteById(userId: string, id: string): Promise<number> {
+    return Promise.resolve(this.byUser.get(userId)?.delete(id) ? 1 : 0);
+  }
+
+  deleteAllByUser(userId: string): Promise<number> {
+    const count = this.byUser.get(userId)?.size ?? 0;
+    this.byUser.delete(userId);
+    return Promise.resolve(count);
+  }
+
+  listAllByUser(userId: string): Promise<Conversation[]> {
+    return Promise.resolve(sortedConversations(this.byUser.get(userId)));
+  }
+}
+
+/** 一覧・エクスポート共通の並び順。D1 側の ORDER BY updated_at_ms DESC, id ASC と一致させる。 */
+function sortedConversations(items: Map<string, Conversation> | undefined): Conversation[] {
+  const conversations = [...(items?.values() ?? [])];
+  conversations.sort((a, b) => {
+    const timeDiff = Date.parse(b.updatedAt) - Date.parse(a.updatedAt);
+    if (timeDiff !== 0) return timeDiff;
+    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+  });
+  return conversations;
+}
+
+function toSummary(conversation: Conversation): ConversationSummary {
+  return {
+    id: conversation.id,
+    origin: conversation.origin,
+    ...(conversation.clientId === undefined ? {} : { clientId: conversation.clientId }),
+    ...(conversation.title === undefined ? {} : { title: conversation.title }),
+    ...(conversation.language === undefined ? {} : { language: conversation.language }),
+    ...(conversation.fileName === undefined ? {} : { fileName: conversation.fileName }),
+    occurredAt: conversation.occurredAt,
+    updatedAt: conversation.updatedAt,
+    messageCount: conversation.messages.length,
+    complete: conversation.complete,
+  };
 }
 
 /**

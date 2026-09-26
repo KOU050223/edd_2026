@@ -60,3 +60,11 @@ test("送信先ごとに、送るものと保存されるものを文面で示�
   expect(CONSENT_NOTICE_DETAIL).toContain("学習記録として保存することはありません");
   expect(CONSENT_NOTICE_DETAIL).toContain("取り消");
 });
+
+test("質問履歴のオプトインで本文が保存されることを文面で示す", () => {
+  // #204 で質問文・選択テキスト・回答の保存経路が増えた。
+  // 「保存しません」とだけ書くと、オプトインを有効にした利用者への説明が
+  // 事実と矛盾する。有効時にのみ保存されることと、削除するまで残ることを明記する。
+  expect(CONSENT_NOTICE_DETAIL).toContain("質問履歴の保存");
+  expect(CONSENT_NOTICE_DETAIL).toContain("削除するまで残り");
+});
