@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { mkdtempSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 const repoRoot = new URL("..", import.meta.url);
@@ -166,6 +169,34 @@ test("desktop-v* タグで Desktop の GitHub Release を作る", () => {
     desktopPackageJson.build.artifactName,
     "Gakushu-Sochi-${version}-${os}-${arch}.${ext}",
   );
+});
+
+test("Desktop のインストール物は quarantine があっても開ける状態で届く", async () => {
+  // インストーラは未署名（adhoc）。quarantine が付いたまま /Applications に置かれると
+  // Gatekeeper がバンドル署名の不完全を「壊れている」と判定し、開く手段が残らない
+  // （Issue #211）。署名・公証が入るまでは、brew 経路は Cask の postflight で
+  // quarantine を外し、dmg 経路は afterPack でバンドル全体の adhoc 署名を整える。
+  const out = join(mkdtempSync(join(tmpdir(), "gen-cask-")), "gakushu-sochi.rb");
+  execFileSync(
+    "node",
+    [
+      "scripts/gen-cask.mjs",
+      "--version",
+      "0.1.0",
+      "--sha256-arm",
+      "a".repeat(64),
+      "--sha256-intel",
+      "b".repeat(64),
+      "--out",
+      out,
+    ],
+    { cwd: repoRoot },
+  );
+  const cask = await readFile(out, "utf8");
+  assert.match(cask, /postflight/);
+  assert.match(cask, /xattr/);
+  assert.match(cask, /com\.apple\.quarantine/);
+  assert.equal(desktopPackageJson.build.afterPack, "./scripts/after-pack.mjs");
 });
 
 test("PR レビュー由来のプロジェクトルールを hook と CI で検証する", () => {
