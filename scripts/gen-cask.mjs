@@ -60,6 +60,21 @@ const cask = `cask "gakushu-sochi" do
   homepage "https://github.com/KOU050223/edd_2026"
 
   app "Gakushu Sochi.app"
+
+  # インストーラは未署名（adhoc）なので、quarantine が残ると Gatekeeper が
+  # 「壊れている」と判定して開けない。署名・公証が入るまではインストール時に外す。
+  # postflight_steps は Homebrew 7+ の構文で、古い brew ではパースが落ちる。
+  # postflight は新旧両方で動くが、新しい brew では deprecated 警告が出るため分岐する。
+  if respond_to?(:postflight_steps)
+    postflight_steps do
+      run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{appdir}}/Gakushu Sochi.app"]
+    end
+  else
+    postflight do
+      system_command "/usr/bin/xattr",
+                     args: ["-dr", "com.apple.quarantine", "#{appdir}/Gakushu Sochi.app"]
+    end
+  end
 end
 `;
 

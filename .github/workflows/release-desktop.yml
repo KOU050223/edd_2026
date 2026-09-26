@@ -70,7 +70,9 @@ jobs:
         run: |
           npm run compile --workspace=@gakushu-sochi/domain
           npm run compile --workspace=@gakushu-sochi/desktop
-          npx --no-install electron-builder --publish never --projectDir apps/desktop
+          # build.afterPack のようなフックのパスは cwd 基準で解決される。
+          # apps/desktop を cwd にしないと ./scripts/… がルート側を指して壊れる。
+          cd apps/desktop && npx --no-install electron-builder --publish never
       - name: Upload installers
         uses: actions/upload-artifact@v4
         with:

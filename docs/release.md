@@ -61,9 +61,11 @@ Cask の URL はこれを参照するため、両方を同時に変えないと�
 
 - Actions タブから `Release Desktop` を手動実行すると、リリースを作らずに
   ビルドだけ試せる（成果物は workflow artifacts に残る）。
-- インストーラは**未署名**。macOS は右クリック → 開く、または
-  `xattr -dr com.apple.quarantine` が必要。Windows は SmartScreen の警告が出る。
-  署名・公証・自動更新（electron-updater）は未整備。
+- インストーラは**未署名**（adhoc のみ）。Homebrew 経由なら Cask の postflight が
+  quarantine を外すのでそのまま開ける。dmg から手動で入れた場合は quarantine が
+  残り「壊れている」と出るため、`xattr -dr com.apple.quarantine "/Applications/Gakushu Sochi.app"`
+  またはシステム設定 → プライバシーとセキュリティから「このまま開く」が必要。
+  Windows は SmartScreen の警告が出る。正式署名・公証・自動更新（electron-updater）は未整備。
 
 ## VS Code Extension（手動）
 

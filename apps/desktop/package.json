@@ -30,6 +30,7 @@
   },
   "build": {
     "appId": "com.gakushusochi.desktop",
+    "afterPack": "./scripts/after-pack.mjs",
     "productName": "Gakushu Sochi",
     "artifactName": "Gakushu-Sochi-${version}-${os}-${arch}.${ext}",
     "files": [
