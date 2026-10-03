@@ -90,6 +90,14 @@
             <span id="consent-status" role="status"></span>
             <button type="button" id="consent-review">内容を確認</button>
           </div>
+          <div class="auth-settings">
+            <span>質問履歴の保存</span>
+            <!-- サーバーから値を読めるまで操作させない（オフラインでは変更できない）。 -->
+            <label
+              ><input id="save-history" type="checkbox" disabled /> 質問と回答を履歴に残す</label
+            >
+            <span id="history-optin-status" role="status"></span>
+          </div>
           <label>ショートカット<input id="shortcut" required /></label>
           <!-- 自由入力にしない。サーバーの allowlist（apps/api/src/contract/ai-usage.ts）に
                無い値は送信時に 400 で弾かれるので、選べる時点で絞る。 -->

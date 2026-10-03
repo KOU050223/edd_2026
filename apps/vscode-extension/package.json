@@ -55,6 +55,10 @@
         "title": "Gakushu Sochi: 送信内容の同意を取り消す"
       },
       {
+        "command": "gakushuSochi.toggleConversationHistory",
+        "title": "Gakushu Sochi: 質問履歴の保存を切り替える"
+      },
+      {
         "command": "gakushuSochi.deleteLearningData",
         "title": "Gakushu Sochi: 学習データを削除する"
       },

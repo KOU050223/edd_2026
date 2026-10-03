@@ -35,6 +35,15 @@ export interface UserSettings {
   displayName: string | null;
   /** `/activity` を開いたときの既定の期間（日）。 */
   activityPeriodDays: ActivityPeriodDays;
+  /**
+   * 「質問履歴の保存」オプトイン（Issue #204）。
+   *
+   * 有効な場合だけ `PUT /v1/conversations/:id` が本文を保存する。
+   * サーバー側でも判定するのは、クライアントが持つ値が古くても
+   * オプトイン無しの本文が保存されないようにするため
+   * （docs/conversation-history.md「二重のゲート」）。
+   */
+  saveConversationHistory: boolean;
   /** 最後に保存した時刻。ISO 8601。一度も保存していなければ `null`。 */
   updatedAt: string | null;
 }
@@ -44,6 +53,7 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
   version: USER_SETTINGS_VERSION,
   displayName: null,
   activityPeriodDays: 30,
+  saveConversationHistory: false,
   updatedAt: null,
 };
 
@@ -51,10 +61,19 @@ export function isActivityPeriodDays(value: unknown): value is ActivityPeriodDay
   return typeof value === "number" && ACTIVITY_PERIOD_DAYS.includes(value as ActivityPeriodDays);
 }
 
-/** `PUT` が受け取る本文。保存する値だけを持ち、`updatedAt` はサーバーが決める。 */
+/**
+ * `PUT` が受け取る本文。保存する値だけを持ち、`updatedAt` はサーバーが決める。
+ *
+ * 全項目が省略可能で、**省略された項目は保存済みの値を維持する**。
+ * 「1項目だけ直したい」呼び出し（例: 履歴保存フラグの切り替え）が
+ * 現在値を読んで送り返す必要はなく、読み取りと書き込みの間に別端末が
+ * 保存した値を古い値で上書きする競合も起きない。消したい項目は省略ではなく
+ * 明示的に `null`（displayName）を送る。少なくとも1項目は必須。
+ */
 export interface UserSettingsInput {
-  displayName: string | null;
-  activityPeriodDays: ActivityPeriodDays;
+  displayName?: string | null;
+  activityPeriodDays?: ActivityPeriodDays;
+  saveConversationHistory?: boolean;
 }
 
 export type SettingsValidation =
@@ -75,12 +94,23 @@ export function validateUserSettings(payload: unknown): SettingsValidation {
   if (typeof payload !== "object" || payload === null) {
     return { ok: false, message: "invalid request body" };
   }
-  const { displayName, activityPeriodDays } = payload as {
+  const { displayName, activityPeriodDays, saveConversationHistory } = payload as {
     displayName?: unknown;
     activityPeriodDays?: unknown;
+    saveConversationHistory?: unknown;
   };
 
-  if (displayName !== null && typeof displayName !== "string") {
+  // 全項目省略（=何も変更しない PUT）は拒否する。空の PUT で
+  // 設定行が新規作成される副作用を避けるため、少なくとも1項目を要求する。
+  if (
+    displayName === undefined &&
+    activityPeriodDays === undefined &&
+    saveConversationHistory === undefined
+  ) {
+    return { ok: false, message: "at least one setting must be provided" };
+  }
+
+  if (displayName !== undefined && displayName !== null && typeof displayName !== "string") {
     return { ok: false, message: "displayName must be a string or null" };
   }
   const trimmed = typeof displayName === "string" ? displayName.trim() : null;
@@ -91,18 +121,25 @@ export function validateUserSettings(payload: unknown): SettingsValidation {
     };
   }
 
-  if (!isActivityPeriodDays(activityPeriodDays)) {
+  if (activityPeriodDays !== undefined && !isActivityPeriodDays(activityPeriodDays)) {
     return {
       ok: false,
       message: `activityPeriodDays must be one of ${ACTIVITY_PERIOD_DAYS.join(", ")}`,
     };
   }
 
+  if (saveConversationHistory !== undefined && typeof saveConversationHistory !== "boolean") {
+    return { ok: false, message: "saveConversationHistory must be a boolean" };
+  }
+
   return {
     ok: true,
     value: {
-      displayName: trimmed === null || trimmed.length === 0 ? null : trimmed,
-      activityPeriodDays,
+      ...(displayName === undefined
+        ? {}
+        : { displayName: trimmed === null || trimmed.length === 0 ? null : trimmed }),
+      ...(activityPeriodDays === undefined ? {} : { activityPeriodDays }),
+      ...(saveConversationHistory === undefined ? {} : { saveConversationHistory }),
     },
   };
 }

@@ -9,6 +9,7 @@ import {
   D1AreaCompletionRepository,
   D1AuditLogRepository,
   D1ConceptCheckRepository,
+  D1ConversationRepository,
   D1IdentityRepository,
   D1ImportSessionRepository,
   D1LearningEventRepository,
@@ -28,6 +29,7 @@ import { createManagementUsers } from "./auth/management.js";
 import { createAreaCompletionsRoute } from "./routes/area-completions.js";
 import { createMasteryOverridesRoute } from "./routes/mastery-overrides.js";
 import { createUserSettingsRoute } from "./routes/user-settings.js";
+import { createConversationsRoute } from "./routes/conversations.js";
 
 /** Cloudflare Worker から提供する HTTP API。 */
 export const app = new Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>();
@@ -156,6 +158,12 @@ app.use(
   "/v1/me",
   rateLimit((env) => env.PROFILE_RATE_LIMITER),
 );
+// 質問履歴（#204）。一覧・詳細は読み取り、書き込みも質問1回につき1回で、
+// 頻度の性質は Profile と同じなので同じ上限を使う。
+app.use(
+  "/v1/conversations*",
+  rateLimit((env) => env.PROFILE_RATE_LIMITER),
+);
 
 app.route(
   "/v1",
@@ -233,6 +241,7 @@ app.route(
     events: new D1LearningEventRepository(env.DB),
     evidence: new D1LearningEvidenceRepository(env.DB),
     sessions: new D1ImportSessionRepository(env.DB),
+    conversations: new D1ConversationRepository(env.DB),
     audit: new D1AuditLogRepository(env.DB),
     nowIso: () => new Date().toISOString(),
     nowMs: () => Date.now(),
@@ -289,6 +298,18 @@ app.route(
   createUserSettingsRoute((env) => ({
     identity: new D1IdentityRepository(env.DB),
     repository: new D1UserSettingsRepository(env.DB),
+    nowIso: () => new Date().toISOString(),
+    nowMs: () => Date.now(),
+  })),
+);
+
+app.route(
+  "/v1",
+  createConversationsRoute((env) => ({
+    identity: new D1IdentityRepository(env.DB),
+    conversations: new D1ConversationRepository(env.DB),
+    settings: new D1UserSettingsRepository(env.DB),
+    audit: new D1AuditLogRepository(env.DB),
     nowIso: () => new Date().toISOString(),
     nowMs: () => Date.now(),
   })),

@@ -4,7 +4,11 @@
 
 - 学習イベントを冪等に追記し、習熟度はサーバー側のドメイン規則から導出する。
 - API の外部契約は、このアプリに置く。複数クライアントで実際に共有が必要になるまで新しい `packages` を作らない。
-- コード本文・質問本文・AI回答全文は、明示的な同意なしに長期保存しない。
+- コード本文・質問本文・AI回答全文は、明示的なオプトインなしに長期保存しない。
+  「質問履歴の保存」（`user_settings.saveConversationHistory`）が有効な利用者の
+  会話だけを `conversations` へ保存する。`PUT /v1/conversations/:id` は
+  オプトインが無効なら本文を捨てて 403 で拒否する
+  （`src/routes/conversations.ts`、正本は `docs/conversation-history.md`）。
   確認問題（`concept_checks`、#185）は例外ではなく対象外である。入力が Concept の定義だけの
   全利用者共有コンテンツで、利用者の質問への回答ではないため保存して使い回す。
 - `packages/domain` は利用してよいが、VS Code API やUIの型へ依存してはならない。

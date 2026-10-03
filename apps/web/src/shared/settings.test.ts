@@ -12,17 +12,25 @@ import {
 } from "./settings.js";
 
 test("画面の入力から送信する値を作り、表示名を正規化する", () => {
-  expect(toSettingsInput({ displayName: "  こう  ", activityPeriodDays: 7 })).toEqual({
+  expect(
+    toSettingsInput({
+      displayName: "  こう  ",
+      activityPeriodDays: 7,
+      saveConversationHistory: false,
+    }),
+  ).toEqual({
     ok: true,
-    value: { displayName: "こう", activityPeriodDays: 7 },
+    value: { displayName: "こう", activityPeriodDays: 7, saveConversationHistory: false },
   });
 });
 
 test("空の表示名は未設定として送る", () => {
   // 空文字を保存すると「未設定」と区別がつかなくなる。null へ寄せる。
-  expect(toSettingsInput({ displayName: "   ", activityPeriodDays: 30 })).toEqual({
+  expect(
+    toSettingsInput({ displayName: "   ", activityPeriodDays: 30, saveConversationHistory: true }),
+  ).toEqual({
     ok: true,
-    value: { displayName: null, activityPeriodDays: 30 },
+    value: { displayName: null, activityPeriodDays: 30, saveConversationHistory: true },
   });
 });
 
@@ -32,18 +40,36 @@ test("設定レスポンスの形を検証し、不正な2xx本文を受け入�
       version: 1,
       displayName: "こう",
       activityPeriodDays: 30,
+      saveConversationHistory: false,
       updatedAt: null,
     }),
   ).toBe(true);
   expect(isUserSettings({})).toBe(false);
   expect(
-    isUserSettings({ version: 1, displayName: null, activityPeriodDays: 31, updatedAt: null }),
+    isUserSettings({
+      version: 1,
+      displayName: null,
+      activityPeriodDays: 31,
+      saveConversationHistory: false,
+      updatedAt: null,
+    }),
+  ).toBe(false);
+  // saveConversationHistory を持たない古い応答は、値を補って受け入れない。
+  // 「無効として扱う」と黙って落とすと、有効にしたつもりの人の履歴が保存されない。
+  expect(
+    isUserSettings({ version: 1, displayName: null, activityPeriodDays: 30, updatedAt: null }),
   ).toBe(false);
 });
 
 test("上限を超える表示名は切り詰めずに失敗として返す", () => {
   // 切り詰めて送ると、入力した値と保存された値が黙って食い違う（RULE-004）。
-  expect(toSettingsInput({ displayName: "あ".repeat(41), activityPeriodDays: 30 })).toMatchObject({
+  expect(
+    toSettingsInput({
+      displayName: "あ".repeat(41),
+      activityPeriodDays: 30,
+      saveConversationHistory: false,
+    }),
+  ).toMatchObject({
     ok: false,
   });
 });
@@ -52,7 +78,13 @@ test("画面で選べる期間は、すべて送信できる値である", () =>
   // 選べるのに保存できない設定を作らない。API 側の選択肢と同じ並びを保つ。
   for (const days of ACTIVITY_PERIOD_DAYS) {
     expect(isActivityPeriodDays(days)).toBe(true);
-    expect(toSettingsInput({ displayName: "", activityPeriodDays: days })).toMatchObject({
+    expect(
+      toSettingsInput({
+        displayName: "",
+        activityPeriodDays: days,
+        saveConversationHistory: false,
+      }),
+    ).toMatchObject({
       ok: true,
       value: { activityPeriodDays: days },
     });
@@ -88,6 +120,7 @@ const savedSettings = (overrides: Partial<UserSettings> = {}): UserSettings => (
   version: 1,
   displayName: "こう",
   activityPeriodDays: 30,
+  saveConversationHistory: false,
   updatedAt: "2026-09-22T00:00:00.000Z",
   ...overrides,
 });
@@ -97,6 +130,7 @@ test("保存済みの設定を編集できる形へ写すと、未設定は空�
   expect(toDraft(savedSettings({ displayName: null }))).toEqual({
     displayName: "",
     activityPeriodDays: 30,
+    saveConversationHistory: false,
   });
 });
 
@@ -108,21 +142,46 @@ test("読み込んだ値をそのまま写した直後は、変更なしと判�
 
 test("値を変えると差分として検出する", () => {
   const settings = savedSettings();
-  expect(sameSettings(settings, { displayName: "べつ", activityPeriodDays: 30 })).toBe(false);
-  expect(sameSettings(settings, { displayName: "こう", activityPeriodDays: 7 })).toBe(false);
+  expect(
+    sameSettings(settings, {
+      displayName: "べつ",
+      activityPeriodDays: 30,
+      saveConversationHistory: false,
+    }),
+  ).toBe(false);
+  expect(
+    sameSettings(settings, {
+      displayName: "こう",
+      activityPeriodDays: 7,
+      saveConversationHistory: false,
+    }),
+  ).toBe(false);
+  // オプトインだけの変更も差分として検出する。検出しないと保存ボタンが無効のままになる。
+  expect(
+    sameSettings(settings, {
+      displayName: "こう",
+      activityPeriodDays: 30,
+      saveConversationHistory: true,
+    }),
+  ).toBe(false);
 });
 
 test("空白を足しただけは変更として数えない", () => {
   // 比較は正規化した後の値で行う。生の文字列で比べると、保存しても内容が
   // 変わらないのに保存ボタンだけが有効になる。
-  expect(sameSettings(savedSettings(), { displayName: "  こう  ", activityPeriodDays: 30 })).toBe(
-    true,
-  );
+  expect(
+    sameSettings(savedSettings(), {
+      displayName: "  こう  ",
+      activityPeriodDays: 30,
+      saveConversationHistory: false,
+    }),
+  ).toBe(true);
   // 未設定に空白だけを入れた場合も同じ。
   expect(
     sameSettings(savedSettings({ displayName: null }), {
       displayName: "   ",
       activityPeriodDays: 30,
+      saveConversationHistory: false,
     }),
   ).toBe(true);
 });
@@ -133,11 +192,16 @@ test("送れない値は「保存済みと同じ」に倒さない", () => {
     sameSettings(savedSettings(), {
       displayName: "あ".repeat(DISPLAY_NAME_MAX_LENGTH + 1),
       activityPeriodDays: 30,
+      saveConversationHistory: false,
     }),
   ).toBe(false);
-  expect(sameSettings(savedSettings(), { displayName: "こう", activityPeriodDays: 31 })).toBe(
-    false,
-  );
+  expect(
+    sameSettings(savedSettings(), {
+      displayName: "こう",
+      activityPeriodDays: 31,
+      saveConversationHistory: false,
+    }),
+  ).toBe(false);
 });
 
 test("設定項目が増えても、差分の判定を手で直さなくてよい", () => {

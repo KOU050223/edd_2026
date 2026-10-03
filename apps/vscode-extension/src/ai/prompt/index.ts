@@ -66,6 +66,17 @@ function userQuestionOf(request: AIRequest): string | undefined {
 }
 
 /**
+ * AI が実際に受け取った「何に答えるか」を返す。
+ *
+ * 利用者が質問を書かなかったとき、AI は preset の解説指示に答える。
+ * 質問履歴には空の user メッセージではなくこの実効の質問を残す
+ * （空質問のままだと、何に答えた履歴かが失われる）。
+ */
+export function effectiveQuestion(request: AIRequest): string {
+  return userQuestionOf(request) ?? presetInstruction(request).join("\n");
+}
+
+/**
  * AIRequest を、VS Code Language Model に送る単一のユーザープロンプトへ変換する。
  *
  * Prompt はプロダクトの学習方針そのものなので、このディレクトリだけを編集すれば

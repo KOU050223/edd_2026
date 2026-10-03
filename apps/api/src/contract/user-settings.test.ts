@@ -31,7 +31,8 @@ test("判定できない値は既定値へ丸めず拒否する", () => {
   for (const payload of [
     null,
     "string",
-    { displayName: null },
+    // 全項目省略は何も変更しない PUT になるため拒否する。
+    {},
     { displayName: null, activityPeriodDays: 0 },
     { displayName: null, activityPeriodDays: 31 },
     { displayName: null, activityPeriodDays: "30" },
@@ -48,4 +49,40 @@ test("上限ちょうどの表示名は受理する", () => {
   ).toMatchObject({
     ok: true,
   });
+});
+
+test("全項目が省略可能で、省略項目は出力へ含めない", () => {
+  // 「1項目だけ直す」呼び出しが現在値を読み返す必要がないようにする
+  // （Issue #204）。省略と現状維持の区別はキーの有無で担う。
+  expect(validateUserSettings({ saveConversationHistory: true })).toEqual({
+    ok: true,
+    value: { saveConversationHistory: true },
+  });
+  expect(validateUserSettings({ displayName: null, activityPeriodDays: 30 })).toEqual({
+    ok: true,
+    value: { displayName: null, activityPeriodDays: 30 },
+  });
+  expect(
+    validateUserSettings({
+      displayName: null,
+      activityPeriodDays: 30,
+      saveConversationHistory: true,
+    }),
+  ).toEqual({
+    ok: true,
+    value: { displayName: null, activityPeriodDays: 30, saveConversationHistory: true },
+  });
+});
+
+test("saveConversationHistory が真偽値でなければ拒否する", () => {
+  for (const value of ["true", 1, null]) {
+    expect(
+      validateUserSettings({
+        displayName: null,
+        activityPeriodDays: 30,
+        saveConversationHistory: value,
+      }),
+      JSON.stringify(value),
+    ).toMatchObject({ ok: false });
+  }
 });

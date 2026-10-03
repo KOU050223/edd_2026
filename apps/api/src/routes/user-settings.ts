@@ -44,8 +44,13 @@ export function createUserSettingsRoute(resolve: UserSettingsDepsResolver) {
     // `user_settings.user_id` は `users(id)` を参照しており、D1 は外部キーを
     // 実際に強制する。行が無いまま INSERT すると FOREIGN KEY constraint failed で落ちる
     // （repository/types.ts の `ensureUser` の説明を参照）。
-    await deps.identity.ensureUser({ userId: c.get("user").userId, nowMs: deps.nowMs() });
-    const saved = await deps.repository.put(c.get("user").userId, validated.value, deps.nowIso());
+    const userId = c.get("user").userId;
+    await deps.identity.ensureUser({ userId, nowMs: deps.nowMs() });
+
+    // 省略された項目の「現状維持」はリポジトリが1文の upsert で解決する
+    // （contract/user-settings.ts を参照）。ここで読んでマージすると、
+    // 読み取りと書き込みの間に別端末が保存した値を古い値で上書きする。
+    const saved = await deps.repository.put(userId, validated.value, deps.nowIso());
     // 保存後の値をそのまま返す。画面はこれを採用するので、
     // 表示している内容と保存された内容が食い違わない。
     return c.json(saved, 200, { "cache-control": "no-store" });

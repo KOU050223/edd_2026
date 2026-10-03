@@ -10,6 +10,12 @@ contextBridge.exposeInMainWorld("desktop", {
     ipcRenderer.invoke("answer:ask", selection, question),
   getConsentStatus: () => ipcRenderer.invoke("consent:status"),
   reviewConsent: () => ipcRenderer.invoke("consent:review"),
+  // 質問履歴の保存オプトイン（Issue #204）。値はサーバーの user-settings が正。
+  getConversationHistoryOptIn: () => ipcRenderer.invoke("conversation-history:get"),
+  setConversationHistoryOptIn: (enabled: boolean) =>
+    ipcRenderer.invoke("conversation-history:set", enabled),
+  onHistorySaveFailed: (listener: (message: string) => void) =>
+    ipcRenderer.on("history:save-failed", (_event, message) => listener(message)),
   close: () => ipcRenderer.invoke("window:close"),
   minimize: () => ipcRenderer.invoke("window:minimize"),
   openExternalLink: (url: string) => ipcRenderer.invoke("external-link:open", url),

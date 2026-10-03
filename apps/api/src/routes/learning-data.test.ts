@@ -13,6 +13,7 @@ import {
   createInMemoryRepositoryStore,
   InMemoryAuditLogRepository,
   InMemoryConceptCheckRepository,
+  InMemoryConversationRepository,
   InMemoryIdentityRepository,
   InMemoryImportSessionRepository,
   InMemoryLearningEventRepository,
@@ -30,6 +31,7 @@ let identity: InMemoryIdentityRepository;
 let events: InMemoryLearningEventRepository;
 let evidence: InMemoryLearningEvidenceRepository;
 let sessions: InMemoryImportSessionRepository;
+let conversations: InMemoryConversationRepository;
 /** 現在時刻（epoch ミリ秒）。テストの中で進めて、削除の前後を作る。 */
 let clockMs: number;
 let app: Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>;
@@ -49,6 +51,7 @@ beforeEach(() => {
   events = new InMemoryLearningEventRepository(store);
   evidence = new InMemoryLearningEvidenceRepository(store);
   sessions = new InMemoryImportSessionRepository(store);
+  conversations = new InMemoryConversationRepository(store);
   clockMs = 1_000;
   app = new Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>();
   app.use("/v1/*", stubAuth(TOKENS));
@@ -61,6 +64,7 @@ beforeEach(() => {
       events,
       evidence,
       sessions,
+      conversations,
       audit: new InMemoryAuditLogRepository(store),
       nowIso: () => NOW,
       nowMs: () => clockMs,
@@ -168,6 +172,7 @@ test("削除は自分のイベントを全件消し、件数と削除時刻を�
     deletedCount: 2,
     deletedEvidenceCount: 0,
     deletedSessionCount: 0,
+    deletedConversationCount: 0,
     resetAtMs: 1_000,
   });
   expect(await events.countByUser("user-a")).toBe(0);
@@ -185,6 +190,7 @@ test("削除を再実行しても失敗しない", async () => {
     deletedCount: 0,
     deletedEvidenceCount: 0,
     deletedSessionCount: 0,
+    deletedConversationCount: 0,
     resetAtMs: 1_000,
   });
 });
@@ -225,10 +231,58 @@ test("削除は外部履歴由来の Evidence と Import Session も一緒に消
     deletedCount: 0,
     deletedEvidenceCount: 1,
     deletedSessionCount: 1,
+    deletedConversationCount: 0,
     resetAtMs: 1_000,
   });
   expect(await evidence.listByUser("user-a")).toEqual([]);
   expect(await sessions.listByUser("user-a")).toEqual([]);
+});
+
+test("削除は質問履歴の会話も一緒に消す", async () => {
+  // 「学習データを消した」のに本文を含む質問履歴が残ると、
+  // 利用者には消えたように見えない（Issue #204）。
+  await conversations.upsert(
+    "user-a",
+    {
+      id: "conv-1",
+      origin: "desktop",
+      occurredAt: "2026-09-05T00:00:00.000Z",
+      updatedAt: "2026-09-05T00:00:01.000Z",
+      complete: true,
+      messages: [
+        { role: "context", text: "const x = 1", at: "2026-09-05T00:00:00.000Z" },
+        { role: "user", text: "これは何？", at: "2026-09-05T00:00:00.000Z" },
+        { role: "assistant", text: "変数の宣言です", at: "2026-09-05T00:00:01.000Z" },
+      ],
+    },
+    clockMs,
+  );
+  await conversations.upsert(
+    "user-b",
+    {
+      id: "theirs",
+      origin: "vscode",
+      occurredAt: "2026-09-05T00:00:00.000Z",
+      updatedAt: "2026-09-05T00:00:01.000Z",
+      complete: true,
+      messages: [{ role: "user", text: "?", at: "2026-09-05T00:00:00.000Z" }],
+    },
+    clockMs,
+  );
+
+  const res = await request("/v1/learning-events", "token-a", "DELETE");
+
+  expect(res.status).toBe(200);
+  expect((await res.json()) as DeleteLearningEventsResponse).toEqual({
+    deletedCount: 0,
+    deletedEvidenceCount: 0,
+    deletedSessionCount: 0,
+    deletedConversationCount: 1,
+    resetAtMs: 1_000,
+  });
+  // 他人の会話は残る。会話 ID はユーザー単位でしか一意にならない。
+  expect(await conversations.listAllByUser("user-a")).toEqual([]);
+  expect(await conversations.listAllByUser("user-b")).toHaveLength(1);
 });
 
 test("削除を呼んでいない端末は、同期応答の削除時刻で削除を知る", async () => {
@@ -286,7 +340,12 @@ test("削除は監査ログに件数とともに記録される", async () => {
       userId: "user-a",
       action: "learning_events.deleted",
       occurredAtMs: clockMs,
-      detail: { deletedCount: 2, deletedEvidenceCount: 0, deletedSessionCount: 0 },
+      detail: {
+        deletedCount: 2,
+        deletedEvidenceCount: 0,
+        deletedSessionCount: 0,
+        deletedConversationCount: 0,
+      },
     },
   ]);
 });
@@ -334,6 +393,7 @@ test("削除しても他人のイベントと習熟度は残る", async () => {
     deletedCount: 1,
     deletedEvidenceCount: 0,
     deletedSessionCount: 0,
+    deletedConversationCount: 0,
     resetAtMs: 1_000,
   });
   expect(await events.countByUser("user-b")).toBe(2);
@@ -389,6 +449,7 @@ test("まだ一度も同期していない利用者の削除も、並行する�
     deletedCount: 0,
     deletedEvidenceCount: 0,
     deletedSessionCount: 0,
+    deletedConversationCount: 0,
     resetAtMs: 1_000,
   });
 
@@ -413,6 +474,7 @@ test("削除応答の削除時刻は、巻き戻らなかった記録後の実�
     deletedCount: 0,
     deletedEvidenceCount: 0,
     deletedSessionCount: 0,
+    deletedConversationCount: 0,
     resetAtMs: 2_000,
   });
 });

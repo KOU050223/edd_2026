@@ -20,6 +20,7 @@ import {
 import type { AuthVariables } from "../auth/middleware.js";
 import type {
   AuditLogRepository,
+  ConversationRepository,
   IdentityRepository,
   ImportSessionRepository,
   LearningEventRepository,
@@ -36,6 +37,14 @@ export interface LearningDataDeps {
    */
   evidence: LearningEvidenceRepository;
   sessions: ImportSessionRepository;
+  /**
+   * 質問履歴（Issue #204）。学習履歴の削除では会話も一緒に消す。
+   * 「学習データを消したのに質問履歴が残る」状態を作らないためである。
+   * 削除時刻の境界（learning_history_resets）を会話へは広げない。
+   * 遅延した upsert が削除直後に会話を書き戻しうる既知の限界は
+   * docs/conversation-history.md「保存期間と既知の限界」で受け入れている。
+   */
+  conversations: ConversationRepository;
   /** 監査ログ（Issue #122）。エクスポートと削除を「誰がいつ何をしたか」として残す。 */
   audit: AuditLogRepository;
   /** 現在時刻を ISO 8601 で返す。テストで固定できるよう注入する。 */
@@ -55,6 +64,8 @@ export interface DeleteLearningEventsResponse {
   deletedEvidenceCount: number;
   /** 一緒に消した Import Session の件数。 */
   deletedSessionCount: number;
+  /** 一緒に消した会話履歴の件数（Issue #204）。 */
+  deletedConversationCount: number;
   /**
    * `learning_history_resets` へ記録した削除時刻（epoch ミリ秒）。
    *
@@ -115,12 +126,20 @@ export function createLearningDataRoute(resolve: LearningDataDepsResolver) {
     // Familiarity が Map 上に残り、利用者には消えたように見えない（Issue #157）。
     const deletedEvidenceCount = await deps.evidence.deleteAllByUser(userId);
     const deletedSessionCount = await deps.sessions.deleteAllByUser(userId);
+    // 質問履歴も消す。オプトインで保存した本文データが「学習データを消した」
+    // あとに残ると、利用者から見て削除が約束どおり働いていない（Issue #204）。
+    const deletedConversationCount = await deps.conversations.deleteAllByUser(userId);
 
     await deps.audit.record({
       userId,
       action: "learning_events.deleted",
       occurredAtMs: deps.nowMs(),
-      detail: { deletedCount, deletedEvidenceCount, deletedSessionCount },
+      detail: {
+        deletedCount,
+        deletedEvidenceCount,
+        deletedSessionCount,
+        deletedConversationCount,
+      },
     });
 
     // 応答には記録後の実効値を返す。deleteByUser は既存の削除時刻を
@@ -139,6 +158,7 @@ export function createLearningDataRoute(resolve: LearningDataDepsResolver) {
       deletedCount,
       deletedEvidenceCount,
       deletedSessionCount,
+      deletedConversationCount,
       resetAtMs,
     };
     return c.json(body);

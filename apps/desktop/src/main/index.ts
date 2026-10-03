@@ -14,7 +14,7 @@ import {
 } from "electron";
 import { execFile } from "node:child_process";
 import { createServer } from "node:http";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -47,6 +47,13 @@ import {
   type OAuthConfig,
 } from "./oauth.js";
 import { describeApiFailure } from "./api-error.js";
+import { ApiRequestError } from "./api-request.js";
+import { buildConversation } from "./conversation.js";
+import {
+  getUserSettings,
+  putConversation,
+  setSaveConversationHistory,
+} from "./conversations-api.js";
 import { AuthOperationState } from "./auth-operation.js";
 import { createConsentStore } from "./consent.js";
 import { createAutoAdapters, createExportFileAdapter, type ScanFs } from "./history/sources.js";
@@ -71,6 +78,7 @@ import {
   CONCEPTS,
   CONSENT_NOTICE_DETAIL,
   CONSENT_NOTICE_TITLE,
+  CONVERSATION_HISTORY_OPT_IN_NOTICE,
   type AnalysisMode,
   type EvidenceImportedBy,
   type HistoryProviderId,
@@ -855,9 +863,122 @@ app
       if (!(await ensureConsent())) {
         throw new Error("送信の同意が得られなかったため、送信を中止しました。");
       }
-      await askManagedAI(selection, normalizeQuestion(question), (delta) =>
-        event.sender.send("answer:delta", delta),
-      );
+      const normalizedQuestion = normalizeQuestion(question);
+      // #204: 質問履歴の保存が有効なら、回答後に会話としてアップロードする。
+      const conversationId = randomUUID();
+      const occurredAt = new Date().toISOString();
+      let answerText = "";
+      let askError: unknown;
+      try {
+        await askManagedAI(selection, normalizedQuestion, (delta) => {
+          answerText += delta;
+          event.sender.send("answer:delta", delta);
+        });
+      } catch (error) {
+        askError = error;
+      }
+      // 回答が1文字も届かなかった失敗は履歴にしない（見返す価値がなく、
+      // 理由は画面のエラーが担う）。中断した回答は complete:false で残す。
+      if (answerText.length > 0 && settings.saveConversationHistory) {
+        try {
+          const result = await putConversation(
+            historyApiDeps(),
+            buildConversation({
+              id: conversationId,
+              userQuestion: question,
+              question: normalizedQuestion,
+              selection,
+              answer: answerText,
+              occurredAt,
+              answeredAt: new Date().toISOString(),
+              complete: askError === undefined,
+            }),
+          );
+          if (!result.saved) {
+            console.warn("質問履歴は既存の新しい会話のため保存されませんでした", result.reason);
+          }
+        } catch (error) {
+          // 履歴の保存失敗で回答の表示を止めない。回答はすでに届いている。
+          // ただし黙って落とさず、ログと画面の両方へ出す（RULE-004）。
+          console.error("質問履歴の保存に失敗しました", error);
+          let message: string;
+          if (error instanceof ApiRequestError && error.status === 403) {
+            // サーバー側でオプトインが外れている確定情報なので、
+            // ローカルキャッシュも false へ戻す（毎回 403 で失敗し続けるのを防ぐ）。
+            message =
+              "質問履歴の保存がサーバー側で無効になっていたため、ローカルの設定をオフに戻しました。";
+            try {
+              await saveSettings({ ...settings, saveConversationHistory: false });
+            } catch (cacheError) {
+              console.error("質問履歴オプトインのローカルキャッシュを戻せませんでした", cacheError);
+            }
+          } else {
+            message = `質問履歴を保存できませんでした: ${
+              error instanceof Error ? error.message : String(error)
+            }`;
+          }
+          event.sender.send("history:save-failed", message);
+        }
+      }
+      if (askError !== undefined) throw askError;
+    });
+    // 「質問履歴の保存」オプトイン（Issue #204）。表示はサーバーの値を正とし、
+    // 読めたらローカルキャッシュ（settings.json）も揃える。
+    ipcMain.handle("conversation-history:get", async () => {
+      const remote = await getUserSettings(historyApiDeps());
+      if (remote.saveConversationHistory !== settings.saveConversationHistory) {
+        // キャッシュの同期失敗で表示自体を止めない。読めた値は確実なので
+        // そのまま返し、書き込みの失敗はログに残す。
+        try {
+          await saveSettings({
+            ...settings,
+            saveConversationHistory: remote.saveConversationHistory,
+          });
+        } catch (cacheError) {
+          console.error("質問履歴オプトインのローカルキャッシュを同期できませんでした", cacheError);
+        }
+      }
+      return { saveConversationHistory: remote.saveConversationHistory };
+    });
+    ipcMain.handle("conversation-history:set", async (_event, enabled: unknown) => {
+      if (typeof enabled !== "boolean") {
+        throw new Error("質問履歴の保存は真偽値で指定してください。");
+      }
+      if (enabled) {
+        // 有効化の前に、何が保存され・いつ消えるかを利用者へ明示する
+        // （docs/data-privacy.md のオプトイン要件）。
+        const options = {
+          type: "info" as const,
+          title: "質問履歴の保存",
+          message: "質問履歴の保存を有効にしますか？",
+          detail: CONVERSATION_HISTORY_OPT_IN_NOTICE,
+          buttons: ["有効にする", "キャンセル"],
+          defaultId: 0,
+          cancelId: 1,
+          noLink: true,
+        };
+        const result = popup
+          ? await dialog.showMessageBox(popup, options)
+          : await dialog.showMessageBox(options);
+        if (result.response !== 0) {
+          // キャンセルは失敗ではない。現在値を返して画面を現状へ戻す。
+          return { saveConversationHistory: settings.saveConversationHistory };
+        }
+      }
+      const saved = await setSaveConversationHistory(historyApiDeps(), enabled);
+      if (saved.saveConversationHistory !== settings.saveConversationHistory) {
+        // サーバー側は保存済み。ローカルキャッシュの書き込みだけ失敗しても
+        // オプトイン自体は有効なので、失敗はログに残して続ける。
+        try {
+          await saveSettings({
+            ...settings,
+            saveConversationHistory: saved.saveConversationHistory,
+          });
+        } catch (cacheError) {
+          console.error("質問履歴オプトインのローカルキャッシュを保存できませんでした", cacheError);
+        }
+      }
+      return { saveConversationHistory: saved.saveConversationHistory };
     });
     ipcMain.handle("consent:status", () => {
       const store = consentStore();

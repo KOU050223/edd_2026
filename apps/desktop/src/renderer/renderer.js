@@ -229,6 +229,55 @@ $("consent-review").onclick = async () => {
   }
 };
 
+// 「質問履歴の保存」オプトイン（Issue #204）。正はサーバーの user-settings。
+// saveHistoryOptIn はフォーム送信でローカルキャッシュを維持するために持つ。
+let saveHistoryOptIn = false;
+const saveHistory = $("save-history");
+
+const renderHistoryOptIn = (enabled) => {
+  saveHistoryOptIn = enabled;
+  saveHistory.checked = enabled;
+  $("history-optin-status").textContent = enabled ? "オン" : "オフ";
+};
+
+// 読み込み失敗時は操作不能のまま残す（オフラインでは変更できない設計）。
+const loadHistoryOptIn = async () => {
+  saveHistory.disabled = true;
+  try {
+    const remote = await window.desktop.getConversationHistoryOptIn();
+    renderHistoryOptIn(remote.saveConversationHistory);
+    saveHistory.disabled = false;
+  } catch (e) {
+    $("history-optin-status").textContent = "読み込めませんでした";
+    showError(
+      `質問履歴の設定を読み込めませんでした: ${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
+};
+
+saveHistory.onchange = async () => {
+  const next = saveHistory.checked;
+  saveHistory.disabled = true;
+  try {
+    const result = await window.desktop.setConversationHistoryOptIn(next);
+    // キャンセル時は main が現在値を返すので、戻った値に合わせて表示を戻す。
+    renderHistoryOptIn(result.saveConversationHistory);
+    saveHistory.disabled = false;
+  } catch (e) {
+    // 失敗時は表示を元に戻してから、サーバーの現在値で復元する。
+    // finally で無条件に再有効化すると、戻りチェックが反映される前に
+    // 次の変更を受け付けてしまう。
+    renderHistoryOptIn(!next);
+    showError(
+      `質問履歴の設定を変更できませんでした: ${e instanceof Error ? e.message : String(e)}`,
+    );
+    void loadHistoryOptIn();
+  }
+};
+
+// 履歴の保存失敗は回答の表示を止めないが、黙っても落とさない（RULE-004）。
+window.desktop.onHistorySaveFailed((message) => showError(message));
+
 const openSettings = async () => {
   const s = await window.desktop.getSettings();
   ["api-base-url", "shortcut", "model", "temperature", "max-tokens", "persona"].forEach((id) => {
@@ -236,12 +285,16 @@ const openSettings = async () => {
   });
   $("restore").checked = s.restoreClipboard;
   $("login").checked = s.launchAtLogin;
+  // ローカルキャッシュの値を先に出し、サーバーの値が読めたら上書きする。
+  renderHistoryOptIn(s.saveConversationHistory === true);
   setAuthState(s.hasRefreshToken);
   renderConsentStatus(await window.desktop.getConsentStatus());
   form.hidden = false;
   // モーダルの背後へ Tab で抜けさせない（inert は form の祖先には置けないため兄弟に置く）。
   backdrop.forEach((element) => element.setAttribute("inert", ""));
   $("api-base-url").focus();
+  // サーバーの値を正として読み直す。失敗は中でエラー表示するので待たない。
+  void loadHistoryOptIn();
 };
 
 // 履歴インポート wizard（Issue #157）。inert 対象は設定シートと同じ。
@@ -274,6 +327,9 @@ form.onsubmit = async (event) => {
       restoreClipboard: $("restore").checked,
       launchAtLogin: $("login").checked,
       persona: $("persona").value,
+      // 履歴オプトインのローカルキャッシュ。フォームが持たないので
+      // 送り忘れると false に正規化され、サーバーの値とずれたまま残る。
+      saveConversationHistory: saveHistoryOptIn,
     });
     closeSettings();
     showNotice("設定を保存しました。");

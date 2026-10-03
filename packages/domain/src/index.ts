@@ -3,6 +3,7 @@ export * from "./check.js";
 export * from "./concepts.generated.js";
 export * from "./consent.js";
 export * from "./context.js";
+export * from "./conversation.js";
 export * from "./evidence.js";
 export * from "./history-import.js";
 export * from "./mastery.js";

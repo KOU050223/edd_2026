@@ -30,6 +30,8 @@ Metrics と Workers Logs）に限り、外部の監視基盤へは出さない�
 | ---------------------------------------------------------- | ---------------------- | --------------------------------- |
 | 学習履歴のエクスポート（`GET /v1/learning-events:export`） | userId、時刻、件数     | D1 `audit_log`                    |
 | 学習履歴の削除（`DELETE /v1/learning-events`）             | userId、時刻、削除件数 | D1 `audit_log`                    |
+| 会話履歴のエクスポート（`GET /v1/conversations:export`）   | userId、時刻、件数     | D1 `audit_log`                    |
+| 会話履歴の削除（`DELETE /v1/conversations(/:id)`）         | userId、時刻、削除件数 | D1 `audit_log`                    |
 | 退会（`DELETE /v1/me`）                                    | userId、時刻           | Workers Logs（`account deleted`） |
 | ログイン・ログアウト・トークン撤回                         | Auth0 側の記録         | Auth0 テナントログ                |
 

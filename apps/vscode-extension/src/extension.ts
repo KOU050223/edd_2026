@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import * as vscode from "vscode";
 import {
+  CONVERSATION_HISTORY_OPT_IN_NOTICE,
   createEmptyProfile,
   PERSONA_MAX_LENGTH,
   type CodeContext,
@@ -39,6 +40,13 @@ import { findRecurred, markExplained } from "./learning/recurrence";
 import { DeviceAuth } from "./learning/device-auth";
 import { shouldRecordSolvedIndependently } from "./learning/resolution";
 import { deleteServerLearningData, syncEvent } from "./learning/sync";
+import { buildVscodeConversation, conversationBodyOverLimit } from "./conversations/conversation";
+import {
+  getRemoteSaveConversationHistory,
+  setRemoteSaveConversationHistory,
+  uploadConversation,
+} from "./conversations/sync";
+import { effectiveQuestion } from "./ai/prompt/index";
 import { confirmSend } from "./ui/confirm";
 
 /**
@@ -262,6 +270,111 @@ export function activate(context: vscode.ExtensionContext): void {
     );
   }
 
+  // #204: 「質問履歴の保存」オプトインのローカルキャッシュ。
+  // 正はサーバーの user-settings.saveConversationHistory。設定項目には
+  // しない。送信の可否を左右する値をワークスペース設定が上書きできる場所に
+  // 置くと、開いたリポジトリが利用者の意思を偽装できてしまう（RULE-006）。
+  const SAVE_CONVERSATION_HISTORY_KEY = "gakushuSochi.saveConversationHistory";
+
+  function saveConversationHistoryEnabled(): boolean {
+    return context.globalState.get<boolean>(SAVE_CONVERSATION_HISTORY_KEY, false);
+  }
+
+  // キャッシュが false の間も、別端末でオンにされた可能性を間隔をあけて
+  // サーバーへ確かめる。読み取りのたびに毎問確認すると送信が遅れる。
+  const OPT_IN_REMOTE_CHECK_INTERVAL_MS = 5 * 60 * 1000;
+  let lastOptInRemoteCheckAtMs = 0;
+
+  async function refreshConversationHistoryEnabled(): Promise<void> {
+    const config = conversationSyncConfig();
+    if (config === null) return;
+    const remote = await getRemoteSaveConversationHistory(config);
+    if (remote.ok) {
+      await context.globalState.update(SAVE_CONVERSATION_HISTORY_KEY, remote.enabled);
+    }
+    lastOptInRemoteCheckAtMs = Date.now();
+  }
+
+  function conversationSyncConfig(): {
+    apiBaseUrl: string;
+    apiToken: () => Promise<string>;
+  } | null {
+    const apiBaseUrl = vscode.workspace
+      .getConfiguration("gakushuSochi")
+      .get<string>("api.baseUrl", "");
+    if (!apiBaseUrl) return null;
+    return { apiBaseUrl, apiToken: () => deviceAuth.getAccessToken() };
+  }
+
+  /**
+   * 回答済みの質問を会話としてサーバーへ送る。
+   *
+   * persistEvent と同じく、失敗は出力チャンネルに残すだけで質問フローは
+   * 止めない（回答はすでに表示済みである）。オプトインがオフなら
+   * 本文を送らないのがクライアント側のゲートで、サーバー側でも
+   * `saveConversationHistory` を見て 403 で強制される（二重のゲート）。
+   */
+  async function persistConversation(
+    codeContext: CodeContext,
+    question: string,
+    answer: string,
+    sessionId: string,
+    askedAt: string,
+  ): Promise<void> {
+    if (!hasConsent(context)) return;
+    if (!saveConversationHistoryEnabled()) {
+      // 別端末でオンにされた可能性を、間隔をあけてサーバーへ確かめる。
+      if (Date.now() - lastOptInRemoteCheckAtMs >= OPT_IN_REMOTE_CHECK_INTERVAL_MS) {
+        try {
+          await refreshConversationHistoryEnabled();
+        } catch (error) {
+          // 確認の失敗で質問フローは止めないが、黙っても落とさない（RULE-004）。
+          channel.appendLine(`質問履歴の設定を読み込めませんでした: ${String(error)}`);
+        }
+      }
+      if (!saveConversationHistoryEnabled()) return;
+    }
+    if (!question.trim() || !answer.trim()) {
+      // 契約が本文を1文字以上とするため、空の会話は保存しない。
+      channel.appendLine("質問または回答が空のため、質問履歴は保存しませんでした。");
+      return;
+    }
+    const config = conversationSyncConfig();
+    if (config === null) return;
+
+    try {
+      const clientId = await getOrCreateClientId(context);
+      const conversation = buildVscodeConversation({
+        id: sessionId,
+        context: codeContext,
+        question,
+        answer,
+        occurredAt: askedAt,
+        answeredAt: nowIso(),
+        clientId,
+      });
+      // 上限超過は送っても 400 になるだけなので、先に弾いて理由を残す。
+      const overLimit = conversationBodyOverLimit(conversation);
+      if (overLimit !== null) {
+        channel.appendLine(`質問履歴は本文の上限を超えるため保存しませんでした（${overLimit}）。`);
+        return;
+      }
+      const outcome = await uploadConversation(conversation, config);
+      if (!outcome.ok) {
+        if (outcome.disabled) {
+          // 403 はサーバー側でオプトインが外れている確定情報なので、
+          // 古い true のまま送り続けないようキャッシュを落とす。
+          await context.globalState.update(SAVE_CONVERSATION_HISTORY_KEY, false);
+        }
+        channel.appendLine(`質問履歴の保存に失敗しました: ${outcome.reason}`);
+        return;
+      }
+      channel.appendLine("質問履歴を保存しました。");
+    } catch (error) {
+      channel.appendLine(`質問履歴の保存に失敗しました: ${String(error)}`);
+    }
+  }
+
   // イベントの記録を直列化する。追従処理は「ローカル消去 → 記録し直し」の
   // 区間を持ち、ここへ別のイベント記録が割り込むと、そのイベントは消えるが
   // 記録し直されない。サーバーには届いているのにローカルにだけ欠落する
@@ -473,9 +586,10 @@ export function activate(context: vscode.ExtensionContext): void {
       } else {
         persona = configuredPersona.trim() || undefined;
       }
-      const aiResponse = await provider.ask(
-        createChatAIRequest(codeContext, question, history, diagnostics, persona),
-      );
+      // #204: 質問履歴の occurredAt として使うため、送信前の時刻を取る。
+      const askedAt = nowIso();
+      const aiRequest = createChatAIRequest(codeContext, question, history, diagnostics, persona);
+      const aiResponse = await provider.ask(aiRequest);
 
       if (!aiResponse.ok) {
         // 理由コードだけでは利用者は次に何をすればよいか分からない。
@@ -516,6 +630,18 @@ export function activate(context: vscode.ExtensionContext): void {
         sessionId,
       });
 
+      // #204: 質問履歴の保存が有効なら本文も送る。LearningEvent と同じ
+      // sessionId を会話 ID に使い、イベントと履歴本文を結べるようにする。
+      // 利用者が質問を書かなかったとき（preset の解説指示だけに答えた）は
+      // 空の質問ではなく、AI が実際に答えた指示文を履歴の質問にする。
+      await persistConversation(
+        codeContext,
+        effectiveQuestion(aiRequest),
+        aiResponse.answer.text,
+        sessionId,
+        askedAt,
+      );
+
       // 過去の会話（history）を踏まえてAIが「理解が解消された」と判断した場合のみ、
       // 自力解決の根拠を追加で記録する。履歴が無い最初のターンでは resolution は
       // 付かないため、ここは2回目以降のやり取りでしか発生しない。
@@ -533,6 +659,13 @@ export function activate(context: vscode.ExtensionContext): void {
     },
   );
   context.subscriptions.push(chatParticipant);
+
+  // 起動時にサーバーの値へ揃える。別端末で切り替えられたとき、
+  // このウィンドウが古いキャッシュのまま動き続けないようにする。
+  // 失敗しても止めない（質問フローを起動失敗で止めないため）。
+  void refreshConversationHistoryEnabled().catch((error: unknown) => {
+    channel.appendLine(`質問履歴の設定を読み込めませんでした: ${String(error)}`);
+  });
 
   const askSelection = vscode.commands.registerCommand("gakushuSochi.askSelection", async () => {
     const editor = vscode.window.activeTextEditor;
@@ -636,6 +769,65 @@ export function activate(context: vscode.ExtensionContext): void {
     "gakushuSochi.revokeConsent",
     async () => {
       await revokeConsent(context, (message) => channel.appendLine(message));
+    },
+  );
+
+  // #204: 「質問履歴の保存」の切り替え。設定項目ではなくコマンドにする
+  // （RULE-006）。現在値はサーバーから読み、切り替え後に globalState の
+  // キャッシュを揃える。
+  const toggleConversationHistoryCommand = vscode.commands.registerCommand(
+    "gakushuSochi.toggleConversationHistory",
+    async () => {
+      const config = conversationSyncConfig();
+      if (config === null) {
+        vscode.window.showInformationMessage(
+          "質問履歴の保存を切り替えるには gakushuSochi.api.baseUrl の設定が必要です。",
+        );
+        return;
+      }
+      const current = await getRemoteSaveConversationHistory(config);
+      if (!current.ok) {
+        channel.appendLine(`質問履歴の設定を読み込めませんでした: ${current.reason}`);
+        vscode.window.showErrorMessage(
+          `質問履歴の設定を読み込めませんでした（${current.reason}）。`,
+        );
+        return;
+      }
+      // 読めた時点でローカルキャッシュもサーバーの値へ揃える。
+      await context.globalState.update(SAVE_CONVERSATION_HISTORY_KEY, current.enabled);
+
+      const enabling = !current.enabled;
+      const confirmed = enabling
+        ? await vscode.window.showInformationMessage(
+            "質問履歴の保存を有効にしますか？",
+            { modal: true, detail: CONVERSATION_HISTORY_OPT_IN_NOTICE },
+            "有効にする",
+          )
+        : await vscode.window.showWarningMessage(
+            "質問履歴の保存を無効にしますか？",
+            {
+              modal: true,
+              detail:
+                "以降の質問は履歴に残りません。すでに保存済みの履歴は残り、削除は Web アプリから行えます。",
+            },
+            "無効にする",
+          );
+      if (confirmed === undefined) return;
+
+      const outcome = await setRemoteSaveConversationHistory(enabling, config);
+      if (!outcome.ok) {
+        channel.appendLine(`質問履歴の設定を変更できませんでした: ${outcome.reason}`);
+        vscode.window.showErrorMessage(
+          `質問履歴の設定を変更できませんでした（${outcome.reason}）。`,
+        );
+        return;
+      }
+      await context.globalState.update(SAVE_CONVERSATION_HISTORY_KEY, outcome.enabled);
+      vscode.window.showInformationMessage(
+        outcome.enabled
+          ? "質問履歴の保存を有効にしました。以降の質問と回答が履歴に残ります。"
+          : "質問履歴の保存を無効にしました。",
+      );
     },
   );
 
@@ -833,6 +1025,7 @@ export function activate(context: vscode.ExtensionContext): void {
     askClipboard,
     reviewConsentCommand,
     revokeConsentCommand,
+    toggleConversationHistoryCommand,
     deleteLearningDataCommand,
     openKeybindingsCommand,
     setByokApiKeyCommand,

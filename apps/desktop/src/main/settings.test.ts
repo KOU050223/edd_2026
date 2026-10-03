@@ -35,6 +35,7 @@ describe("normalizeSettings", () => {
       restoreClipboard: false,
       launchAtLogin: true,
       persona: "優しい先生",
+      saveConversationHistory: true,
     };
 
     expect(normalizeSettings(settings)).toEqual(settings);
@@ -75,6 +76,23 @@ describe("normalizeSettings", () => {
 
     expect(migrated.persona).toBe(DEFAULT_SETTINGS.persona);
     expect(migrated.apiBaseUrl).toBe("https://api.example.com");
+  });
+
+  it("defaults saveConversationHistory to false for settings saved before the field existed", () => {
+    // 履歴オプトインは後から足した項目。欠損を補わないと、新項目を持たない
+    // 古い settings.json が丸ごと既定値へ戻ってしまう。サーバー側でも
+    // ゲートするため、ここでは安全側の false で始める。
+    const migrated = normalizeSettings(LEGACY_SETTINGS);
+
+    expect(migrated.saveConversationHistory).toBe(false);
+    expect(migrated.apiBaseUrl).toBe("https://api.example.com");
+  });
+
+  it("resets only a non-boolean saveConversationHistory", () => {
+    const migrated = normalizeSettings({ ...DEFAULT_SETTINGS, saveConversationHistory: "yes" });
+
+    expect(migrated.saveConversationHistory).toBe(false);
+    expect(migrated.shortcut).toBe(DEFAULT_SETTINGS.shortcut);
   });
 
   it("resets only an invalid persona without discarding other settings", () => {

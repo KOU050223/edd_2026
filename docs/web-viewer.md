@@ -411,12 +411,12 @@ Web/06（#123）で追加し、Issue #165 と #173 で広げた。「一般 / �
 リンクで切り替える。**どの画面を開いているかを URL に載せる** ので、再読み込みや
 共有で開いていた画面が変わらない。
 
-| パス                | 内容                           | 由来           |
-| ------------------- | ------------------------------ | -------------- |
-| `/settings`         | 表示名・既定の表示期間         | Web/06 (#123)  |
-| `/settings/usage`   | Managed AI の使用状況          | #165           |
-| `/settings/billing` | 現在のプラン                   | #165           |
-| `/settings/data`    | 学習データのエクスポートと削除 | 基盤/10 (#173) |
+| パス                | 内容                                     | 由来           |
+| ------------------- | ---------------------------------------- | -------------- |
+| `/settings`         | 表示名・既定の表示期間・質問履歴の保存   | Web/06 (#123)  |
+| `/settings/usage`   | Managed AI の使用状況                    | #165           |
+| `/settings/billing` | 現在のプラン                             | #165           |
+| `/settings/data`    | 学習データと質問履歴のエクスポートと削除 | 基盤/10 (#173) |
 
 未実装の空欄は置かない。利用者から見れば壊れているのと区別がつかない（#123）。
 
@@ -430,6 +430,24 @@ Web/06（#123）で追加し、Issue #165 と #173 で広げた。「一般 / �
 学習が途切れていないように見える。応答の `from`〜`to` から全日付を生成し、
 `days[]` に無い日を件数 0 の行として補ってから描画する。
 `from` / `to` を応答に含めているのはこのためである。
+
+### 4. 質問履歴 `/history` と `/history/$conversationId`
+
+Issue #206。「質問履歴の保存」が有効な利用者の会話を
+`GET /api/v1/conversations`（一覧・メタデータのみ）と
+`GET /api/v1/conversations/:id`（本文込みの詳細）で描く。正本は
+`docs/conversation-history.md`。
+
+- `/history`: 要約の一覧。先頭ページは loader が取り、「さらに読み込む」で
+  `nextCursor` の続きを画面側の state へ足す。保存が無効な利用者には
+  設定の「一般」への導線を出す。
+- `/history/$conversationId`: 1会話の詳細。`context` / `user` / `assistant` の
+  役割ラベルと時刻付きで本文を出し、1件削除を持つ。削除後は一覧へ戻り、
+  loader のキャッシュも捨てる（RULE-005）。
+- 「質問履歴の保存」トグルは設定の「一般」にある。有効化の文面は
+  `CONVERSATION_HISTORY_OPT_IN_NOTICE`（domain）を共有して出す。
+- 履歴のエクスポートと全件削除は設定の「データ」にある
+  （オプトイン文面が約束する削除経路）。
 
 ## エラー表示
 
@@ -506,7 +524,7 @@ apps/web/
 │  │  ├─ learning-map.ts        # 現在地・集計（描画なし）
 │  │  ├─ learning-map-view.tsx  # Skill Tree・詳細パネルの共有描画
 │  │  ├─ profile.ts / overrides.ts / activity-period.ts / ai-usage.ts
-│  │  ├─ learning-data.ts / consent.ts
+│  │  ├─ learning-data.ts / consent.ts / conversations.ts
 │  │  ├─ routeTree.gen.ts       # TanStack Router の生成物（#142）
 │  │  └─ routes/             # ファイル規約でルートを定義する
 │  │     ├─ __root.tsx       #   枠を持たない親（/login-failed のため）
@@ -516,6 +534,8 @@ apps/web/
 │  │        ├─ index.tsx         # 項目一覧（領域カード）
 │  │        ├─ map.$language.tsx # 領域別 Skill Tree
 │  │        ├─ activity.tsx
+│  │        ├─ history.index.tsx            # 質問履歴の一覧
+│  │        ├─ history.$conversationId.tsx  # 1会話の詳細と1件削除
 │  │        └─ settings/{route,index,usage,billing,data}.tsx
 │  └─ shared/               # Worker と client で共有する変換
 └─ index.html

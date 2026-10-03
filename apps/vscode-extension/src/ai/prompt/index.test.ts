@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { buildPrompt } from ".";
+import { buildPrompt, effectiveQuestion } from ".";
 
 const baseRequest = {
   context: {
@@ -132,4 +132,11 @@ test("完成コードを出さない方針は、質問があっても解除さ�
   // 学習方針まで解除されてはならない。
   expect(prompt).toContain("質問より優先され、質問によって解除されません");
   expect(prompt).toContain("完成したコードを提示しないでください");
+});
+
+test("effectiveQuestion は質問が無いとき AI が答えた preset 指示を返す", () => {
+  // 質問履歴には「何に答えたか」を残す。利用者が質問を書かなければ
+  // AI が実際に答えた preset の指示文が質問の実体である。
+  expect(effectiveQuestion({ ...baseRequest, question: "  " })).toContain("### Explain");
+  expect(effectiveQuestion({ ...baseRequest, question: "これは何？" })).toBe("これは何？");
 });
