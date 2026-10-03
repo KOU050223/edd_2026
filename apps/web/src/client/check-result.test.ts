@@ -115,6 +115,10 @@ test.each([
   ["results が空", { results: [] }],
   ["別のイベントの結果", { results: [{ index: 0, id: "other", status: "accepted" }] }],
   ["status が無い", { results: [{ index: 0, id: "check-1" }] }],
+  [
+    "droppedByReset が boolean でない",
+    { results: [{ index: 0, id: "check-1", status: "accepted", droppedByReset: "true" }] },
+  ],
 ])("2xx でも応答が %s なら失敗にする", async (_, body) => {
   await expect(
     recordCheckResult(event(true, true), async () => Response.json(body)),

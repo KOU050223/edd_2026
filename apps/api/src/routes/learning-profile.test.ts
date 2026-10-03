@@ -208,14 +208,8 @@ test("外部履歴由来の Familiarity を concepts とは別に返す", async 
   expect(body.familiarity[0]?.label).toBeTypeOf("string");
 });
 
-test("Web から同期した確認問題の正解が習熟度に反映され、自力解決1回と合わせて confirmed になる", async () => {
-  // Issue #77。confirmed の条件は `solvedIndependentlyCount + checkPassedCount >= 2`
-  // （packages/domain/src/mastery.ts）。確認問題は confirmed へ至る経路の一本である。
-  await seed("user-a", [{ id: "solved-1", type: "solved_independently" }]);
-  const before = (await (await getProfile()).json()) as LearningProfileResponse;
-  expect(before.concepts[0]?.status).not.toBe("confirmed");
-
-  // apps/web/src/client/check-result.ts が送るのと同じ形。
+/** apps/web/src/client/check-result.ts が送るのと同じ形で、確認問題の結果を1件同期する。 */
+async function syncCheckFromWeb(type: "check_passed" | "check_failed") {
   const sync = await app.request(
     "/v1/learning-events:sync",
     {
@@ -227,7 +221,7 @@ test("Web から同期した確認問題の正解が習熟度に反映され、�
           {
             id: "check-1",
             occurredAt: "2026-09-05T00:00:05.000Z",
-            type: "check_passed",
+            type,
             origin: "web",
             conceptIds: ["go.defer"],
           },
@@ -237,17 +231,31 @@ test("Web から同期した確認問題の正解が習熟度に反映され、�
     ENV as unknown as CloudflareBindings,
   );
   expect(sync.status).toBe(200);
+  expect(await sync.json()).toMatchObject({
+    results: [{ index: 0, id: "check-1", status: "accepted" }],
+  });
+}
+
+test("Web から同期した確認問題の正解が習熟度に反映され、自力解決1回と合わせて confirmed になる", async () => {
+  // Issue #77。confirmed の条件は `solvedIndependentlyCount + checkPassedCount >= 2`
+  // （packages/domain/src/mastery.ts）。確認問題は confirmed へ至る経路の一本である。
+  await seed("user-a", [{ id: "solved-1", type: "solved_independently" }]);
+  const before = (await (await getProfile()).json()) as LearningProfileResponse;
+  expect(before.concepts[0]?.status).not.toBe("confirmed");
+
+  await syncCheckFromWeb("check_passed");
 
   const after = (await (await getProfile()).json()) as LearningProfileResponse;
   expect(after.concepts[0]?.evidence.checkPassedCount).toBe(1);
   expect(after.concepts[0]?.status).toBe("confirmed");
 });
 
-test("確認問題の不正解は check_failed として習熟度の根拠に載る", async () => {
-  await seed("user-a", [{ id: "check-1", type: "check_failed" }]);
+test("Web から同期した確認問題の不正解は check_failed として習熟度の根拠に載る", async () => {
+  await syncCheckFromWeb("check_failed");
 
   const body = (await (await getProfile()).json()) as LearningProfileResponse;
 
   expect(body.concepts[0]?.evidence.recentTypes).toEqual(["check_failed"]);
+  expect(body.concepts[0]?.evidence.checkFailedCount).toBe(1);
   expect(body.concepts[0]?.evidence.checkPassedCount).toBe(0);
 });

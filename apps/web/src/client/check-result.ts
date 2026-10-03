@@ -93,6 +93,11 @@ function singleResult(
   if (result.index !== 0 || result.id !== eventId || typeof result.status !== "string") {
     return null;
   }
+  // 省略は許すが、値があるのに boolean でなければ契約違反として扱う（RULE-004）。
+  // `"true"` や `1` を false へ丸めると、削除に含まれた結果を記録済みと誤認する。
+  if (result.droppedByReset !== undefined && typeof result.droppedByReset !== "boolean") {
+    return null;
+  }
   return {
     status: result.status,
     ...(typeof result.reason === "string" ? { reason: result.reason } : {}),
