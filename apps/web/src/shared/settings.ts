@@ -17,6 +17,8 @@ export interface UserSettings {
   /** 未設定は `null`。空文字は使わない。 */
   displayName: string | null;
   activityPeriodDays: ActivityPeriodDays;
+  /** 「質問履歴の保存」オプトイン（Issue #204）。 */
+  saveConversationHistory: boolean;
   /** 一度も保存していなければ `null`。 */
   updatedAt: string | null;
 }
@@ -35,6 +37,7 @@ export function isUserSettings(value: unknown): value is UserSettings {
     (displayName === null ||
       (typeof displayName === "string" && displayName.length <= DISPLAY_NAME_MAX_LENGTH)) &&
     isActivityPeriodDays(settings.activityPeriodDays) &&
+    typeof settings.saveConversationHistory === "boolean" &&
     (settings.updatedAt === null || typeof settings.updatedAt === "string")
   );
 }
@@ -43,6 +46,7 @@ export function isUserSettings(value: unknown): value is UserSettings {
 export interface UserSettingsInput {
   displayName: string | null;
   activityPeriodDays: ActivityPeriodDays;
+  saveConversationHistory: boolean;
 }
 
 /**
@@ -55,6 +59,7 @@ export interface UserSettingsInput {
 export interface SettingsDraft {
   displayName: string;
   activityPeriodDays: number;
+  saveConversationHistory: boolean;
 }
 
 /** 保存済みの設定を、編集できる形へ写す。 */
@@ -62,6 +67,7 @@ export function toDraft(settings: UserSettings): SettingsDraft {
   return {
     displayName: settings.displayName ?? "",
     activityPeriodDays: settings.activityPeriodDays,
+    saveConversationHistory: settings.saveConversationHistory,
   };
 }
 
@@ -84,7 +90,8 @@ export function sameSettings(settings: UserSettings, draft: SettingsDraft): bool
   if (!input.ok) return false;
   return (
     input.value.displayName === settings.displayName &&
-    input.value.activityPeriodDays === settings.activityPeriodDays
+    input.value.activityPeriodDays === settings.activityPeriodDays &&
+    input.value.saveConversationHistory === settings.saveConversationHistory
   );
 }
 
@@ -112,6 +119,7 @@ export function toSettingsInput(draft: SettingsDraft): SettingsDraftResult {
     value: {
       displayName: trimmed.length === 0 ? null : trimmed,
       activityPeriodDays: draft.activityPeriodDays,
+      saveConversationHistory: draft.saveConversationHistory,
     },
   };
 }

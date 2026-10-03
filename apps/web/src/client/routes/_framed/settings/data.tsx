@@ -1,6 +1,11 @@
-import { createFileRoute, useRouter } from "@tanstack/react-router";
+import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { ApiError, createSubmitGuard } from "../../../api.js";
+import {
+  deleteAllConversations,
+  exportConversationsFileName,
+  fetchConversationsExport,
+} from "../../../conversations.js";
 import {
   deleteEvidenceByProvider,
   deleteLearningData,
@@ -179,7 +184,141 @@ function DataSettings() {
       </article>
 
       <ImportSessionsCard />
+
+      <ConversationHistoryCard />
     </section>
+  );
+}
+
+/**
+ * 質問履歴のエクスポートと全件削除（Issue #206）。
+ *
+ * オプトインの文面（CONVERSATION_HISTORY_OPT_IN_NOTICE）が「設定画面から
+ * 全件まとめて削除できます」と約束している受け皿。1件ずつの削除は
+ * 履歴の詳細画面が持つ。
+ */
+function ConversationHistoryCard() {
+  const submitGuard = useRef(createSubmitGuard());
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string>();
+  const [exported, setExported] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string>();
+  const [deletedCount, setDeletedCount] = useState<number>();
+
+  const runExport = () => {
+    // 入口で弾く（RULE-007）。
+    if (submitGuard.current.isRunning("export")) return;
+    setExportError(undefined);
+    setExported(false);
+    setExporting(true);
+    void submitGuard.current
+      .run("export", async () => {
+        try {
+          const result = await fetchConversationsExport(fetch, takeLoginRetry());
+          downloadJson(result, exportConversationsFileName(new Date()));
+          setExported(true);
+        } catch (value: unknown) {
+          if (value instanceof ApiError && value.kind === "session_expired") {
+            window.location.href = "/login";
+            return;
+          }
+          setExportError(toErrorText(value));
+        }
+      })
+      .finally(() => {
+        setExporting(false);
+      });
+  };
+
+  const runDelete = () => {
+    if (submitGuard.current.isRunning("delete")) return;
+    setDeleteError(undefined);
+    setDeletedCount(undefined);
+    setDeleting(true);
+    void submitGuard.current
+      .run("delete", async () => {
+        try {
+          setDeletedCount(await deleteAllConversations(fetch));
+          setConfirmingDelete(false);
+        } catch (value: unknown) {
+          if (value instanceof ApiError && value.kind === "session_expired") {
+            window.location.href = "/login";
+            return;
+          }
+          setDeleteError(toErrorText(value));
+        }
+      })
+      .finally(() => {
+        setDeleting(false);
+      });
+  };
+
+  return (
+    <article className="plan-card">
+      <h3>質問履歴</h3>
+      <p className="muted">
+        「質問履歴の保存」が有効なときにサーバーへ保存された、質問・選択テキスト・AI
+        の回答の履歴です。1件ずつの閲覧と削除は
+        <Link to="/history">履歴</Link>画面から行えます。
+      </p>
+      <div className="actions">
+        <button type="button" disabled={exporting} onClick={runExport}>
+          {exporting ? "取得中…" : "履歴をダウンロード"}
+        </button>
+      </div>
+      {exportError && (
+        <p className="error-text" role="alert">
+          履歴を取得できませんでした：{exportError}
+        </p>
+      )}
+      {exported && !exportError && (
+        <p className="message saved" role="status">
+          ダウンロードしました
+        </p>
+      )}
+      {confirmingDelete ? (
+        <div className="confirm-delete">
+          <p>
+            <strong>履歴をすべて削除しますか？</strong>
+            この操作は取り消せません。
+          </p>
+          <div className="actions">
+            <button type="button" className="danger" disabled={deleting} onClick={runDelete}>
+              {deleting ? "削除中…" : "すべて削除する"}
+            </button>
+            <button type="button" disabled={deleting} onClick={() => setConfirmingDelete(false)}>
+              やめる
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="actions">
+          <button
+            type="button"
+            className="danger"
+            onClick={() => {
+              setDeleteError(undefined);
+              setDeletedCount(undefined);
+              setConfirmingDelete(true);
+            }}
+          >
+            履歴をすべて削除する
+          </button>
+        </div>
+      )}
+      {deleteError && (
+        <p className="error-text" role="alert">
+          履歴を削除できませんでした：{deleteError}
+        </p>
+      )}
+      {deletedCount !== undefined && (
+        <p className="message saved" role="status">
+          質問履歴を削除しました（{deletedCount} 件）
+        </p>
+      )}
+    </article>
   );
 }
 

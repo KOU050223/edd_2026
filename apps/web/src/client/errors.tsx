@@ -18,6 +18,7 @@ const errorText: Record<ApiError["kind"], string> = {
     "送信の同意がありません。設定画面の「送信の同意」で内容を確認して同意してください。",
   consent_outdated:
     "同意の文面が更新されました。ページを再読み込みして、最新の内容を確認してください。",
+  not_found: "対象が見つかりません。削除されたか、URL が違う可能性があります。",
   unavailable: "学習データの取得に失敗しました",
 };
 

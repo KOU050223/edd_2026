@@ -1,6 +1,10 @@
-import { createFileRoute, useRouter } from "@tanstack/react-router";
+import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
 import { useRef, useState } from "react";
-import { CONSENT_NOTICE_DETAIL, CONSENT_NOTICE_TITLE } from "@gakushu-sochi/domain";
+import {
+  CONSENT_NOTICE_DETAIL,
+  CONSENT_NOTICE_TITLE,
+  CONVERSATION_HISTORY_OPT_IN_NOTICE,
+} from "@gakushu-sochi/domain";
 import {
   ApiError,
   createOperationQueue,
@@ -174,6 +178,34 @@ function Settings() {
             ))}
           </div>
           <small>「推移」を開いたときに最初に選ばれる期間。</small>
+        </fieldset>
+
+        {/*
+          オプトインをオンにする操作には、目的・保存期間・削除方法を
+          明示した文面を出す（docs/conversation-history.md）。
+          文面は desktop / vscode と共有するため domain に置いてある。
+        */}
+        <fieldset className="field">
+          <legend>質問履歴の保存</legend>
+          <div className="choices">
+            <label>
+              <input
+                type="checkbox"
+                checked={draft.saveConversationHistory}
+                disabled={saving}
+                onChange={(event) => update({ saveConversationHistory: event.target.checked })}
+              />
+              質問と回答を履歴に保存する
+            </label>
+          </div>
+          <small>
+            有効にすると「<Link to="/history">履歴</Link>」から質問と AI
+            の回答を見返せます。無効のままでも質問は使えます。
+          </small>
+          <details className="consent-detail">
+            <summary>保存されるものと削除の方法</summary>
+            <pre>{CONVERSATION_HISTORY_OPT_IN_NOTICE}</pre>
+          </details>
         </fieldset>
 
         {saveError && (

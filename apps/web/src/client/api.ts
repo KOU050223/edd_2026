@@ -10,6 +10,7 @@ export type ApiErrorKind =
   | "rate_limited"
   | "consent_required"
   | "consent_outdated"
+  | "not_found"
   | "unavailable";
 
 export class ApiError extends Error {
@@ -52,6 +53,9 @@ export async function requestJson<T>(
   if (body.error === "auth_unavailable") throw new ApiError("auth_unavailable");
   if (body.error === "consent_required") throw new ApiError("consent_required");
   if (response.status === 429) throw new ApiError("rate_limited");
+  // 404 は「対象が無い」ことを伝えられる失敗。消えた履歴を開いたときに
+  // 汎用の「取得に失敗」と出すと、再試行しても直らないのに直るように見える。
+  if (response.status === 404) throw new ApiError("not_found");
   throw new ApiError("unavailable");
 }
 
@@ -146,6 +150,7 @@ async function sendJson<T>(
     if (body.error === "auth_unavailable") throw new ApiError("auth_unavailable");
     if (body.error === "consent_required") throw new ApiError("consent_required");
     if (response.status === 429) throw new ApiError("rate_limited");
+    if (response.status === 404) throw new ApiError("not_found");
     throw new ApiError("unavailable");
   }
   try {
