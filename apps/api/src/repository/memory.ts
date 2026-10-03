@@ -21,12 +21,14 @@ import type {
   AppendResult,
   AuditLogEntry,
   AuditLogRepository,
+  ConceptCheckRepository,
   ConversationListParams,
   ConversationRepository,
   IdentityRepository,
   ImportSessionRepository,
   LearningEventRepository,
   LearningEvidenceRepository,
+  StoredConceptCheck,
   StoredEventInput,
   StoredImportSessionInput,
 } from "./types.js";
@@ -53,6 +55,13 @@ export interface InMemoryRepositoryStore {
   >;
   /** userId -> (conversationId -> conversation)。D1 の conversations に対応する。 */
   readonly conversationsByUser: Map<string, Map<string, Conversation>>;
+  /**
+   * conceptId -> 確認問題。D1 の concept_checks に対応する。
+   *
+   * 利用者に紐づかない共有コンテンツだが、ストアに同居させる。退会や履歴の削除が
+   * これを巻き込まないことを、同じストアを共有したテストで確かめるため（#185）。
+   */
+  readonly conceptChecks: Map<string, StoredConceptCheck>;
 }
 
 export function createInMemoryRepositoryStore(): InMemoryRepositoryStore {
@@ -66,6 +75,7 @@ export function createInMemoryRepositoryStore(): InMemoryRepositoryStore {
     evidenceByUser: new Map(),
     importSessionsByUser: new Map(),
     conversationsByUser: new Map(),
+    conceptChecks: new Map(),
   };
 }
 
@@ -541,5 +551,21 @@ export class InMemoryImportSessionRepository implements ImportSessionRepository 
     const count = this.byUser.get(userId)?.size ?? 0;
     this.byUser.delete(userId);
     return Promise.resolve(count);
+  }
+}
+
+/** `ConceptCheckRepository` のインメモリ実装。テスト用。 */
+export class InMemoryConceptCheckRepository implements ConceptCheckRepository {
+  constructor(private readonly store: InMemoryRepositoryStore = createInMemoryRepositoryStore()) {}
+
+  get(conceptId: string): Promise<StoredConceptCheck | null> {
+    // D1 実装が JSON を読み戻すのと同じく、呼び出し側に保存済みの参照を渡さない。
+    const stored = this.store.conceptChecks.get(conceptId);
+    return Promise.resolve(stored === undefined ? null : structuredClone(stored));
+  }
+
+  put(stored: StoredConceptCheck): Promise<void> {
+    this.store.conceptChecks.set(stored.check.conceptId, structuredClone(stored));
+    return Promise.resolve();
   }
 }

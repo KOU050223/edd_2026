@@ -9,7 +9,6 @@ function view(conceptId: string, status: MasteryStatus, score: number): ConceptM
     score,
     evidence: {
       questionCount: 0,
-      hintCount: 0,
       answerViewCount: 0,
       solvedIndependentlyCount: 0,
       errorRecurrenceCount: 0,

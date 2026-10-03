@@ -458,8 +458,6 @@ export function ConceptDetail({
         <dd>{percent(concept.score)}</dd>
         <dt>自力解決</dt>
         <dd>{concept.evidence.solvedIndependentlyCount} 回</dd>
-        <dt>ヒント利用</dt>
-        <dd>{concept.evidence.hintUsedCount} 回</dd>
         <dt>手動修正</dt>
         <dd>
           {concept.manual

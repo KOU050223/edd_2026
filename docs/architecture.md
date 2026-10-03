@@ -59,7 +59,7 @@ Gakushu Sochi の中心的な資産は、単発のAI回答ではなく、ユー�
 VS Code Extension、Desktop App、Web App、将来のCLIや他IDE連携を指す。
 
 - 各環境からコード文脈・診断・ユーザー操作を収集する
-- 回答を表示し、Hint → 自力解決 → Answer の対話を成立させる
+- 回答を表示し、質問から自力解決までの対話を成立させる
 - 学習イベントを生成し、送信できないものはローカルキューに残す
 - ユーザー持ち込みAIを使う場合は、各クライアントから直接呼ぶ
 
@@ -157,7 +157,7 @@ Managed AI を導入しても、他の経路を置き換えない。回答時に
 
 ```text
 Client が観測する事実
-  question_asked / hint_used / solved_independently / check_passed ...
+  question_asked / answer_viewed / solved_independently / check_passed ...
                          │
                          ▼
                API Server が追記・検証
@@ -186,7 +186,7 @@ Client が観測する事実
 | Learning Query | `GET /v1/learning-profile` / `GET /v1/learning-activity`                                                                        | 導出済みのLearning Mapと根拠、日次の集計を返す                                               |
 | Learner Data   | `GET/PUT /v1/mastery-overrides` / `GET/PUT /v1/user-settings`                                                                   | 習熟度の手動上書きとユーザー設定（利用者自身の宣言であり行動記録ではない）                   |
 | AI Gateway     | `POST /v1/ai/responses` / `GET /v1/ai/usage`                                                                                    | Managed AI の実行・利用制限・課金と、残量の提示を扱う                                        |
-| Check Content  | `POST /v1/checks:generate`                                                                                                      | 確認問題（2問1組）を Concept の定義から生成する                                              |
+| Check Content  | `POST /v1/checks:generate`                                                                                                      | 確認問題（2問1組）を返す。保存済みを全利用者で使い回し、無ければ生成して保存                 |
 | Conversations  | `PUT /v1/conversations/:id` / `GET /v1/conversations(/:id)` / `DELETE /v1/conversations(/:id)` / `GET /v1/conversations:export` | 質問履歴の本文。オプトイン時のみ保存（[`conversation-history.md`](conversation-history.md)） |
 | Data Rights    | `GET /v1/learning-events:export` / `DELETE /v1/learning-events` / `DELETE /v1/me`                                               | 自分の学習データを取り出す／消す／退会（[`data-privacy.md`](data-privacy.md)）               |
 
@@ -263,7 +263,7 @@ APIの外部契約は `apps/api` に置き、複数クライアントで実際�
 
 ### Phase 1: 最初の学習ループを完成させる
 
-- `question_asked`、`hint_used`、`solved_independently` などを正確に記録する
+- `question_asked`、`answer_viewed`、`solved_independently` などを正確に記録する
 - 同期済みProfileを VS Code で表示する
 - Web にログインと読み取り専用の Learning Map を置く
 - 失敗を理由別にユーザーへ表示し、詳細をログへ残す

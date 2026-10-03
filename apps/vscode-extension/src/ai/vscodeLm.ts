@@ -130,7 +130,7 @@ export class VSCodeLMProvider implements AIProvider {
       // sendRequest は初回呼び出し時にユーザーへ同意ダイアログを表示する。
       // ユーザー操作（コマンド実行）への応答として呼ぶ必要があり、ここはその文脈で呼ばれる。
       const response = await model.sendRequest(toMessages(request), {
-        justification: "Gakushu Sochi がコードの説明・ヒントを生成するために使用します。",
+        justification: "Gakushu Sochi がコードの説明を生成するために使用します。",
       });
 
       let raw = "";
@@ -156,7 +156,6 @@ export class VSCodeLMProvider implements AIProvider {
         answer: {
           text: parsed.text,
           conceptIds: parsed.conceptIds,
-          mode: request.mode,
           model: model.id,
           ...(parsed.resolution ? { resolution: parsed.resolution } : {}),
         },

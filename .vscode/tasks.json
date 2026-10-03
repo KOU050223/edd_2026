@@ -5,7 +5,7 @@
       "label": "watch vscode extension",
       "type": "shell",
       "command": "npm run watch --workspace=gakushu-sochi",
-      "problemMatcher": "$tsc-watch",
+      "problemMatcher": "$esbuild-watch",
       "isBackground": true,
       "presentation": {
         "reveal": "never"

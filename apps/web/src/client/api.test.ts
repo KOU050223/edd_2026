@@ -85,11 +85,11 @@ test("推移グラフ用に欠測日を 0 件で補完する", () => {
     fillActivityDays({
       from: "2026-09-01",
       to: "2026-09-03",
-      days: [{ date: "2026-09-02", counts: { hint_used: 2 } }],
+      days: [{ date: "2026-09-02", counts: { answer_viewed: 2 } }],
     }),
   ).toEqual([
     { date: "2026-09-01", counts: {} },
-    { date: "2026-09-02", counts: { hint_used: 2 } },
+    { date: "2026-09-02", counts: { answer_viewed: 2 } },
     { date: "2026-09-03", counts: {} },
   ]);
 });

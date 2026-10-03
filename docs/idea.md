@@ -44,8 +44,6 @@ VS Codeのエラー情報を取得し、
 
 を解説する。
 
-すぐ答えを出すだけでなく、Hint → 自力解決 → Answer と段階的に進むHint Modeも用意する。
-
 ---
 
 ## Personal Learning Map
@@ -65,14 +63,14 @@ VS Code / GitHub / AIとの質問                 ── 何に詰まり、ど�
 教材・エディタ・AIの組み合わせはユーザーごとに異なる。最初からすべてを汎用連携するのではなく、
 価値を出せる接続先を一つずつ深く対応し、本人が使う学習環境に合わせて組み替えられるようにする。
 
-質問内容やエラー、ヒントの利用状況などから、その人の理解の証拠を蓄積する。
+質問内容やエラーなどから、その人の理解の証拠を蓄積する。
 
 ```text
 Go Roadmap
 
 Basic Syntax   確認済み
 Slice / Map    学習中
-Pointer        学習中（Hintで2回解決）
+Pointer        学習中（自力で2回解決）
 Interface      未観測
 Concurrency    未観測
 ```
@@ -111,7 +109,6 @@ Concurrency    未観測
 ### Teaching Style
 
 - Answer First
-- Hint First
 - Socratic
 - Example Heavy
 - Deep Explanation
@@ -187,10 +184,9 @@ API Server（D1）へ同期する。クライアントが持つのはオフラ�
 
 1. コード選択 → ショートカット → AI質問
 2. エラー → AI解説
-3. Hint Mode（Hint → 自力解決 → Answer）
-4. 質問から学習Conceptを抽出
-5. 基本Personal Learning Map
-6. 回答スタイル設定
+3. 質問から学習Conceptを抽出
+4. 基本Personal Learning Map
+5. 回答スタイル設定
 
 AI Agentや大規模なコード生成、教材・他エディタ・GitHubとの連携は実装しない。
 それらは、VS Codeで学習ループの価値を検証してから、優先度順にコネクタとして追加する。
@@ -205,7 +201,6 @@ AI Agentや大規模なコード生成、教材・他エディタ・GitHubとの
 
 - コードへの質問
 - エラー解説
-- Hint Mode（Hint → 自力解決 → Answer）
 - 基本Personal Learning Map
 - 基本的な回答カスタマイズ
 

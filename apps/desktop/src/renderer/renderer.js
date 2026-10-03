@@ -191,11 +191,6 @@ $("close").onclick = () => window.desktop.close();
 $("card-close").onclick = () => {
   card.hidden = true;
 };
-// 「もっと自分で考えたい」は Hint モードが入るまで質問欄へ促すだけに留める。
-$("think").onclick = () => {
-  question.focus();
-  showNotice("自分の言葉で考えを書いてみてください。");
-};
 
 const ask = async () => {
   if (isAsking) return;

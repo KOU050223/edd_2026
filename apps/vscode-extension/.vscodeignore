@@ -1,0 +1,15 @@
+# VSIX に載せるのは dist/extension.js のバンドルと実行時に要るものだけ。
+# workspace の依存（@gakushu-sochi/domain）はモノレポの node_modules に
+# しか無く vsce は同梱できないため、esbuild で dist へ取り込んでいる（#210）。
+# node_modules を丸ごと除外して、実行時に依存を解決する経路を残さない。
+node_modules/**
+src/**
+out/**
+.vscode/**
+*.vsix
+**/*.map
+**/*.tsbuildinfo
+.vscodeignore
+eslint.config.mjs
+tsconfig.json
+AGENTS.md

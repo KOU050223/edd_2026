@@ -9,7 +9,7 @@ const tsconfigRootDir = import.meta.dirname;
 
 export default [
   {
-    ignores: ["out/**", "node_modules/**"],
+    ignores: ["dist/**", "out/**", "node_modules/**"],
     languageOptions: {
       parserOptions: { tsconfigRootDir },
     },

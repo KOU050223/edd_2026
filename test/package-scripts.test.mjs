@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { mkdtempSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 const repoRoot = new URL("..", import.meta.url);
@@ -129,6 +132,26 @@ test("VS Code Extension はコンパイル後に VSIX を生成できる", () =>
   assert.equal(extensionPackageJson.devDependencies["@vscode/vsce"], "3.9.2");
 });
 
+test("VS Code Extension のエントリは workspace 依存を取り込んだバンドル", async () => {
+  // @gakushu-sochi/domain はモノレポの別ワークスペースで、vsce が梱包する
+  // 拡張ディレクトリの node_modules には無い。tsc の出力をそのまま載せると
+  // 本番で require("@gakushu-sochi/domain") が解決できず activate 自体が落ち、
+  // 全コマンドが command not found になる（#210）。esbuild で1ファイルに
+  // バンドルして配る配線を検査する。
+  assert.equal(extensionPackageJson.main, "./dist/extension.js");
+  assert.match(extensionPackageJson.scripts.compile, /npm run bundle/);
+  assert.match(extensionPackageJson.scripts.bundle, /esbuild .*--bundle/);
+  assert.match(extensionPackageJson.scripts.bundle, /--external:vscode/);
+  // vscode は実行時に VS Code が供給するモジュールなので external 必須。
+  // 同時に、ローカルに node_modules が生えても VSIX へ混入しないことを
+  // .vscodeignore で固定する。
+  const vscodeignore = await readFile(
+    new URL("../apps/vscode-extension/.vscodeignore", import.meta.url),
+    "utf8",
+  );
+  assert.match(vscodeignore, /^node_modules\/\*\*$/m);
+});
+
 test("desktop-v* タグで Desktop の GitHub Release を作る", () => {
   // リリース経路は docs/release.md が正典。ここでは配線だけを検査する。
   // タグ push が唯一のリリーストリガー。workflow_dispatch は試運転用でリリースを作らない。
@@ -166,6 +189,34 @@ test("desktop-v* タグで Desktop の GitHub Release を作る", () => {
     desktopPackageJson.build.artifactName,
     "Gakushu-Sochi-${version}-${os}-${arch}.${ext}",
   );
+});
+
+test("Desktop のインストール物は quarantine があっても開ける状態で届く", async () => {
+  // インストーラは未署名（adhoc）。quarantine が付いたまま /Applications に置かれると
+  // Gatekeeper がバンドル署名の不完全を「壊れている」と判定し、開く手段が残らない
+  // （Issue #211）。署名・公証が入るまでは、brew 経路は Cask の postflight で
+  // quarantine を外し、dmg 経路は afterPack でバンドル全体の adhoc 署名を整える。
+  const out = join(mkdtempSync(join(tmpdir(), "gen-cask-")), "gakushu-sochi.rb");
+  execFileSync(
+    "node",
+    [
+      "scripts/gen-cask.mjs",
+      "--version",
+      "0.1.0",
+      "--sha256-arm",
+      "a".repeat(64),
+      "--sha256-intel",
+      "b".repeat(64),
+      "--out",
+      out,
+    ],
+    { cwd: repoRoot },
+  );
+  const cask = await readFile(out, "utf8");
+  assert.match(cask, /postflight/);
+  assert.match(cask, /xattr/);
+  assert.match(cask, /com\.apple\.quarantine/);
+  assert.equal(desktopPackageJson.build.afterPack, "./scripts/after-pack.mjs");
 });
 
 test("PR レビュー由来のプロジェクトルールを hook と CI で検証する", () => {

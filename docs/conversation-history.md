@@ -123,7 +123,7 @@ VS Code はリクエストごとに採番している `sessionId` をそのま�
 Desktop は質問のたびに UUID を採番する（Desktop が将来イベントを送るときも
 そのまま `sessionId` になれる値）。
 
-### テーブル（`apps/api/migrations/0009_conversations.sql`）
+### テーブル（`apps/api/migrations/0010_conversations.sql`）
 
 ```sql
 CREATE TABLE conversations (

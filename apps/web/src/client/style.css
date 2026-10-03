@@ -490,11 +490,6 @@ button.link:disabled {
   font-size: 11px;
   font-style: normal;
 }
-footer {
-  margin-top: 24px;
-  color: #64748b;
-  font-size: 13px;
-}
 .message {
   max-width: 700px;
   margin: 80px auto;
@@ -558,9 +553,6 @@ footer {
 }
 .solved_independently {
   background: #14b8a6;
-}
-.hint_used {
-  background: #f59e0b;
 }
 .error_recurred {
   background: #ef4444;

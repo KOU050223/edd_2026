@@ -7,7 +7,6 @@ export interface Concept {
   score: number;
   evidence: {
     solvedIndependentlyCount: number;
-    hintUsedCount: number;
     /** 直近で観測したイベントの時刻。ISO 8601。現在地の判定に使う。 */
     lastObservedAt?: string;
   };

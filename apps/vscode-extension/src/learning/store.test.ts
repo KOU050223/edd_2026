@@ -36,7 +36,6 @@ function profileWith(conceptId: string): LearnerProfile {
     score: 0.25,
     evidence: {
       questionCount: 0,
-      hintCount: 0,
       answerViewCount: 0,
       solvedIndependentlyCount: 1,
       errorRecurrenceCount: 0,
@@ -219,7 +218,7 @@ function eventWith(conceptId: string): LearningEvent {
   return {
     id: "event-1",
     occurredAt: "2026-09-21T00:00:00.000Z",
-    type: "hint_used",
+    type: "answer_viewed",
     origin: "vscode",
     conceptIds: [conceptId],
     language: "go",

@@ -7,7 +7,6 @@ import {
   loadLearningMap,
   languageLabel,
   NARROW_LAYOUT,
-  nameOf,
   overlaidConcepts,
   parseConceptSearch,
   SkillTree,
@@ -74,7 +73,6 @@ function LanguageMap() {
     );
   }
   const summary = summarizeTree(tree, concepts);
-  const currentConcept = current === undefined ? undefined : concepts.get(current);
   // 記録は消えない（Concept が増えても残る）。いま全件 確認済みかどうかとは別物なので、
   // 達成の時刻は記録から、進捗は今の地図から出す。
   const recorded = completions?.completions.find((completion) => completion.language === language);
@@ -130,35 +128,6 @@ function LanguageMap() {
           学習の進み具合を記録・表示するには<a href="/login">ログイン</a>してください。
         </p>
       )}
-      <section className="position" aria-label="現在地と次に学ぶ候補">
-        {currentConcept ? (
-          <>
-            <div>
-              <span className="muted">現在地</span>
-              <button className="link" onClick={() => goToConcept(currentConcept.conceptId)}>
-                {nameOf(currentConcept)}
-              </button>
-            </div>
-            <div>
-              <span className="muted">次に学ぶ候補</span>
-              {nextIds.length === 0 ? (
-                <span>この先に続く Concept はありません</span>
-              ) : (
-                nextIds.map((id) => {
-                  const concept = concepts.get(id);
-                  return (
-                    <button className="link" key={id} onClick={() => goToConcept(id)}>
-                      {concept ? nameOf(concept) : id}
-                    </button>
-                  );
-                })
-              )}
-            </div>
-          </>
-        ) : (
-          <span className="muted">学習中の Concept はまだありません</span>
-        )}
-      </section>
       <div className={selected ? "map-layout" : undefined}>
         <div className="map">
           <SkillTree
@@ -184,12 +153,6 @@ function LanguageMap() {
           />
         )}
       </div>
-      {profile && (
-        <footer>
-          {profile.eventCount} 件のイベントから導出 ·{" "}
-          {new Date(profile.derivedAt).toLocaleString("ja-JP")}
-        </footer>
-      )}
     </>
   );
 }

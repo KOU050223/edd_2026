@@ -1,9 +1,6 @@
 import type { CodeContext } from "./context.js";
 import type { ConceptId, ConceptMastery } from "./profile.js";
 
-/** AI の応答モード。 */
-export type AskMode = "hint" | "explain";
-
 /**
  * 人格設定（persona）の最大長。
  *
@@ -28,7 +25,6 @@ export interface ConversationTurn {
 
 /** AI への1回のリクエスト。 */
 export interface AIRequest {
-  mode: AskMode;
   context: CodeContext;
   question?: string;
   diagnostics?: string[];
@@ -60,7 +56,6 @@ export interface AIError {
 export interface AIAnswer {
   text: string;
   conceptIds: ConceptId[];
-  mode: AskMode;
   model?: string;
   resolution?: "resolved" | "unclear";
 }

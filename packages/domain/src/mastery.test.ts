@@ -33,7 +33,7 @@ test("conceptIdsが空のイベントはどのConceptの習熟度も作らない
 
 test("入力の順序が変わっても導出結果は同一になる", () => {
   const events = [
-    event("e1", "2026-09-05T00:00:01.000Z", "hint_used"),
+    event("e1", "2026-09-05T00:00:01.000Z", "answer_viewed"),
     event("e2", "2026-09-05T00:00:02.000Z", "solved_independently"),
     event("e3", "2026-09-05T00:00:03.000Z", "error_recurred"),
     event("e4", "2026-09-05T00:00:04.000Z", "solved_independently"),
@@ -84,7 +84,7 @@ test("同時刻のイベントはIDの昇順で畳み込む", () => {
 
 test("発生順に並んだイベントではapplyEventの畳み込みと一致する", () => {
   const events = [
-    event("e1", "2026-09-05T00:00:01.000Z", "hint_used"),
+    event("e1", "2026-09-05T00:00:01.000Z", "answer_viewed"),
     event("e2", "2026-09-05T00:00:02.000Z", "solved_independently"),
     event("e3", "2026-09-05T00:00:03.000Z", "solved_independently"),
     event("e4", "2026-09-05T00:00:04.000Z", "check_passed"),

@@ -103,7 +103,6 @@ vi.mock("../ai/vscodeLm", () => ({
       return {
         ok: true,
         answer: {
-          mode: "explain",
           text: "変数宣言についての回答",
           conceptIds: ["ts.variable_declaration"],
           model: "fake",

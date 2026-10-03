@@ -31,7 +31,7 @@ export function completeConcepts(
         label: definition.label,
         status: "unobserved",
         score: 0,
-        evidence: { solvedIndependentlyCount: 0, hintUsedCount: 0 },
+        evidence: { solvedIndependentlyCount: 0 },
       },
   );
   return [...completed, ...observed.filter((concept) => !known.has(concept.conceptId))];

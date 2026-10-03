@@ -17,7 +17,6 @@ export function createChatAIRequest(
 ): AIRequest {
   const trimmedPersona = persona?.trim();
   return {
-    mode: "explain",
     question,
     context,
     ...(diagnostics.length > 0 ? { diagnostics } : {}),

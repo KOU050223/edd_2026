@@ -202,12 +202,6 @@ function AreaIndex() {
           ))}
         </section>
       )}
-      {profile && (
-        <footer>
-          {profile.eventCount} 件のイベントから導出 ·{" "}
-          {new Date(profile.derivedAt).toLocaleString("ja-JP")}
-        </footer>
-      )}
     </>
   );
 }

@@ -9,6 +9,8 @@
   会話だけを `conversations` へ保存する。`PUT /v1/conversations/:id` は
   オプトインが無効なら本文を捨てて 403 で拒否する
   （`src/routes/conversations.ts`、正本は `docs/conversation-history.md`）。
+  確認問題（`concept_checks`、#185）は例外ではなく対象外である。入力が Concept の定義だけの
+  全利用者共有コンテンツで、利用者の質問への回答ではないため保存して使い回す。
 - `packages/domain` は利用してよいが、VS Code API やUIの型へ依存してはならない。
 
 ## テスト

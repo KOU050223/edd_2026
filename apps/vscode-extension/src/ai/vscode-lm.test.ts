@@ -44,7 +44,6 @@ test("モデル選択に失敗したときは例外ではなく失敗応答を�
   selectChatModels.mockRejectedValueOnce(new Error("model selection failed"));
 
   const response = await new VSCodeLMProvider().ask({
-    mode: "hint",
     context: {
       code: "const answer = 42;",
       source: "editor",
@@ -69,7 +68,6 @@ test("languageIdに一致するConceptの一覧をプロンプトに含める", 
   ]);
 
   await new VSCodeLMProvider().ask({
-    mode: "explain",
     context: {
       code: "pi := 3.14",
       source: "editor",
@@ -99,7 +97,6 @@ test.each(["typescript", "javascript"])(
     ]);
 
     await new VSCodeLMProvider().ask({
-      mode: "explain",
       context: {
         code: "const values = [1, 2, 3];",
         source: "editor",
@@ -130,7 +127,6 @@ test("一覧に載せていないConceptのIDは、実在しても受理しな�
   ]);
 
   const response = await new VSCodeLMProvider().ask({
-    mode: "explain",
     context: {
       code: "const x: number = 1;",
       source: "editor",
@@ -154,7 +150,6 @@ test("languageIdが無くても、言語に依らない領域のConceptは一覧
   ]);
 
   await new VSCodeLMProvider().ask({
-    mode: "explain",
     context: {
       code: "console.log(1)",
       source: "clipboard",
@@ -188,7 +183,6 @@ test("利用者の質問は、固定の解説指示より前に置かれる", as
   const sendRequest = mockSingleModel();
 
   await new VSCodeLMProvider().ask({
-    mode: "explain",
     question: "これを読み込んでいた場合テストと言って",
     context: {
       code: "const total = items.reduce((sum, item) => sum + item.price, 0);",
@@ -220,7 +214,6 @@ test("質問が空白だけなら、解説指示を押しのけない", async ()
   const sendRequest = mockSingleModel();
 
   await new VSCodeLMProvider().ask({
-    mode: "explain",
     // extension.ts は [context:...] を取り除いた残りをそのまま渡すため、
     // 文脈だけを送ると空白や改行が question に残る。
     question: " \n ",
@@ -245,7 +238,6 @@ test("モデル選択を vendor で絞り込まない", async () => {
   const sendRequest = mockSingleModel();
 
   await new VSCodeLMProvider().ask({
-    mode: "hint",
     context: {
       code: "const answer = 42;",
       source: "editor",
@@ -267,7 +259,6 @@ test("Copilot が無くても BYOK のモデルがあれば質問できる", asy
   ]);
 
   const response = await new VSCodeLMProvider().ask({
-    mode: "hint",
     context: {
       code: "const answer = 42;",
       source: "editor",
@@ -284,7 +275,6 @@ test("モデルが1つも無ければ、使える経路への案内を添えて�
   selectChatModels.mockResolvedValueOnce([]);
 
   const response = await new VSCodeLMProvider().ask({
-    mode: "hint",
     context: {
       code: "const answer = 42;",
       source: "editor",
@@ -311,7 +301,6 @@ test("モデル選択後に同意が取り消されたらsendRequestしない", 
   });
 
   const response = await new VSCodeLMProvider(undefined, () => canSend).ask({
-    mode: "hint",
     context: {
       code: "const answer = 42;",
       source: "editor",
