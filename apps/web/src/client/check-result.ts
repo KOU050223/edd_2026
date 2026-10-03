@@ -59,14 +59,26 @@ export function checkResultEvent(input: {
   };
 }
 
-/** 記録できた結果。`duplicate` は同じイベントを送り直した場合で、記録済みとして扱ってよい。 */
-export type CheckResultRecordStatus = "accepted" | "duplicate";
+/**
+ * 送信の結果。
+ *
+ * - `accepted`: 記録した。
+ * - `duplicate`: 同じイベントを送り直した場合で、記録済みとして扱ってよい。
+ * - `dropped_by_reset`: サーバーは受理したが、送信と重なった学習データの削除
+ *   （`DELETE /v1/learning-events`）に含まれ、**記録されていない**（Issue #124）。
+ *   利用者が消した側に倒れた結果なので、記録済みと表示してはならず、**再送もしない。**
+ *   削除の後に同じイベントを送ると新しい記録として保存され、消したはずのデータが戻る。
+ */
+export type CheckResultRecordStatus = "accepted" | "duplicate" | "dropped_by_reset";
 
 /**
  * 同期応答のうち、1件だけ送ったときの結果を取り出す。
  * 形が契約と違えば `null`（RULE-004: 2xx でも中身が違えば失敗）。
  */
-function singleResult(body: unknown, eventId: string): { status: string; reason?: string } | null {
+function singleResult(
+  body: unknown,
+  eventId: string,
+): { status: string; reason?: string; droppedByReset: boolean } | null {
   if (typeof body !== "object" || body === null) return null;
   const results = (body as { results?: unknown }).results;
   if (!Array.isArray(results) || results.length !== 1) return null;
@@ -75,6 +87,7 @@ function singleResult(body: unknown, eventId: string): { status: string; reason?
     id?: unknown;
     status?: unknown;
     reason?: unknown;
+    droppedByReset?: unknown;
   };
   if (typeof result !== "object" || result === null) return null;
   if (result.index !== 0 || result.id !== eventId || typeof result.status !== "string") {
@@ -83,6 +96,8 @@ function singleResult(body: unknown, eventId: string): { status: string; reason?
   return {
     status: result.status,
     ...(typeof result.reason === "string" ? { reason: result.reason } : {}),
+    // 古いサーバーは返さないため、省略は false と同じ意味で扱う（VS Code 拡張の sync.ts と同じ）。
+    droppedByReset: result.droppedByReset === true,
   };
 }
 
@@ -92,6 +107,7 @@ function singleResult(body: unknown, eventId: string): { status: string; reason?
  * 失敗は `ApiError` で投げる。**回答操作（解説の表示や次の Concept への移動）は
  * この結果を待って止めてはならない**（#77）。呼び出し側は失敗を利用者へ伝え、
  * 同じイベントのまま再送できるようにする。再送は `duplicate` として受理される。
+ * `dropped_by_reset` が返ったときは再送しない（{@link CheckResultRecordStatus}）。
  *
  * サーバーが `rejected` を返したのは送信側の不具合なので、再送しても直らない。
  * 理由をログへ残したうえで失敗として扱う。
@@ -107,6 +123,7 @@ export async function recordCheckResult(
   );
   const result = singleResult(body, event.id);
   if (result === null) throw new ApiError("unavailable");
+  if (result.status === "accepted" && result.droppedByReset) return "dropped_by_reset";
   if (result.status === "accepted" || result.status === "duplicate") return result.status;
   console.error("check result was rejected by the API", {
     eventId: event.id,

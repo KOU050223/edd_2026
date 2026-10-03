@@ -79,6 +79,23 @@ test("同じイベントの再送は duplicate として記録済み扱いにす
   ).resolves.toBe("duplicate");
 });
 
+test("送信と重なった学習データの削除に含まれたら、記録済みと区別して返す", async () => {
+  // 受理されたが削除境界の内側に倒れ、保存されなかった（Issue #124）。
+  await expect(
+    recordCheckResult(event(true, true), async () =>
+      syncResponse("accepted", { droppedByReset: true }),
+    ),
+  ).resolves.toBe("dropped_by_reset");
+});
+
+test("droppedByReset が false なら記録済みとして扱う", async () => {
+  await expect(
+    recordCheckResult(event(true, true), async () =>
+      syncResponse("accepted", { droppedByReset: false }),
+    ),
+  ).resolves.toBe("accepted");
+});
+
 test("rejected は理由をログへ残して失敗にする", async () => {
   const log = vi.spyOn(console, "error").mockImplementation(() => {});
 

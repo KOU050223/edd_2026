@@ -328,6 +328,9 @@ SELECT strftime('%Y-%m-%d', occurred_at_ms / 1000, 'unixepoch') AS date,
   失敗は利用者へ伝え、同じイベント（同じ `id`）のまま再送できるようにする。
   再送は `duplicate` として受理されるので二重に数えられない。
   `rejected` は送信側の不具合であり、再送しても直らないためログへ理由を残す。
+- 送信と学習データの削除が重なると、`accepted` に `droppedByReset: true` が付いて返る（#124）。
+  削除に含まれて**記録されていない**ので、`dropped_by_reset` として記録済みと区別する。
+  **再送しない。** 削除の後に送り直すと新しい記録として保存され、消したはずのデータが戻る。
 
 `confirmed` の条件は `solvedIndependentlyCount + checkPassedCount >= 2`
 （packages/domain/src/mastery.ts）なので、自力解決1回と確認問題の正解1回で `confirmed` に届く。
