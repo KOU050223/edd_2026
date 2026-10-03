@@ -79,34 +79,43 @@ test("安全でない送信先にはトークンを載せる前に止める", as
   expect(fetchMock).not.toHaveBeenCalled();
 });
 
-test("オプトインの切り替えは現在の displayName などを送り返す", async () => {
+test("200 でも saved:true でなければ失敗として返す", async () => {
+  // { saved: false }（新しい会話が既存）を保存成功と見なすと履歴が黙って抜ける
+  // （RULE-004）。
+  vi.stubGlobal(
+    "fetch",
+    vi
+      .fn()
+      .mockResolvedValue(new Response('{"saved":false,"reason":"newer_exists"}', { status: 200 })),
+  );
+
+  const outcome = await uploadConversation(CONVERSATION, CONFIG);
+
+  expect(outcome.ok).toBe(false);
+});
+
+test("オプトインの切り替えは saveConversationHistory だけを送る", async () => {
+  // GET → PUT の全文送り返しだと、読み取りと書き込みの間に別端末が
+  // 変更した項目を古い値で上書きする。
   const remoteSettings = {
     version: 1,
     displayName: "学習者",
     activityPeriodDays: 30,
-    saveConversationHistory: false,
+    saveConversationHistory: true,
     updatedAt: "2026-01-01T00:00:00.000Z",
   };
   const fetchMock = vi
     .fn()
-    .mockResolvedValueOnce(new Response(JSON.stringify(remoteSettings), { status: 200 }))
-    .mockResolvedValueOnce(
-      new Response(JSON.stringify({ ...remoteSettings, saveConversationHistory: true }), {
-        status: 200,
-      }),
-    );
+    .mockResolvedValue(new Response(JSON.stringify(remoteSettings), { status: 200 }));
   vi.stubGlobal("fetch", fetchMock);
 
   const outcome = await setRemoteSaveConversationHistory(true, CONFIG);
 
   expect(outcome).toEqual({ ok: true, enabled: true });
-  // PUT の本文に他項目を乗せて送り返さないと、表示名が消える。
-  const putBody = JSON.parse(fetchMock.mock.calls[1][1].body as string);
-  expect(putBody).toEqual({
-    displayName: "学習者",
-    activityPeriodDays: 30,
-    saveConversationHistory: true,
-  });
+  // 切り替えたい項目だけを送り、GET で先行読み取りはしない。
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  const putBody = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+  expect(putBody).toEqual({ saveConversationHistory: true });
 });
 
 test("フィールドを持たない古いサーバー応答は未対応として失敗にする", async () => {

@@ -53,3 +53,24 @@ export function buildVscodeConversation(input: BuildVscodeConversationInput): Co
     messages,
   };
 }
+
+// apps/api/src/contract/conversations.ts の MAX_MESSAGE_TEXT_LENGTH と同じ値。
+// 上限を超える会話は送っても 400 で拒否されるだけなので、送る前に検査して
+// 理由を利用者へ明示する。
+const MESSAGE_TEXT_LIMITS: Record<ConversationMessage["role"], number> = {
+  context: 20_000,
+  user: 4_000,
+  assistant: 100_000,
+};
+
+/**
+ * 契約の上限を超える本文があれば、その箇所を説明した文字列を返す。
+ * 上限内なら `null`。
+ */
+export function conversationBodyOverLimit(conversation: Conversation): string | null {
+  const over = conversation.messages.find(
+    (message) => message.text.length > MESSAGE_TEXT_LIMITS[message.role],
+  );
+  if (over === undefined) return null;
+  return `${over.role} が ${over.text.length} 文字で上限 ${MESSAGE_TEXT_LIMITS[over.role]} 文字を超えています`;
+}

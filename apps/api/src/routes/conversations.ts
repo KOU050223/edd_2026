@@ -88,7 +88,7 @@ export function createConversationsRoute(resolve: ConversationsDepsResolver) {
     }
 
     const deps = resolve(c.env);
-    // サーバー側のゲート。設定行が無い（=一度も保存していない）なら
+    // サーバー側のゲート（事前判定）。設定行が無い（=一度も保存していない）なら
     // 既定値の false と同じく拒否する。
     const settings = await deps.settings.get(userId);
     if (settings?.saveConversationHistory !== true) {
@@ -98,6 +98,16 @@ export function createConversationsRoute(resolve: ConversationsDepsResolver) {
     // conversations.user_id は users(id) を参照する。
     await deps.identity.ensureUser({ userId, nowMs: deps.nowMs() });
     const { saved } = await deps.conversations.upsert(userId, conversation, deps.nowMs());
+    if (!saved) {
+      // オプトインの検査は upsert の SQL にも織り込んである（別端末が
+      // 上の読み取りとこの書き込みの間に保存を無効化しても本文は残さない）。
+      // saved:false のとき、最新の設定を見直して無効化による拒否なら
+      // 403 に倒す。残りは既存の新しい会話との衝突。
+      const latest = await deps.settings.get(userId);
+      if (latest?.saveConversationHistory !== true) {
+        throw new HTTPException(403, { message: "conversation_history_disabled" });
+      }
+    }
     const body: PutConversationResponse = saved
       ? { saved: true }
       : { saved: false, reason: "newer_exists" };

@@ -47,19 +47,10 @@ export function createUserSettingsRoute(resolve: UserSettingsDepsResolver) {
     const userId = c.get("user").userId;
     await deps.identity.ensureUser({ userId, nowMs: deps.nowMs() });
 
-    // saveConversationHistory が省略されたときは保存済みの値を維持する。
-    // 省略を false として書くと、「履歴を保存するか」以外を直すたびに
-    // オプトインが黙って外れる（contract/user-settings.ts を参照）。
-    const current = await deps.repository.get(userId);
-    const saved = await deps.repository.put(
-      userId,
-      {
-        ...validated.value,
-        saveConversationHistory:
-          validated.value.saveConversationHistory ?? current?.saveConversationHistory ?? false,
-      },
-      deps.nowIso(),
-    );
+    // 省略された項目の「現状維持」はリポジトリが1文の upsert で解決する
+    // （contract/user-settings.ts を参照）。ここで読んでマージすると、
+    // 読み取りと書き込みの間に別端末が保存した値を古い値で上書きする。
+    const saved = await deps.repository.put(userId, validated.value, deps.nowIso());
     // 保存後の値をそのまま返す。画面はこれを採用するので、
     // 表示している内容と保存された内容が食い違わない。
     return c.json(saved, 200, { "cache-control": "no-store" });

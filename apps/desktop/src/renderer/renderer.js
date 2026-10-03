@@ -262,13 +262,16 @@ saveHistory.onchange = async () => {
     const result = await window.desktop.setConversationHistoryOptIn(next);
     // キャンセル時は main が現在値を返すので、戻った値に合わせて表示を戻す。
     renderHistoryOptIn(result.saveConversationHistory);
+    saveHistory.disabled = false;
   } catch (e) {
-    saveHistory.checked = !next;
+    // 失敗時は表示を元に戻してから、サーバーの現在値で復元する。
+    // finally で無条件に再有効化すると、戻りチェックが反映される前に
+    // 次の変更を受け付けてしまう。
+    renderHistoryOptIn(!next);
     showError(
       `質問履歴の設定を変更できませんでした: ${e instanceof Error ? e.message : String(e)}`,
     );
-  } finally {
-    saveHistory.disabled = false;
+    void loadHistoryOptIn();
   }
 };
 

@@ -133,6 +133,9 @@ function ConversationDetail() {
 }
 
 export const Route = createFileRoute("/_framed/history/$conversationId")({
+  // 本文を30秒キャッシュに置かない。削除済みの会話や古い内容を
+  // 残して見せないため、詳細は訪れるたびに取り直す。
+  staleTime: 0,
   loader: async ({ params }) => {
     const conversation = await fetchConversation(fetch, takeLoginRetry(), params.conversationId);
     return { conversation };

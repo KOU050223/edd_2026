@@ -455,15 +455,15 @@ export class D1UserSettingsRepository implements UserSettingsRepository {
     };
   }
 
-  async put(
-    userId: string,
-    input: Required<UserSettingsInput>,
-    updatedAt: string,
-  ): Promise<UserSettings> {
+  async put(userId: string, input: UserSettingsInput, updatedAt: string): Promise<UserSettings> {
     // 退会中のユーザーの行を作らない。`mastery_overrides` と同じ守り方で、
     // 削除の最中に users 行が復活する窓を塞ぐ（repository/types.ts の
     // `startUserDeletion` の説明を参照）。
     const nowMs = Date.now();
+    // 「省略=現状維持」をこの1文の中で解決する。提供された列だけを書き換える
+    // upsert にすれば、読み取り→書き込みの間に別端末が保存した値を
+    // 古い値で上書きしない（項目ごとの更新が不可分になる）。
+    // INSERT 側（まだ行が無い初回）では省略項目へ既定値を使う。
     const result = await this.db
       .prepare(
         `INSERT INTO user_settings (
@@ -475,25 +475,36 @@ export class D1UserSettingsRepository implements UserSettingsRepository {
            WHERE user_id = ? AND started_at_ms > ?
          )
          ON CONFLICT (user_id) DO UPDATE SET
-           display_name = excluded.display_name,
-           activity_period_days = excluded.activity_period_days,
-           save_conversation_history = excluded.save_conversation_history,
+           display_name = CASE WHEN ? THEN excluded.display_name
+                               ELSE user_settings.display_name END,
+           activity_period_days = CASE WHEN ? THEN excluded.activity_period_days
+                                       ELSE user_settings.activity_period_days END,
+           save_conversation_history = CASE WHEN ? THEN excluded.save_conversation_history
+                                          ELSE user_settings.save_conversation_history END,
            updated_at = excluded.updated_at`,
       )
       .bind(
         userId,
-        input.displayName,
-        input.activityPeriodDays,
-        input.saveConversationHistory ? 1 : 0,
+        input.displayName ?? null,
+        input.activityPeriodDays ?? 30,
+        input.saveConversationHistory === undefined ? 0 : input.saveConversationHistory ? 1 : 0,
         updatedAt,
         userId,
         nowMs - ACCOUNT_DELETION_TOMBSTONE_TTL_MS,
+        input.displayName === undefined ? 0 : 1,
+        input.activityPeriodDays === undefined ? 0 : 1,
+        input.saveConversationHistory === undefined ? 0 : 1,
       )
       .run();
     if (result.meta.changes === 0 && (await hasActiveDeletion(this.db, userId, nowMs))) {
       throw new Error("user deletion is in progress");
     }
-    return { version: USER_SETTINGS_VERSION, ...input, updatedAt };
+    // 省略項目を含む保存後の値を返すため、書いた行を読み直す。
+    const saved = await this.get(userId);
+    if (saved === null) {
+      throw new Error(`user_settings row missing after put (user_id=${userId})`);
+    }
+    return saved;
   }
 }
 
@@ -521,6 +532,25 @@ interface ConversationRow {
 
 const CONVERSATION_COLUMNS = `id, origin, client_id, title, language, file_name,
   messages, message_count, complete, occurred_at, occurred_at_ms, updated_at, updated_at_ms`;
+
+/** 一覧が読む列。本文（messages）と並び替え専用の _ms 列は要約に要らない。 */
+interface ConversationSummaryRow {
+  id: string;
+  origin: string;
+  client_id: string | null;
+  title: string | null;
+  language: string | null;
+  file_name: string | null;
+  message_count: number;
+  complete: number;
+  occurred_at: string;
+  updated_at: string;
+}
+
+// 一覧は各行の本文を読まない。messages は1会話あたり契約上限 256,000 文字まで
+// あり、100 件ページの取得が最大数十 MB になるのを防ぐ。
+const CONVERSATION_SUMMARY_COLUMNS = `id, origin, client_id, title, language, file_name,
+  message_count, complete, occurred_at, updated_at`;
 
 /**
  * D1 の行を `Conversation` へ戻す。
@@ -565,7 +595,7 @@ function toConversation(row: ConversationRow): Conversation {
   };
 }
 
-function toConversationSummary(row: ConversationRow): ConversationSummary {
+function toConversationSummary(row: ConversationSummaryRow): ConversationSummary {
   return {
     id: row.id,
     origin: row.origin,
@@ -594,6 +624,9 @@ export class D1ConversationRepository implements ConversationRepository {
     // 既存のほうが新しい会話を古いスナップショットで巻き戻さないため、
     // 更新は届いた updated_at_ms が既存以上のときだけに絞る。
     // INSERT か UPDATE か・書けたかは changes で判定する。
+    // オプトインの検査もこの1文の中で行う。ルート側の事前 403 だけだと、
+    // 設定の読み取りとこの書き込みの間に別端末がオプトインを外しても
+    // 本文が保存される（設定の再検査を書き込みと不可分にする）。
     const nowMs = Date.now();
     const result = await this.db
       .prepare(
@@ -606,6 +639,10 @@ export class D1ConversationRepository implements ConversationRepository {
          WHERE NOT EXISTS (
            SELECT 1 FROM account_deletions
            WHERE user_id = ? AND started_at_ms > ?
+         )
+         AND EXISTS (
+           SELECT 1 FROM user_settings
+           WHERE user_id = ? AND save_conversation_history = 1
          )
          ON CONFLICT (user_id, id) DO UPDATE SET
            origin = excluded.origin,
@@ -621,7 +658,9 @@ export class D1ConversationRepository implements ConversationRepository {
            updated_at = excluded.updated_at,
            updated_at_ms = excluded.updated_at_ms,
            received_at_ms = excluded.received_at_ms
-         WHERE excluded.updated_at_ms >= conversations.updated_at_ms`,
+         WHERE excluded.updated_at_ms >= conversations.updated_at_ms
+           AND (SELECT save_conversation_history FROM user_settings
+                WHERE user_id = conversations.user_id) = 1`,
       )
       .bind(
         conversation.id,
@@ -642,6 +681,7 @@ export class D1ConversationRepository implements ConversationRepository {
         receivedAtMs,
         userId,
         nowMs - ACCOUNT_DELETION_TOMBSTONE_TTL_MS,
+        userId,
       )
       .run();
 
@@ -657,7 +697,7 @@ export class D1ConversationRepository implements ConversationRepository {
     const rows = params.cursor
       ? await this.db
           .prepare(
-            `SELECT ${CONVERSATION_COLUMNS} FROM conversations
+            `SELECT ${CONVERSATION_SUMMARY_COLUMNS} FROM conversations
              WHERE user_id = ?
                AND (updated_at_ms < ? OR (updated_at_ms = ? AND id > ?))
              ORDER BY updated_at_ms DESC, id ASC
@@ -670,16 +710,16 @@ export class D1ConversationRepository implements ConversationRepository {
             params.cursor.id,
             params.limit,
           )
-          .all<ConversationRow>()
+          .all<ConversationSummaryRow>()
       : await this.db
           .prepare(
-            `SELECT ${CONVERSATION_COLUMNS} FROM conversations
+            `SELECT ${CONVERSATION_SUMMARY_COLUMNS} FROM conversations
              WHERE user_id = ?
              ORDER BY updated_at_ms DESC, id ASC
              LIMIT ?`,
           )
           .bind(userId, params.limit)
-          .all<ConversationRow>();
+          .all<ConversationSummaryRow>();
     return rows.results.map(toConversationSummary);
   }
 

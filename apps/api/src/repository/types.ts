@@ -289,14 +289,14 @@ export interface AreaCompletionRepository {
 export interface UserSettingsRepository {
   get(userId: string): Promise<UserSettings | null>;
   /**
-   * 設定を上書き保存する。
+   * 設定を保存する。省略された項目は保存済みの値を維持する。
    *
-   * `Required<UserSettingsInput>` を受け取るのは、省略可能な
-   * `saveConversationHistory` の「省略=現状維持」をここより前
-   * （ルート側のマージ）で解決済みにするため。未解決の入力を
-   * 受け付けると、省略が黙って `false` に倒れうる。
+   * 「省略=現状維持」の解決は呼び出し側（ルート）ではなくここで行う。
+   * 読み取り→マージ→書き込みを分けると、その間に別端末が保存した値を
+   * 古い値で上書きしてしまう。提供された項目だけを書く1文の upsert で
+   * 実装し、項目ごとの更新を不可分にする。
    */
-  put(userId: string, input: Required<UserSettingsInput>, updatedAt: string): Promise<UserSettings>;
+  put(userId: string, input: UserSettingsInput, updatedAt: string): Promise<UserSettings>;
 }
 
 /** `GET /v1/conversations` の一覧読み出し条件。 */

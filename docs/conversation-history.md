@@ -46,10 +46,13 @@ Conversation は習熟度の根拠ではないため、イベントと違って1
 Web の設定画面からも状態が見えることを両立させるためである。
 
 `UserSettings` のバージョンは上げない（省略可能フィールドの追加は既存の規則で
-据え置き）。`PUT /v1/user-settings` の入力ではこのフィールドを省略可能とし、
-**省略されたときは保存済みの値を維持する**。上書き型の設定更新にそのまま載せると、
+据え置き）。`PUT /v1/user-settings` の入力は全フィールド省略可能とし、
+**省略されたフィールドは保存済みの値を維持する**。上書き型の設定更新にそのまま載せると、
 古いクライアントが設定を保存するたびにオプトインが黙って外れる。
-実装上はルートが現在値を読んでからマージして書く。
+実装上はリポジトリが提供列だけを書き換える1文の upsert で解決する。
+ルートが現在値を読んでマージすると、読み取りと書き込みの間に別端末が保存した
+値を古い値で上書きしてしまう（トグル系のクライアントは
+`{ saveConversationHistory }` だけを送る）。
 
 ### 二重のゲート
 
@@ -60,7 +63,9 @@ Web の設定画面からも状態が見えることを両立させるためで�
 2. **サーバー側**: `PUT /v1/conversations/:id` は保存前に
    `saveConversationHistory` を読み、有効でなければ `403 conversation_history_disabled`
    を返して何も書かない。クライアントのキャッシュが古くても、バグがあっても、
-   オプトイン無しに本文は保存されない。
+   オプトイン無しに本文は保存されない。同じ検査は upsert の SQL にも
+   織り込んであり、設定の読み取りと書き込みの間に別端末が保存を無効化しても
+   本文は残らない（書き込みと不可分にする）。
 
 ### 有効化の文面
 
@@ -129,22 +134,28 @@ Desktop は質問のたびに UUID を採番する（Desktop が将来イベン�
 CREATE TABLE conversations (
   id TEXT NOT NULL,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  origin TEXT NOT NULL,
+  origin TEXT NOT NULL CHECK (origin IN ('desktop', 'vscode', 'web', 'cli')),
   client_id TEXT,
   title TEXT,
   language TEXT,
   file_name TEXT,
   messages TEXT NOT NULL,          -- JSON: ConversationMessage[]
-  message_count INTEGER NOT NULL,
-  complete INTEGER NOT NULL DEFAULT 1,
+  message_count INTEGER NOT NULL CHECK (message_count >= 1),
+  complete INTEGER NOT NULL DEFAULT 1 CHECK (complete IN (0, 1)),
   occurred_at TEXT NOT NULL,
   occurred_at_ms INTEGER NOT NULL,
+  updated_at TEXT NOT NULL,
   updated_at_ms INTEGER NOT NULL,
   received_at_ms INTEGER NOT NULL,
   PRIMARY KEY (user_id, id)        -- イベントと同じくユーザー単位の冪等性
 );
 CREATE INDEX idx_conversations_user_updated
-  ON conversations (user_id, updated_at_ms, id);
+  ON conversations (user_id, updated_at_ms DESC, id);
+
+-- オプトインの列。既定は無効（0）。
+ALTER TABLE user_settings
+  ADD COLUMN save_conversation_history INTEGER NOT NULL DEFAULT 0
+    CHECK (save_conversation_history IN (0, 1));
 ```
 
 `messages` を正規化せず JSON 列にするのは、`concept_ids` を JSON 文字列で持つ

@@ -103,7 +103,8 @@ test("不正な値は保存せず 400 を返す", async () => {
     { displayName: null, activityPeriodDays: "30" },
     { displayName: 42, activityPeriodDays: 30 },
     { displayName: "あ".repeat(41), activityPeriodDays: 30 },
-    { activityPeriodDays: 30 },
+    // 全項目省略は何も変更しない PUT になるため拒否する。
+    {},
   ];
   for (const body of cases) {
     const response = await put(app as never, body);
@@ -129,6 +130,30 @@ test("省略した saveConversationHistory は保存済みの値を維持する"
   // 別項目だけを更新した保存で、オプトインが黙って false に戻らないこと。
   const renamed = await put(app as never, { displayName: "こう", activityPeriodDays: 30 });
   await expect(renamed.json()).resolves.toMatchObject({ saveConversationHistory: true });
+});
+
+test("1項目だけの PUT は残りの項目を現状維持する", async () => {
+  // オプトインの切り替えなど「1項目だけ直す」呼び出しが、現在値を読んで
+  // 送り返さなくても他項目を潰さないため（Issue #204）。
+  const { app } = buildApp();
+
+  await put(app as never, { displayName: "こう", activityPeriodDays: 90 });
+
+  const flagged = await put(app as never, { saveConversationHistory: true });
+  await expect(flagged.json()).resolves.toMatchObject({
+    displayName: "こう",
+    activityPeriodDays: 90,
+    saveConversationHistory: true,
+  });
+
+  // 初回の保存でも省略項目は既定値で埋まる。
+  const { app: fresh } = buildApp();
+  const first = await put(fresh as never, { saveConversationHistory: true });
+  await expect(first.json()).resolves.toMatchObject({
+    displayName: null,
+    activityPeriodDays: 30,
+    saveConversationHistory: true,
+  });
 });
 
 test("本文が JSON でなければ 400 を返す", async () => {

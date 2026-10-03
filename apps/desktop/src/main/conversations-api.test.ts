@@ -23,29 +23,25 @@ const remoteSettings = {
 };
 
 describe("setSaveConversationHistory", () => {
-  it("sends the current unrelated settings back with the toggled flag", async () => {
-    // PUT は displayName・activityPeriodDays を必須とする。省略すると
-    // 「オプトインを切り替えただけで表示名が消えた」になるため、
-    // GET で読んだ値をそのまま送り返す。
-    const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
-      if (init?.method === "PUT") {
-        return new Response(JSON.stringify({ ...remoteSettings, saveConversationHistory: true }), {
+  it("sends only the toggled flag so other fields are not overwritten", async () => {
+    // GET → PUT の全文送り返しだと、読み取りと書き込みの間に別端末が
+    // 変更した項目を古い値で上書きする。省略項目はサーバーが現状維持する。
+    const fetchMock = vi.fn<typeof fetch>(
+      async () =>
+        new Response(JSON.stringify({ ...remoteSettings, saveConversationHistory: true }), {
           status: 200,
-        });
-      }
-      return new Response(JSON.stringify(remoteSettings), { status: 200 });
-    });
+        }),
+    );
 
     const saved = await setSaveConversationHistory(deps(fetchMock), true);
 
     expect(saved.saveConversationHistory).toBe(true);
-    const putCall = fetchMock.mock.calls.find(([, init]) => init?.method === "PUT");
-    expect(putCall?.[0]).toBe("https://api.example.com/v1/user-settings");
-    expect(JSON.parse(String(putCall?.[1]?.body))).toEqual({
-      displayName: "学習者",
-      activityPeriodDays: 30,
-      saveConversationHistory: true,
-    });
+    // 切り替えたい項目だけを送り、GET で先行読み取りはしない。
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("https://api.example.com/v1/user-settings");
+    expect(init?.method).toBe("PUT");
+    expect(JSON.parse(String(init?.body))).toEqual({ saveConversationHistory: true });
   });
 });
 

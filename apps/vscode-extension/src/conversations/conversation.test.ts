@@ -2,7 +2,7 @@ import { expect, test } from "vitest";
 
 import type { CodeContext } from "@gakushu-sochi/domain";
 
-import { buildVscodeConversation } from "./conversation";
+import { buildVscodeConversation, conversationBodyOverLimit } from "./conversation";
 
 const context: CodeContext = {
   code: "const x = 1;",
@@ -84,4 +84,15 @@ test("質問が空白だけの場合は選択テキストからタイトルを�
 
   // messages には入力のまま残し、タイトルだけ代替から取る。
   expect(conversation.title).toBe("const x = 1;");
+});
+
+test("上限を超える本文を指名して返す", () => {
+  const conversation = buildVscodeConversation({ ...base, question: "あ".repeat(4_001) });
+
+  expect(conversationBodyOverLimit(conversation)).toContain("user");
+  expect(conversationBodyOverLimit(conversation)).toContain("4000");
+});
+
+test("上限内の会話は null を返す", () => {
+  expect(conversationBodyOverLimit(buildVscodeConversation(base))).toBeNull();
 });

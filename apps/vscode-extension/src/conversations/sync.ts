@@ -71,6 +71,19 @@ export async function uploadConversation(
       }
       return { ok: false, reason: `HTTP ${response.status}` };
     }
+    // 200 でも保存結果を本文で確かめる。{ saved: false }（新しい会話が既存）
+    // や形の違う応答を「保存できた」と見なすと、履歴が黙って抜ける（RULE-004）。
+    const body: unknown = await response.json();
+    if (typeof body !== "object" || body === null || (body as { saved?: unknown }).saved !== true) {
+      const reason = (body as { reason?: unknown } | null)?.reason;
+      return {
+        ok: false,
+        reason:
+          reason === "newer_exists"
+            ? "同じIDの新しい質問履歴が既にサーバーにあります"
+            : "サーバー応答の形式が不正です",
+      };
+    }
     return { ok: true };
   } catch (error) {
     if (error instanceof Error && error.message === "再ログインが必要です") {
@@ -161,23 +174,17 @@ export async function getRemoteSaveConversationHistory(
 /**
  * `saveConversationHistory` だけを切り替える。
  *
- * PUT は `displayName` と `activityPeriodDays` を必須とするため、先に GET で
- * 現在値を読み、それを送り返す。省略したまま送ると「オプトインを切り替えた
- * だけで表示名が消えた」になる。
+ * PUT は省略項目を現状維持するため、切り替えたい項目だけを送る。
+ * 読んでから全項目を送り返すと、読み取りと書き込みの間に別端末が
+ * 変更した項目（表示名など）を古い値で上書きしてしまう。
  */
 export async function setRemoteSaveConversationHistory(
   enabled: boolean,
   config: ConversationSyncConfig,
 ): Promise<UpdateOptInOutcome> {
-  const current = await requestUserSettings(config, { method: "GET" });
-  if (!current.ok) return { ok: false, reason: current.reason };
   const saved = await requestUserSettings(config, {
     method: "PUT",
-    body: {
-      displayName: current.settings.displayName,
-      activityPeriodDays: current.settings.activityPeriodDays,
-      saveConversationHistory: enabled,
-    },
+    body: { saveConversationHistory: enabled },
   });
   if (!saved.ok) return { ok: false, reason: saved.reason };
   return { ok: true, enabled: saved.settings.saveConversationHistory };

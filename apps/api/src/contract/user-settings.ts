@@ -64,14 +64,15 @@ export function isActivityPeriodDays(value: unknown): value is ActivityPeriodDay
 /**
  * `PUT` が受け取る本文。保存する値だけを持ち、`updatedAt` はサーバーが決める。
  *
- * `saveConversationHistory` だけ省略可能にする。他項目は上書きの対象として
- * 常に入力が必要だが、この項目は「履歴を保存するか」の切り替えだけをしたい
- * 呼び出しが表示名などを持たないため。省略されたときは保存済みの値を維持する
- * （上書きで黙って `false` に戻さない。ルート側が現在値とマージしてから書く）。
+ * 全項目が省略可能で、**省略された項目は保存済みの値を維持する**。
+ * 「1項目だけ直したい」呼び出し（例: 履歴保存フラグの切り替え）が
+ * 現在値を読んで送り返す必要はなく、読み取りと書き込みの間に別端末が
+ * 保存した値を古い値で上書きする競合も起きない。消したい項目は省略ではなく
+ * 明示的に `null`（displayName）を送る。少なくとも1項目は必須。
  */
 export interface UserSettingsInput {
-  displayName: string | null;
-  activityPeriodDays: ActivityPeriodDays;
+  displayName?: string | null;
+  activityPeriodDays?: ActivityPeriodDays;
   saveConversationHistory?: boolean;
 }
 
@@ -99,7 +100,17 @@ export function validateUserSettings(payload: unknown): SettingsValidation {
     saveConversationHistory?: unknown;
   };
 
-  if (displayName !== null && typeof displayName !== "string") {
+  // 全項目省略（=何も変更しない PUT）は拒否する。空の PUT で
+  // 設定行が新規作成される副作用を避けるため、少なくとも1項目を要求する。
+  if (
+    displayName === undefined &&
+    activityPeriodDays === undefined &&
+    saveConversationHistory === undefined
+  ) {
+    return { ok: false, message: "at least one setting must be provided" };
+  }
+
+  if (displayName !== undefined && displayName !== null && typeof displayName !== "string") {
     return { ok: false, message: "displayName must be a string or null" };
   }
   const trimmed = typeof displayName === "string" ? displayName.trim() : null;
@@ -110,7 +121,7 @@ export function validateUserSettings(payload: unknown): SettingsValidation {
     };
   }
 
-  if (!isActivityPeriodDays(activityPeriodDays)) {
+  if (activityPeriodDays !== undefined && !isActivityPeriodDays(activityPeriodDays)) {
     return {
       ok: false,
       message: `activityPeriodDays must be one of ${ACTIVITY_PERIOD_DAYS.join(", ")}`,
@@ -124,8 +135,10 @@ export function validateUserSettings(payload: unknown): SettingsValidation {
   return {
     ok: true,
     value: {
-      displayName: trimmed === null || trimmed.length === 0 ? null : trimmed,
-      activityPeriodDays,
+      ...(displayName === undefined
+        ? {}
+        : { displayName: trimmed === null || trimmed.length === 0 ? null : trimmed }),
+      ...(activityPeriodDays === undefined ? {} : { activityPeriodDays }),
       ...(saveConversationHistory === undefined ? {} : { saveConversationHistory }),
     },
   };

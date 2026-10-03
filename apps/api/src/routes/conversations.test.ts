@@ -150,6 +150,45 @@ test("既存より古い会話は書き換えず newer_exists を返す", async 
   expect((await conversations.getById("user-a", "c1"))?.title).toBeUndefined();
 });
 
+test("書き込み中にオプトインが外れた場合は newer_exists ではなく 403 を返す", async () => {
+  // upsert は SQL 内でもオプトインを検査する（事前判定のあとに別端末が
+  // 保存を無効化しても本文を残さない）。その拒否を newer_exists と
+  // 区別するため、saved:false のとき設定を読み直して 403 に倒す。
+  await optIn();
+  const raceConversations = new (class extends InMemoryConversationRepository {
+    override async upsert(userId: string): Promise<{ saved: boolean }> {
+      // 「書き込みの間に別端末が無効化した」状態を再現する。
+      await settings.put(userId, { saveConversationHistory: false }, NOW);
+      return { saved: false };
+    }
+  })(store);
+  const localApp = new Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>();
+  localApp.use("/v1/*", stubAuth(TOKENS));
+  localApp.route(
+    "/v1",
+    createConversationsRoute(() => ({
+      identity,
+      conversations: raceConversations,
+      settings,
+      audit: new InMemoryAuditLogRepository(store),
+      nowIso: () => NOW,
+      nowMs: () => 1_000,
+    })),
+  );
+
+  const res = await localApp.request(
+    "/v1/conversations/c1",
+    {
+      method: "PUT",
+      headers: { Authorization: "Bearer token-a", "Content-Type": "application/json" },
+      body: JSON.stringify(conversation({ id: "c1" })),
+    },
+    ENV,
+  );
+
+  expect(res.status).toBe(403);
+});
+
 test("パスと本文の ID が一致しないリクエストは 400", async () => {
   await optIn();
   const res = await put("token-a", conversation({ id: "c1" }), "other");

@@ -35,22 +35,17 @@ export async function getUserSettings(deps: AuthedApiDeps): Promise<RemoteUserSe
 }
 
 /**
- * オプトインだけを切り替える。`displayName` や `activityPeriodDays` は
- * PUT が必須項目とするため、先に GET で読んだ現在値をそのまま送り返す。
- * 省略して送ると「切り替えたつもりが他項目まで消えた」になる。
+ * オプトインだけを切り替える。PUT は省略項目を現状維持するため、
+ * 切り替えたい項目だけを送る。読んでから全項目を送り返すと、
+ * 読み取りと書き込みの間に別端末が変更した項目を古い値で上書きする。
  */
 export async function setSaveConversationHistory(
   deps: AuthedApiDeps,
   enabled: boolean,
 ): Promise<RemoteUserSettings> {
-  const current = await getUserSettings(deps);
   const parsed = await authedApiRequest<unknown>(deps, "/user-settings", {
     method: "PUT",
-    body: {
-      displayName: current.displayName,
-      activityPeriodDays: current.activityPeriodDays,
-      saveConversationHistory: enabled,
-    },
+    body: { saveConversationHistory: enabled },
   });
   if (!isRemoteUserSettings(parsed)) {
     throw new ApiRequestError(200, "ユーザー設定の応答の形が不正です。");

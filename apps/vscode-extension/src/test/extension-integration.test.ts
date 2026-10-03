@@ -30,6 +30,9 @@ const {
   showInputBox,
   showQuickPick,
   syncEvent,
+  uploadConversation,
+  getRemoteSaveConversationHistory,
+  setRemoteSaveConversationHistory,
   outputChannel,
 } = vi.hoisted(() => ({
   activeTextEditor: {
@@ -59,6 +62,12 @@ const {
   showInputBox: vi.fn(),
   showQuickPick: vi.fn(),
   syncEvent: vi.fn(),
+  // 履歴の保存経路は API を叩かないよう差し替える。オプトイン確認の
+  // 読み取りは「サーバー側が無効」にしておく（保存自体を試さないテストが
+  // キャッシュ無しで動く既定の状態）。
+  uploadConversation: vi.fn(async () => ({ ok: true }) as const),
+  getRemoteSaveConversationHistory: vi.fn(async () => ({ ok: true, enabled: false }) as const),
+  setRemoteSaveConversationHistory: vi.fn(async () => ({ ok: true, enabled: false }) as const),
   outputChannel: {
     appendLine: vi.fn(),
     show: vi.fn(),
@@ -146,6 +155,12 @@ vi.mock("../learning/store", async (importOriginal) => {
 });
 
 vi.mock("../learning/sync", () => ({ syncEvent, deleteServerLearningData }));
+
+vi.mock("../conversations/sync", () => ({
+  uploadConversation,
+  getRemoteSaveConversationHistory,
+  setRemoteSaveConversationHistory,
+}));
 
 import { activate } from "../extension";
 import { CONSENT_KEY } from "../consent/consent";

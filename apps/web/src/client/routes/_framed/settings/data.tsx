@@ -198,6 +198,7 @@ function DataSettings() {
  * 履歴の詳細画面が持つ。
  */
 function ConversationHistoryCard() {
+  const router = useRouter();
   const submitGuard = useRef(createSubmitGuard());
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string>();
@@ -242,6 +243,9 @@ function ConversationHistoryCard() {
         try {
           setDeletedCount(await deleteAllConversations(fetch));
           setConfirmingDelete(false);
+          // 履歴画面の loader キャッシュも捨てる。消した会話が一覧や詳細へ
+          // 残ったままにしない（RULE-005）。
+          await router.invalidate();
         } catch (value: unknown) {
           if (value instanceof ApiError && value.kind === "session_expired") {
             window.location.href = "/login";
