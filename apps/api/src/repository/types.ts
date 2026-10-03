@@ -11,6 +11,7 @@
  */
 
 import type {
+  ConceptCheck,
   HistoryProviderId,
   LearningEvent,
   LearningEvidence,
@@ -393,4 +394,30 @@ export interface AuditLogRepository {
    * 退会すると users 行と一緒に消える（ON DELETE CASCADE）。
    */
   record(entry: AuditLogEntry): Promise<void>;
+}
+
+/**
+ * 保存した確認問題1組（migrations/0009_concept_checks.sql、Issue #185）。
+ *
+ * **個人データではない。** 生成の入力は Concept の定義だけなので、全利用者で共有する。
+ * そのため `userId` を持たず、退会・学習データの削除・エクスポートの対象に含めない。
+ */
+export interface StoredConceptCheck {
+  check: ConceptCheck & { model: string; generatedAt: string };
+  /** 受理側の規則の版。`checks/cache.ts` の `CHECK_FORMAT_VERSION` と突き合わせる。 */
+  formatVersion: number;
+  /** 生成に使ったプロンプトの SHA-256（16進）。Concept の定義が変われば変わる。 */
+  promptSha256: string;
+}
+
+/**
+ * 確認問題の保存（Issue #185）。1 Concept 1組で、同じ Concept への `put` は上書きする。
+ *
+ * 作り直すかどうかの判定はここでは行わない。読み出した版とハッシュを見て
+ * 呼び出し側（`routes/checks.ts`）が決める。
+ */
+export interface ConceptCheckRepository {
+  /** 保存済みの1組。無ければ `null`。保存内容が読めなければ例外にする（RULE-004）。 */
+  get(conceptId: string): Promise<StoredConceptCheck | null>;
+  put(stored: StoredConceptCheck): Promise<void>;
 }

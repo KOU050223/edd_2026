@@ -27,13 +27,12 @@ describe("API Worker", () => {
   });
 
   /**
-   * 確認問題の生成（#184）は、保存して使い回すキャッシュ（#185）とセットでのみ有効になる。
-   *
-   * 歯止めの本体は「保存済みがあれば生成しない」であり、それを実装するのは #185 である。
-   * 生成だけを先に公開すると、`ai_usage` の回数上限の外で毎回生成が走る経路が開く。
-   * **#185 でここへ繋ぐときは、キャッシュの確認と同時に行い、このテストを書き換える。**
+   * 確認問題の生成（#184）は、保存して使い回すキャッシュ（#185）とセットで公開する。
+   * キャッシュの振る舞いは `routes/checks.test.ts` が固定している。
    */
-  test("確認問題の生成はキャッシュ（#185）とセットになるまで公開しない", () => {
-    expect(app.routes.map((route) => route.path)).not.toContain("/v1/checks:generate");
+  test("確認問題の生成をキャッシュとセットで公開する", () => {
+    expect(app.routes).toContainEqual(
+      expect.objectContaining({ method: "POST", path: "/v1/checks:generate" }),
+    );
   });
 });

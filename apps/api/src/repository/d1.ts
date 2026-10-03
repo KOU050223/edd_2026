@@ -22,6 +22,7 @@ import {
   type UserSettings,
   type UserSettingsInput,
 } from "../contract/user-settings.js";
+import { parseConceptCheck } from "../checks/response.js";
 import { ACCOUNT_DELETION_TOMBSTONE_TTL_MS } from "./types.js";
 import type { ImportSessionView } from "../contract/history-import.js";
 import type {
@@ -31,12 +32,14 @@ import type {
   AreaCompletionRepository,
   AuditLogEntry,
   AuditLogRepository,
+  ConceptCheckRepository,
   IdentityRepository,
   ImportSessionRepository,
   LearningEventRepository,
   LearningEvidenceRepository,
   MasteryOverride,
   MasteryOverrideRepository,
+  StoredConceptCheck,
   StoredEventInput,
   StoredImportSessionInput,
   UserSettingsRepository,
@@ -657,6 +660,72 @@ export class D1AreaCompletionRepository implements AreaCompletionRepository {
           .bind(userId, language, completedAt),
       ),
     );
+  }
+}
+
+/**
+ * 確認問題の保存（migrations/0009_concept_checks.sql、Issue #185）。
+ *
+ * 表は `users(id)` を参照しない。退会（`DELETE FROM users`）でも消えない。
+ */
+export class D1ConceptCheckRepository implements ConceptCheckRepository {
+  constructor(private readonly db: D1Database) {}
+
+  async get(conceptId: string): Promise<StoredConceptCheck | null> {
+    const row = await this.db
+      .prepare(
+        `SELECT format_version, prompt_sha256, body, model, generated_at
+         FROM concept_checks
+         WHERE concept_id = ?`,
+      )
+      .bind(conceptId)
+      .first<{
+        format_version: number;
+        prompt_sha256: string;
+        body: string;
+        model: string;
+        generated_at: string;
+      }>();
+    if (row === null) return null;
+
+    // 書き込み時に検証した形しか入らないはずなので、読めなければ DB の破損である。
+    // 生成し直して黙って上書きすると、壊れた原因を追えなくなる（RULE-004）。
+    const parsed = parseConceptCheck(row.body, conceptId);
+    if (!parsed.ok) {
+      throw new Error(
+        `concept_checks contains invalid data (concept_id=${conceptId}, reason=${parsed.reason})`,
+      );
+    }
+    if (Number.isNaN(Date.parse(row.generated_at))) {
+      throw new Error(`concept_checks.generated_at is invalid (concept_id=${conceptId})`);
+    }
+    return {
+      check: { ...parsed.check, model: row.model, generatedAt: row.generated_at },
+      formatVersion: row.format_version,
+      promptSha256: row.prompt_sha256,
+    };
+  }
+
+  async put(stored: StoredConceptCheck): Promise<void> {
+    const { conceptId, overview, practice, model, generatedAt } = stored.check;
+    // 本文は生成時の JSON と同じ形で持つ。読み出しで `parseConceptCheck` をそのまま通せる。
+    const body = JSON.stringify({ conceptId, overview, practice });
+    // 同時に2人が生成させた場合は後着が勝つ。どちらも検証済みの1組なので、
+    // どちらが残っても出題として成立する。
+    await this.db
+      .prepare(
+        `INSERT INTO concept_checks (
+           concept_id, format_version, prompt_sha256, body, model, generated_at
+         ) VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT (concept_id) DO UPDATE SET
+           format_version = excluded.format_version,
+           prompt_sha256 = excluded.prompt_sha256,
+           body = excluded.body,
+           model = excluded.model,
+           generated_at = excluded.generated_at`,
+      )
+      .bind(conceptId, stored.formatVersion, stored.promptSha256, body, model, generatedAt)
+      .run();
   }
 }
 

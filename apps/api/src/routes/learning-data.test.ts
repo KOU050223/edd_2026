@@ -8,9 +8,11 @@ import {
 } from "@gakushu-sochi/domain";
 import type { AuthVariables } from "../auth/middleware.js";
 import { stubAuth } from "../auth/test-auth.js";
+import { storedCheck } from "../checks/test-check.js";
 import {
   createInMemoryRepositoryStore,
   InMemoryAuditLogRepository,
+  InMemoryConceptCheckRepository,
   InMemoryIdentityRepository,
   InMemoryImportSessionRepository,
   InMemoryLearningEventRepository,
@@ -445,4 +447,20 @@ test.each([
   expect(res.status).toBe(401);
   expect(await events.countByUser("user-a")).toBe(1);
   expect(store.auditLog).toEqual([]);
+});
+
+test("保存した確認問題は学習データの削除で消えず、エクスポートにも含まれない", async () => {
+  // concept_checks は全利用者共有の問題であり、個人データではない（#185）。
+  const checks = new InMemoryConceptCheckRepository(store);
+  await checks.put(storedCheck("go.defer"));
+  await seed("user-a", [event({ id: "e1" })]);
+
+  const exported = await request("/v1/learning-events:export", "token-a");
+  expect(exported.status).toBe(200);
+  expect(await exported.text()).not.toContain("go.defer の概要問題");
+
+  const deleted = await request("/v1/learning-events", "token-a", "DELETE");
+  expect(deleted.status).toBe(200);
+  expect(await events.countByUser("user-a")).toBe(0);
+  await expect(checks.get("go.defer")).resolves.toEqual(storedCheck("go.defer"));
 });
