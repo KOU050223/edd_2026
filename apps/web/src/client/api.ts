@@ -175,6 +175,16 @@ export function postJson<T>(path: string, fetcher: typeof fetch = fetch, timeout
   return sendJson<T>("POST", path, undefined, fetcher, timeoutMs);
 }
 
+/** 本文を持つ POST を送る。学習イベントの同期（確認問題の正誤）に使う。 */
+export function postJsonBody<T>(
+  path: string,
+  payload: unknown,
+  fetcher: typeof fetch = fetch,
+  timeoutMs = 10_000,
+): Promise<T> {
+  return sendJson("POST", path, payload, fetcher, timeoutMs);
+}
+
 /** 学習データの削除など、本文を持たない DELETE を送る。 */
 export function deleteJson<T>(
   path: string,

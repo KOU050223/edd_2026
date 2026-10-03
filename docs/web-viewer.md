@@ -25,6 +25,7 @@ docs/architecture.md「Phase 1: 最初の学習ループを完成させる」の
 | 除外するもの                     | 理由                                                                                                         |
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------ |
 | 学習イベントの書き込み・編集     | 学習イベントは追記のみで、正本は Extension / Desktop からの同期である（architecture.md「オフラインと競合」） |
+| 学習イベントの書き込み（例外）   | **確認問題の正誤だけは Web から記録する**（Web/05 #77）。後述「確認問題の正誤の記録先」                      |
 | 学習イベントの生ログ表示         | data-privacy.md が生ログの送出を禁じている。集計済みの読み取りモデルだけを返す                               |
 | ユーザー設定画面（起票時の除外） | 起票時は設定の書き込み API が無かったため除外した。後に Web/06（#123）で `/settings` として実装済み（後述）  |
 | GraphQL / 汎用 BFF               | apps/web/AGENTS.md「汎用GraphQLや巨大なBFFを先行して導入しない」                                             |
@@ -103,6 +104,7 @@ Worker が先頭の `/api` を取り除いて `API_ORIGIN` へ転送する。
 | --------------------------------------- | --------------------- | -------------------------------------------- |
 | `GET /api/v1/learning-profile`          | セッション検証 → 中継 | `${API_ORIGIN}/v1/learning-profile`          |
 | `GET /api/v1/learning-activity?days=30` | セッション検証 → 中継 | `${API_ORIGIN}/v1/learning-activity?days=30` |
+| `POST /api/v1/learning-events:sync`     | 同意確認 → 中継       | `${API_ORIGIN}/v1/learning-events:sync`      |
 
 ブラウザから直接 `/v1/...` を叩かない。`run_worker_first` が `/api/*` しか
 Worker へ回さないため、`/v1/...` は Asset Worker が処理し、
@@ -303,6 +305,33 @@ SELECT strftime('%Y-%m-%d', occurred_at_ms / 1000, 'unixepoch') AS date,
 この移行の対象外である。そちらが重くなった場合はスナップショットの
 キャッシュを検討することになるが、docs/concepts.md の通り
 イベントログが正本であることは変えない。
+
+### 確認問題の正誤の記録先（Web/05 #77）
+
+確認問題（Web/02 #43）の正誤は、**D1 の学習イベントとして** `POST /v1/learning-events:sync` へ記録する。
+**Cloudflare KV は使わない。** KV に置くのはセッションと同意の記録だけである
+（data-privacy.md「クライアント側に残るコピー」）。習熟度の正本は API Server が
+学習イベントから導出するもので、Web が正誤を確定・保存すると `GET /v1/learning-profile`
+が返す習熟度と画面が食い違う。
+
+既存の同期契約で足りるため、Web 専用の書き込み口は新設していない。
+実装は `apps/web/src/client/check-result.ts`。
+
+- 2問とも正解なら `check_passed`、どちらか不正解なら `check_failed` を1件送る。
+  `origin` は `"web"`、`conceptIds` は出題した Concept の1件だけ。
+- 送るのは Concept と正誤だけで、**選んだ選択肢（回答内容）は送らない。**
+  契約が `strictObject` なので、余計なキーを足せば受理されずに拒否が返る。
+- エンベロープの `clientId` は固定値 `"web"`。Web はブラウザに識別子も残さないため、
+  ブラウザごとに採番しない。同じ利用者の Web からの記録は1端末としてまとまる。
+- 書き込みなので Worker の同意確認（#174）を通る。同意が無ければ `consent_required`。
+- **送信に失敗しても回答操作（解説の表示・次の問題への移動）は止めない。**
+  失敗は利用者へ伝え、同じイベント（同じ `id`）のまま再送できるようにする。
+  再送は `duplicate` として受理されるので二重に数えられない。
+  `rejected` は送信側の不具合であり、再送しても直らないためログへ理由を残す。
+
+`confirmed` の条件は `solvedIndependentlyCount + checkPassedCount >= 2`
+（packages/domain/src/mastery.ts）なので、自力解決1回と確認問題の正解1回で `confirmed` に届く。
+`apps/api/src/routes/learning-profile.test.ts` が同期から導出までを通して確かめている。
 
 ### 追加しないもの
 

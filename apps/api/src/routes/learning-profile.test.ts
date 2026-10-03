@@ -4,12 +4,14 @@ import type { LearningEvent } from "@gakushu-sochi/domain";
 import { type AuthVariables } from "../auth/middleware.js";
 import { TEST_TOKEN, stubAuth } from "../auth/test-auth.js";
 import {
+  InMemoryIdentityRepository,
   InMemoryImportSessionRepository,
   InMemoryLearningEventRepository,
   InMemoryLearningEvidenceRepository,
   createInMemoryRepositoryStore,
   type InMemoryRepositoryStore,
 } from "../repository/memory.js";
+import { createLearningEventsRoute } from "./learning-events.js";
 import { createLearningProfileRoute } from "./learning-profile.js";
 import type { LearningProfileResponse } from "../contract/learning-profile.js";
 
@@ -33,6 +35,12 @@ beforeEach(() => {
   app.route(
     "/v1",
     createLearningProfileRoute(() => ({ events, evidence, nowIso: () => NOW })),
+  );
+  // 書き込み口（同期）を通した結果が読み取りに反映されることを確かめるために載せる。
+  const identity = new InMemoryIdentityRepository();
+  app.route(
+    "/v1",
+    createLearningEventsRoute(() => ({ identity, events, now: () => 1000 })),
   );
 });
 
@@ -198,4 +206,48 @@ test("外部履歴由来の Familiarity を concepts とは別に返す", async 
     },
   ]);
   expect(body.familiarity[0]?.label).toBeTypeOf("string");
+});
+
+test("Web から同期した確認問題の正解が習熟度に反映され、自力解決1回と合わせて confirmed になる", async () => {
+  // Issue #77。confirmed の条件は `solvedIndependentlyCount + checkPassedCount >= 2`
+  // （packages/domain/src/mastery.ts）。確認問題は confirmed へ至る経路の一本である。
+  await seed("user-a", [{ id: "solved-1", type: "solved_independently" }]);
+  const before = (await (await getProfile()).json()) as LearningProfileResponse;
+  expect(before.concepts[0]?.status).not.toBe("confirmed");
+
+  // apps/web/src/client/check-result.ts が送るのと同じ形。
+  const sync = await app.request(
+    "/v1/learning-events:sync",
+    {
+      method: "POST",
+      headers: { Authorization: `Bearer ${TEST_TOKEN}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        clientId: "web",
+        events: [
+          {
+            id: "check-1",
+            occurredAt: "2026-09-05T00:00:05.000Z",
+            type: "check_passed",
+            origin: "web",
+            conceptIds: ["go.defer"],
+          },
+        ],
+      }),
+    },
+    ENV as unknown as CloudflareBindings,
+  );
+  expect(sync.status).toBe(200);
+
+  const after = (await (await getProfile()).json()) as LearningProfileResponse;
+  expect(after.concepts[0]?.evidence.checkPassedCount).toBe(1);
+  expect(after.concepts[0]?.status).toBe("confirmed");
+});
+
+test("確認問題の不正解は check_failed として習熟度の根拠に載る", async () => {
+  await seed("user-a", [{ id: "check-1", type: "check_failed" }]);
+
+  const body = (await (await getProfile()).json()) as LearningProfileResponse;
+
+  expect(body.concepts[0]?.evidence.recentTypes).toEqual(["check_failed"]);
+  expect(body.concepts[0]?.evidence.checkPassedCount).toBe(0);
 });
