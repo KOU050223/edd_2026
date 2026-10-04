@@ -1,6 +1,10 @@
 import { expect, test } from "vitest";
 import * as v from "valibot";
-import { learningEventSchema, syncRequestSchema } from "./learning-event.js";
+import {
+  learningEventSchema,
+  MAX_OBJECTIVE_IDS_PER_EVENT,
+  syncRequestSchema,
+} from "./learning-event.js";
 
 const validEvent = {
   id: "event-1",
@@ -33,6 +37,23 @@ test("項目 ID の形でない objectiveIds は拒否する", () => {
     const result = v.safeParse(learningEventSchema, { ...validEvent, objectiveIds });
     expect(result.success, JSON.stringify(objectiveIds)).toBe(false);
   }
+});
+
+test("objectiveIds は上限件数まで受理し、超えたら拒否する", () => {
+  const ids = (count: number) => Array.from({ length: count }, (_, i) => `go.defer:item_${i}`);
+
+  expect(
+    v.safeParse(learningEventSchema, {
+      ...validEvent,
+      objectiveIds: ids(MAX_OBJECTIVE_IDS_PER_EVENT),
+    }).success,
+  ).toBe(true);
+  expect(
+    v.safeParse(learningEventSchema, {
+      ...validEvent,
+      objectiveIds: ids(MAX_OBJECTIVE_IDS_PER_EVENT + 1),
+    }).success,
+  ).toBe(false);
 });
 
 test("項目一覧に無い項目 ID でも、形が正しければ受理する", () => {

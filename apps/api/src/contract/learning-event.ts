@@ -59,6 +59,15 @@ assertNever<Exclude<(typeof EVENT_ORIGINS)[number], LearningEvent["origin"]>>();
 /** ID の最大長。際限なく長い ID を DB の主キーへ入れないための上限。 */
 const MAX_ID_LENGTH = 128;
 
+/**
+ * 1件のイベントに載せられる項目 ID の最大件数。
+ *
+ * 1回の質問が触れる項目はせいぜい数件で、Concept あたりの項目も 4〜5 件である。
+ * 上限が無いと、巨大な配列がそのまま D1 に保存され、読み出しと習熟度の導出のたびに
+ * コストを払い続ける。
+ */
+export const MAX_OBJECTIVE_IDS_PER_EVENT = 64;
+
 /** 1リクエストで受け付けるイベントの最大件数。 */
 export const MAX_EVENTS_PER_SYNC = 500;
 
@@ -115,7 +124,9 @@ export const learningEventSchema = v.strictObject({
   language: v.optional(v.pipe(v.string(), v.maxLength(64))),
   diagnosticCode: v.optional(v.pipe(v.string(), v.maxLength(128))),
   sessionId: v.optional(v.pipe(v.string(), v.maxLength(MAX_ID_LENGTH))),
-  objectiveIds: v.optional(v.array(objectiveIdSchema)),
+  objectiveIds: v.optional(
+    v.pipe(v.array(objectiveIdSchema), v.maxLength(MAX_OBJECTIVE_IDS_PER_EVENT)),
+  ),
 });
 
 /**
