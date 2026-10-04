@@ -10,6 +10,7 @@ import {
   historySourceLabel,
   layoutTrees,
   linkConcepts,
+  objectiveProgress,
   summarizeTree,
 } from "./learning-map.js";
 import { applyOverrides } from "./overrides.js";
@@ -306,4 +307,27 @@ test("1 件でも確認済みでない Concept が残っていればコンプリ
   );
 
   expect(summarizeTree(trees[0]!, concepts)).toMatchObject({ confirmed: 3, complete: false });
+});
+
+const DEFER_OBJECTIVES = [
+  { id: "go.defer:timing", conceptId: "go.defer", label: "実行タイミング" },
+  { id: "go.defer:lifo", conceptId: "go.defer", label: "実行順" },
+];
+
+test("項目ごとの理解度を一覧の順に並べ、応答に無い項目は 0 にする", () => {
+  expect(
+    objectiveProgress(DEFER_OBJECTIVES, {
+      status: "learning",
+      objectives: { "go.defer:lifo": 0.5 },
+    }),
+  ).toEqual([
+    { id: "go.defer:timing", label: "実行タイミング", value: 0 },
+    { id: "go.defer:lifo", label: "実行順", value: 0.5 },
+  ]);
+});
+
+test("未観測の Concept の項目は割合を出さない（0% にしない）", () => {
+  expect(
+    objectiveProgress(DEFER_OBJECTIVES, { status: "unobserved" }).map((item) => item.value),
+  ).toEqual([null, null]);
 });

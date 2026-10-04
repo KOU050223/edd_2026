@@ -55,7 +55,12 @@ export function applyOverrides(
     if (!override)
       return {
         ...concept,
-        score: clampScoreToStatus(concept.score, concept.status),
+        // 「理解すること」を持つ Concept の score は項目の平均そのもので、範囲へ丸めない
+        // （docs/concepts.md「項目ごとの理解度」）。丸めると項目ごとの割合と食い違う。
+        score:
+          concept.objectives === undefined
+            ? clampScoreToStatus(concept.score, concept.status)
+            : concept.score,
         manual: false,
         derived,
       };

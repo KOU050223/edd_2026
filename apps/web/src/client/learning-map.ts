@@ -4,7 +4,7 @@
  * React の描画から切り離しておき、単体テストで検証できるようにする（apps/web/AGENTS.md）。
  */
 
-import type { Concept as ConceptDefinition } from "@gakushu-sochi/domain";
+import type { Concept as ConceptDefinition, LearningObjective } from "@gakushu-sochi/domain";
 import type { OverlaidConcept } from "./overrides.js";
 import { summarizeConcepts, type Concept, type Familiarity } from "./profile.js";
 
@@ -35,6 +35,32 @@ export function completeConcepts(
       },
   );
   return [...completed, ...observed.filter((concept) => !known.has(concept.conceptId))];
+}
+
+/** 「理解すること」の1項目と、その理解度。 */
+export interface ObjectiveProgress {
+  id: string;
+  label: string;
+  /** 0〜1。その Concept がまだ観測されていなければ `null`（0% ではない）。 */
+  value: number | null;
+}
+
+/**
+ * 「理解すること」の一覧へ、API が返した項目ごとの理解度を並べる（設計/04 #223）。
+ *
+ * 並びと表示名は一覧に従う。応答に値の無い項目は、Concept が観測済みなら 0
+ * （項目が増えた直後など、まだ進みが無い）、未観測なら `null` とする。
+ * 未観測を 0% と見せない（docs/concepts.md）。
+ */
+export function objectiveProgress(
+  objectives: readonly LearningObjective[],
+  concept: Pick<Concept, "status" | "objectives">,
+): ObjectiveProgress[] {
+  return objectives.map(({ id, label }) => ({
+    id,
+    label,
+    value: concept.status === "unobserved" ? null : (concept.objectives?.[id] ?? 0),
+  }));
 }
 
 /**

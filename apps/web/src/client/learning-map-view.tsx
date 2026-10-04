@@ -27,6 +27,7 @@ import {
   describeFamiliarity,
   layoutTrees,
   linkConcepts,
+  objectiveProgress,
   type ConceptLinks,
   type MapTree,
 } from "./learning-map.js";
@@ -463,7 +464,11 @@ export function ConceptDetail({
   panel: RefObject<HTMLElement | null>;
 }) {
   const summary = CONCEPT_BY_ID.get(concept.conceptId)?.summary;
-  const objectives = OBJECTIVES_BY_CONCEPT.get(concept.conceptId) ?? [];
+  // 手動修正は status だけを変えるので、項目の割合は自動算出のまま見せる。
+  const objectives = objectiveProgress(OBJECTIVES_BY_CONCEPT.get(concept.conceptId) ?? [], {
+    status: concept.derived.status,
+    objectives: concept.objectives,
+  });
   return (
     <aside className="detail" aria-label="Concept の詳細" ref={panel}>
       <h2>{nameOf(concept)}</h2>
@@ -475,7 +480,10 @@ export function ConceptDetail({
           </h3>
           <ul>
             {objectives.map((objective) => (
-              <li key={objective.id}>{objective.label}</li>
+              <li key={objective.id}>
+                <span>{objective.label}</span>
+                <span className="detail-objective-value">{percent(objective.value)}</span>
+              </li>
             ))}
           </ul>
         </section>
