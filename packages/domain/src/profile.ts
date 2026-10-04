@@ -123,6 +123,14 @@ export interface LearningEvent {
    * 1つの質問が複数 Concept にまたがることがあるため配列で持つ。
    */
   conceptIds: ConceptId[];
+  /**
+   * 触れた「理解すること」（`LearningObjective`）の ID。例: `go.defer:lifo_order`。
+   *
+   * 項目ごとの理解度はこの ID を持つイベントからだけ導出する（設計/04 #223）。
+   * 持たないイベント（これまでのイベントや、AI が項目を特定できなかった質問）は
+   * 記録としては残るが、項目の理解度は動かさない。`conceptIds` に無い Concept の項目は無視する。
+   */
+  objectiveIds?: string[];
   /** 対象コードの言語識別子。例: `go` */
   language?: string;
   /** 関連する Diagnostic のコード。同じエラーの再発判定に使う。 */
@@ -199,13 +207,22 @@ export interface ConceptMastery {
   /**
    * 0.0〜1.0 の習熟度スコア。
    *
-   * status と矛盾しないよう {@link MASTERY_SCORE_RANGE} の範囲へクランプする。
+   * 「理解すること」を持つ Concept では {@link objectives} の平均そのもので、クランプしない
+   * （確認済みの条件が平均 0.9 以上を含むので、確認済みなら必ず 0.9 以上になる）。
+   * 持たない Concept では、status と矛盾しないよう {@link MASTERY_SCORE_RANGE} の範囲へクランプする。
    * status が `unobserved` の場合は 0 だが、これは「習熟度が低い」ではなく
    * 「判断材料がない」を意味するため、そのまま 0% として表示してはならない。
    * 更新ルールは docs/concepts.md に定義する。
    */
   score: number;
   evidence: MasteryEvidence;
+  /**
+   * 「理解すること」の項目 ID をキーにした、項目ごとの理解度（0.0〜1.0）。
+   *
+   * その時点の項目一覧の全項目を持ち、進みの無い項目は 0 で持つ（設計/04 #223）。
+   * 項目を持たない Concept ではキー自体が無い。
+   */
+  objectives?: Record<string, number>;
 }
 
 // ---------------------------------------------------------------------------

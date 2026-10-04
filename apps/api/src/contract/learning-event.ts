@@ -10,7 +10,12 @@
  */
 
 import * as v from "valibot";
-import { CONCEPT_ID_PATTERN, isIsoDateTime, type LearningEvent } from "@gakushu-sochi/domain";
+import {
+  CONCEPT_ID_PATTERN,
+  isIsoDateTime,
+  LEARNING_OBJECTIVE_ID_PATTERN,
+  type LearningEvent,
+} from "@gakushu-sochi/domain";
 
 /**
  * 受け入れるイベント種別。packages/domain の `LearningEventType` と一致させる。
@@ -54,6 +59,15 @@ assertNever<Exclude<(typeof EVENT_ORIGINS)[number], LearningEvent["origin"]>>();
 /** ID の最大長。際限なく長い ID を DB の主キーへ入れないための上限。 */
 const MAX_ID_LENGTH = 128;
 
+/**
+ * 1件のイベントに載せられる項目 ID の最大件数。
+ *
+ * 1回の質問が触れる項目はせいぜい数件で、Concept あたりの項目も 4〜5 件である。
+ * 上限が無いと、巨大な配列がそのまま D1 に保存され、読み出しと習熟度の導出のたびに
+ * コストを払い続ける。
+ */
+export const MAX_OBJECTIVE_IDS_PER_EVENT = 64;
+
 /** 1リクエストで受け付けるイベントの最大件数。 */
 export const MAX_EVENTS_PER_SYNC = 500;
 
@@ -80,6 +94,19 @@ const conceptIdSchema = v.pipe(
 );
 
 /**
+ * 「理解すること」の項目 ID（設計/04 #223）。形だけを検査し、項目一覧に載っているかは見ない。
+ *
+ * 一覧は AI の生成で入れ替わりうる（#224）。送信時点で正しかった ID を、届いた時点の一覧に
+ * 無いという理由で拒否すると、オフラインキューのイベントが失われる。一覧に無い ID は
+ * 導出のときに無視される。
+ */
+const objectiveIdSchema = v.pipe(
+  v.string(),
+  v.maxLength(MAX_ID_LENGTH),
+  v.regex(LEARNING_OBJECTIVE_ID_PATTERN, "objectiveId must match <prefix>.<concept>:<key>"),
+);
+
+/**
  * 1件の学習イベント。
  *
  * `v.object` ではなく `v.strictObject` を使う。未知のキーを黙って捨てるのではなく
@@ -97,6 +124,9 @@ export const learningEventSchema = v.strictObject({
   language: v.optional(v.pipe(v.string(), v.maxLength(64))),
   diagnosticCode: v.optional(v.pipe(v.string(), v.maxLength(128))),
   sessionId: v.optional(v.pipe(v.string(), v.maxLength(MAX_ID_LENGTH))),
+  objectiveIds: v.optional(
+    v.pipe(v.array(objectiveIdSchema), v.maxLength(MAX_OBJECTIVE_IDS_PER_EVENT)),
+  ),
 });
 
 /**

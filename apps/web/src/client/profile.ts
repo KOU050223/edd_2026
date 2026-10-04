@@ -10,6 +10,11 @@ export interface Concept {
     /** 直近で観測したイベントの時刻。ISO 8601。現在地の判定に使う。 */
     lastObservedAt?: string;
   };
+  /**
+   * 「理解すること」の項目 ID をキーにした、項目ごとの理解度（0〜1、設計/04 #223）。
+   * 項目を持つ Concept だけに載り、`score` はこの平均になる。
+   */
+  objectives?: Record<string, number>;
 }
 
 /**

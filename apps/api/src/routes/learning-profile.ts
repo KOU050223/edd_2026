@@ -9,6 +9,7 @@ import {
   CONCEPT_BY_ID,
   deriveFamiliarityFromEvidence,
   deriveMasteryFromEvents,
+  MOCK_LEARNING_OBJECTIVES,
 } from "@gakushu-sochi/domain";
 import {
   compareConceptView,
@@ -42,7 +43,9 @@ export function createLearningProfileRoute(resolve: ProfileDepsResolver) {
     const events = await deps.events.listByUser(userId);
 
     // 習熟度は保存値ではなくログから導出する。docs/concepts.md「サーバー側の導出」。
-    const mastery = deriveMasteryFromEvents(events);
+    // 「理解すること」の一覧は、生成の口ができるまでモックを使う（設計/05 #224）。
+    // 読むたびにその時点の一覧で計算し直すので、項目の増減もここで反映される（#223）。
+    const mastery = deriveMasteryFromEvents(events, MOCK_LEARNING_OBJECTIVES);
 
     const concepts: ConceptMasteryView[] = Object.values(mastery)
       // 観測のある Concept だけが値を持つ。既知の Concept 全件を 0 で埋めない。

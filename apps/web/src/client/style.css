@@ -406,6 +406,16 @@ a.area-card.complete {
   font-size: 14px;
   line-height: 1.6;
 }
+.detail-objectives li {
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+.detail-objective-value {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+  color: #64748b;
+}
 .detail-status {
   display: flex;
   gap: 6px;

@@ -3,6 +3,7 @@ import { Hono } from "hono";
 import {
   LEARNER_PROFILE_VERSION,
   deriveMasteryFromEvents,
+  MOCK_LEARNING_OBJECTIVES,
   type LearnerProfile,
   type LearningEvent,
 } from "@gakushu-sochi/domain";
@@ -130,7 +131,7 @@ test("エクスポートは自分のイベントを LearnerProfile の形で返�
   expect(body).toEqual({
     version: LEARNER_PROFILE_VERSION,
     updatedAt: NOW,
-    mastery: deriveMasteryFromEvents(mine),
+    mastery: deriveMasteryFromEvents(mine, MOCK_LEARNING_OBJECTIVES),
     events: mine,
   });
 });

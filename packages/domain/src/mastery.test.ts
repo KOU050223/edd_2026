@@ -8,6 +8,7 @@
 
 import { expect, test } from "vitest";
 import { applyEvent, deriveMasteryFromEvents, isIsoDateTime } from "./mastery.js";
+import type { LearningObjective } from "./learning-objective.js";
 import { createEmptyProfile, type LearningEvent } from "./profile.js";
 
 function event(
@@ -218,4 +219,295 @@ test("重複を除いても複数のConceptは別々に畳み込む", () => {
 
   expect(mastery["go.defer"]?.evidence.solvedIndependentlyCount).toBe(1);
   expect(mastery["go.slice"]?.evidence.solvedIndependentlyCount).toBe(1);
+});
+
+// ---------------------------------------------------------------------------
+// 「理解すること」の項目単位の理解度（設計/04 #223）
+// ---------------------------------------------------------------------------
+
+const DEFER_OBJECTIVES: LearningObjective[] = [
+  { id: "go.defer:timing", conceptId: "go.defer", label: "実行タイミング" },
+  { id: "go.defer:args", conceptId: "go.defer", label: "引数の評価" },
+  { id: "go.defer:lifo", conceptId: "go.defer", label: "実行順" },
+  { id: "go.defer:result", conceptId: "go.defer", label: "戻り値の書き換え" },
+];
+
+const SLICE_OBJECTIVES: LearningObjective[] = [
+  { id: "go.slice:len_cap", conceptId: "go.slice", label: "len と cap" },
+  { id: "go.slice:append", conceptId: "go.slice", label: "append" },
+];
+
+let sequence = 0;
+
+/** 項目 ID を載せたイベント。Concept は項目 ID から取る。発生時刻は呼んだ順に進める。 */
+function objectiveEvent(type: LearningEvent["type"], objectiveIds: string[]): LearningEvent {
+  sequence += 1;
+  const conceptIds = [...new Set(objectiveIds.map((id) => id.split(":")[0]!))];
+  return {
+    ...event(
+      `o${String(sequence).padStart(4, "0")}`,
+      new Date(sequence * 1000).toISOString(),
+      type,
+      conceptIds,
+    ),
+    objectiveIds,
+  };
+}
+
+function deriveDefer(events: LearningEvent[], objectives = DEFER_OBJECTIVES) {
+  return deriveMasteryFromEvents(events, objectives)["go.defer"];
+}
+
+test("質問だけで、触れた項目が上がる（確認問題を受けなくてよい）", () => {
+  const mastery = deriveDefer([objectiveEvent("question_asked", ["go.defer:timing"])]);
+
+  expect(mastery?.objectives).toEqual({
+    "go.defer:timing": 0.05,
+    "go.defer:args": 0,
+    "go.defer:lifo": 0,
+    "go.defer:result": 0,
+  });
+  expect(mastery?.score).toBeCloseTo(0.0125);
+  expect(mastery?.status).toBe("learning");
+});
+
+test("質問で上がるのは各項目 0.5 まで", () => {
+  const events = Array.from({ length: 20 }, () =>
+    objectiveEvent("question_asked", ["go.defer:timing"]),
+  );
+
+  expect(deriveDefer(events)?.objectives?.["go.defer:timing"]).toBe(0.5);
+});
+
+test("質問を全項目に重ねても確認済みにはならない", () => {
+  const events = Array.from({ length: 20 }, () =>
+    objectiveEvent(
+      "question_asked",
+      DEFER_OBJECTIVES.map((o) => o.id),
+    ),
+  );
+  const mastery = deriveDefer(events);
+
+  expect(mastery?.score).toBe(0.5);
+  expect(mastery?.status).toBe("learning");
+});
+
+test("自力解決は +0.5 で 2 回で最大、確認問題の全問正解は最大にする", () => {
+  const mastery = deriveDefer([
+    objectiveEvent("solved_independently", ["go.defer:timing"]),
+    objectiveEvent("solved_independently", ["go.defer:args"]),
+    objectiveEvent("solved_independently", ["go.defer:args"]),
+    objectiveEvent("solved_independently", ["go.defer:args"]),
+    objectiveEvent("question_asked", ["go.defer:lifo"]),
+    objectiveEvent("check_passed", ["go.defer:lifo"]),
+  ]);
+
+  expect(mastery?.objectives).toMatchObject({
+    "go.defer:timing": 0.5,
+    "go.defer:args": 1,
+    "go.defer:lifo": 1,
+  });
+});
+
+test("質問は 0.5 を超えた項目を下げない", () => {
+  const mastery = deriveDefer([
+    objectiveEvent("check_passed", ["go.defer:timing"]),
+    objectiveEvent("question_asked", ["go.defer:timing"]),
+  ]);
+
+  expect(mastery?.objectives?.["go.defer:timing"]).toBe(1);
+});
+
+test("確認問題の不正解は狙った項目だけ −0.25 し、0 を下回らない", () => {
+  const mastery = deriveDefer([
+    objectiveEvent("check_passed", ["go.defer:timing"]),
+    objectiveEvent("check_passed", ["go.defer:args"]),
+    objectiveEvent("check_failed", ["go.defer:timing"]),
+    objectiveEvent("check_failed", ["go.defer:lifo"]),
+  ]);
+
+  expect(mastery?.objectives).toEqual({
+    "go.defer:timing": 0.75,
+    "go.defer:args": 1,
+    "go.defer:lifo": 0,
+    "go.defer:result": 0,
+  });
+  expect(mastery?.score).toBeCloseTo(0.4375);
+});
+
+test("同じエラーの再発は記録だけ残し、項目を下げない", () => {
+  const mastery = deriveDefer([
+    objectiveEvent("check_passed", ["go.defer:timing"]),
+    objectiveEvent("error_recurred", ["go.defer:timing"]),
+  ]);
+
+  expect(mastery?.objectives?.["go.defer:timing"]).toBe(1);
+  expect(mastery?.evidence.errorRecurrenceCount).toBe(1);
+});
+
+test("平均 0.9 以上かつ全項目に進みがあれば確認済み", () => {
+  // 質問 2 回（0.1）→ 自力解決（+0.5）で 0.6。1, 1, 1, 0.6 の平均がちょうど 0.9 になる。
+  // 0.05 刻みを浮動小数で足すと 0.9 をわずかに下回りうるので、境界そのものを確かめる。
+  const threePassed = objectiveEvent("check_passed", [
+    "go.defer:timing",
+    "go.defer:args",
+    "go.defer:lifo",
+  ]);
+  const toPointSix = [
+    objectiveEvent("question_asked", ["go.defer:result"]),
+    objectiveEvent("question_asked", ["go.defer:result"]),
+    objectiveEvent("solved_independently", ["go.defer:result"]),
+  ];
+
+  const atThreshold = deriveDefer([threePassed, ...toPointSix]);
+  expect(atThreshold?.objectives?.["go.defer:result"]).toBe(0.6);
+  expect(atThreshold?.score).toBe(0.9);
+  expect(atThreshold?.status).toBe("confirmed");
+
+  // 質問を 1 回減らすと 0.55 で、平均 0.8875 は届かない。
+  const below = deriveDefer([threePassed, ...toPointSix.slice(1)]);
+  expect(below?.score).toBeCloseTo(0.8875);
+  expect(below?.status).toBe("learning");
+});
+
+test("平均が 0.9 に届いても、進みの無い項目が残れば確認済みにならない", () => {
+  const ten: LearningObjective[] = Array.from({ length: 10 }, (_, i) => ({
+    id: `go.defer:item_${i}`,
+    conceptId: "go.defer",
+    label: `項目${i}`,
+  }));
+  const mastery = deriveDefer(
+    [
+      objectiveEvent(
+        "check_passed",
+        ten.slice(0, 9).map((o) => o.id),
+      ),
+    ],
+    ten,
+  );
+
+  expect(mastery?.score).toBe(0.9);
+  expect(mastery?.status).toBe("learning");
+});
+
+test("1つのイベントが複数のノードの項目にまたがってもそれぞれに反映する", () => {
+  const mastery = deriveMasteryFromEvents(
+    [objectiveEvent("solved_independently", ["go.defer:timing", "go.slice:append"])],
+    [...DEFER_OBJECTIVES, ...SLICE_OBJECTIVES],
+  );
+
+  expect(mastery["go.defer"]?.objectives?.["go.defer:timing"]).toBe(0.5);
+  expect(mastery["go.slice"]?.objectives).toEqual({
+    "go.slice:len_cap": 0,
+    "go.slice:append": 0.5,
+  });
+  expect(mastery["go.slice"]?.score).toBe(0.25);
+});
+
+test("項目の値はその Concept の上限（1 / 項目数）を超えない", () => {
+  const events = Array.from({ length: 5 }, () =>
+    objectiveEvent("solved_independently", ["go.defer:timing"]),
+  );
+  const mastery = deriveDefer(events);
+
+  // 1 項目だけを何度上げても、ノードへの寄与は 1 / 4 で止まる。
+  expect(mastery?.objectives?.["go.defer:timing"]).toBe(1);
+  expect(mastery?.score).toBe(0.25);
+});
+
+test("項目の情報を持たないイベントは項目を動かさない（記録は残す）", () => {
+  const mastery = deriveDefer([
+    event("legacy1", "2026-09-05T00:00:01.000Z", "solved_independently"),
+    event("legacy2", "2026-09-05T00:00:02.000Z", "check_passed"),
+    event("legacy3", "2026-09-05T00:00:03.000Z", "check_passed"),
+  ]);
+
+  // 従来の回数の判定なら確認済みになるイベント列でも、項目のある Concept では学習中に戻る。
+  expect(mastery?.status).toBe("learning");
+  expect(mastery?.score).toBe(0);
+  expect(mastery?.evidence.checkPassedCount).toBe(2);
+});
+
+test("項目がまだ無い Concept は従来の回数の判定のまま", () => {
+  const events = [
+    event("e1", "2026-09-05T00:00:01.000Z", "solved_independently", ["ts.type_narrowing"]),
+    event("e2", "2026-09-05T00:00:02.000Z", "check_passed", ["ts.type_narrowing"]),
+  ];
+  const mastery = deriveMasteryFromEvents(events, DEFER_OBJECTIVES)["ts.type_narrowing"];
+
+  expect(mastery?.status).toBe("confirmed");
+  expect(mastery?.score).toBe(0.7);
+  expect(mastery?.objectives).toBeUndefined();
+});
+
+test("conceptIds に無い Concept の項目 ID は無視する", () => {
+  const e: LearningEvent = {
+    ...event("e1", "2026-09-05T00:00:01.000Z", "check_passed", ["go.slice"]),
+    objectiveIds: ["go.defer:timing"],
+  };
+  const mastery = deriveMasteryFromEvents([e], [...DEFER_OBJECTIVES, ...SLICE_OBJECTIVES]);
+
+  expect(mastery["go.defer"]).toBeUndefined();
+  expect(mastery["go.slice"]?.score).toBe(0);
+});
+
+test("項目が増えたら 0 から始まり、確認済みだったノードは学習中に戻る", () => {
+  const events = [
+    objectiveEvent(
+      "check_passed",
+      DEFER_OBJECTIVES.map((o) => o.id),
+    ),
+  ];
+  expect(deriveDefer(events)?.status).toBe("confirmed");
+
+  const added: LearningObjective = {
+    id: "go.defer:recover",
+    conceptId: "go.defer",
+    label: "recover",
+  };
+  const mastery = deriveDefer(events, [...DEFER_OBJECTIVES, added]);
+
+  expect(mastery?.objectives?.["go.defer:recover"]).toBe(0);
+  expect(mastery?.score).toBe(0.8);
+  expect(mastery?.status).toBe("learning");
+});
+
+test("項目が減ったら、残った項目だけで計算し直し、消えた項目の進みは補填しない", () => {
+  const events = [
+    objectiveEvent("check_passed", ["go.defer:timing"]),
+    objectiveEvent("solved_independently", ["go.defer:args"]),
+  ];
+  const mastery = deriveDefer(events, DEFER_OBJECTIVES.slice(1));
+
+  expect(mastery?.objectives).toEqual({
+    "go.defer:args": 0.5,
+    "go.defer:lifo": 0,
+    "go.defer:result": 0,
+  });
+  expect(mastery?.score).toBeCloseTo(0.1667, 4);
+});
+
+test("applyEvent も同じ規則で項目を積み上げ、一覧の変化に追従する", () => {
+  let profile = createEmptyProfile("2026-09-05T00:00:00.000Z");
+  const events = [
+    objectiveEvent("solved_independently", ["go.defer:timing"]),
+    objectiveEvent("question_asked", ["go.defer:args"]),
+  ];
+  for (const e of events) {
+    profile = applyEvent(profile, e, DEFER_OBJECTIVES);
+  }
+
+  expect(profile.mastery["go.defer"]).toEqual(deriveDefer(events));
+
+  // 一覧から消えた項目は、次のイベントを畳み込むときに落ちる。
+  profile = applyEvent(
+    profile,
+    objectiveEvent("question_asked", ["go.defer:lifo"]),
+    DEFER_OBJECTIVES.slice(1),
+  );
+  expect(Object.keys(profile.mastery["go.defer"]?.objectives ?? {})).toEqual([
+    "go.defer:args",
+    "go.defer:lifo",
+    "go.defer:result",
+  ]);
 });

@@ -20,6 +20,12 @@ export interface LearningObjective {
 
 const LEARNING_OBJECTIVE_KEY_PATTERN = /^[a-z0-9_]+$/;
 
+/**
+ * {@link LearningObjective} の ID の形。`<Concept ID>:<小文字英数とアンダースコア>`。
+ * 学習イベントの `objectiveIds` を HTTP 境界で検査するのに使う。
+ */
+export const LEARNING_OBJECTIVE_ID_PATTERN = /^[a-z0-9]+\.[a-z0-9_]+:[a-z0-9_]+$/;
+
 /** 項目 ID が `<Concept ID>:<識別子>` の形で、指定した Concept に属するか。 */
 export function isLearningObjectiveIdOf(value: string, conceptId: ConceptId): boolean {
   const prefix = `${conceptId}:`;

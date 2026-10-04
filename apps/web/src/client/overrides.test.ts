@@ -74,3 +74,27 @@ test("手動で変えた理解度は集計にも反映される", () => {
 
   expect(summarizeConcepts(overlaid)).toEqual({ confirmed: 1, learning: 1, unobserved: 0 });
 });
+
+test("「理解すること」を持つ Concept の割合は項目の平均のまま見せ、範囲へ丸めない", () => {
+  // 0 の項目が残って学習中でも、平均は 0.69 を超えうる（docs/concepts.md「項目ごとの理解度」）。
+  const withObjectives: Concept = {
+    conceptId: "go.defer",
+    status: "learning",
+    score: 0.8,
+    evidence: { solvedIndependentlyCount: 0 },
+    objectives: {
+      "go.defer:a": 1,
+      "go.defer:b": 1,
+      "go.defer:c": 1,
+      "go.defer:d": 1,
+      "go.defer:e": 0,
+    },
+  };
+
+  expect(applyOverrides([withObjectives], {})[0]?.score).toBe(0.8);
+  // 手動で status を変えたときは、従来どおりその status の範囲へ収める。
+  const manual = applyOverrides([withObjectives], {
+    "go.defer": { status: "unobserved", updatedAt: "2026-09-21T00:00:00.000Z" },
+  });
+  expect(manual[0]?.score).toBeNull();
+});
