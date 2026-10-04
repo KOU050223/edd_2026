@@ -54,6 +54,7 @@ async function seed(userId: string, list: Partial<LearningEvent>[]) {
         type: partial.type ?? "solved_independently",
         origin: "vscode",
         conceptIds: partial.conceptIds ?? ["go.defer"],
+        ...(partial.objectiveIds === undefined ? {} : { objectiveIds: partial.objectiveIds }),
       },
       clientId: "client-1",
       receivedAtMs: 0,
@@ -90,16 +91,37 @@ test("観測のあるConceptだけを返し、既知のConceptを0で埋めな�
   expect(body.concepts[0]?.conceptId).toBe("go.defer");
 });
 
-test("習熟度をログから導出する", async () => {
+test("習熟度をログから導出する（「理解すること」がまだ無い Concept は回数で判定する）", async () => {
   await seed("user-a", [
-    { id: "e1", type: "solved_independently" },
-    { id: "e2", type: "solved_independently" },
+    { id: "e1", type: "solved_independently", conceptIds: ["git.commit"] },
+    { id: "e2", type: "solved_independently", conceptIds: ["git.commit"] },
   ]);
 
   const body = (await (await getProfile()).json()) as LearningProfileResponse;
 
   expect(body.concepts[0]?.status).toBe("confirmed");
   expect(body.concepts[0]?.evidence.solvedIndependentlyCount).toBe(2);
+  expect(body.concepts[0]?.objectives).toBeUndefined();
+});
+
+test("「理解すること」がある Concept は項目ごとの理解度を返す（#223）", async () => {
+  await seed("user-a", [
+    { id: "e1", type: "solved_independently", objectiveIds: ["go.defer:execution_timing"] },
+    { id: "e2", type: "question_asked", objectiveIds: ["go.defer:lifo_order"] },
+    // 項目の情報を持たないイベントは項目を動かさない。
+    { id: "e3", type: "check_passed" },
+  ]);
+
+  const body = (await (await getProfile()).json()) as LearningProfileResponse;
+  const defer = body.concepts.find((item) => item.conceptId === "go.defer");
+
+  expect(defer?.objectives?.["go.defer:execution_timing"]).toBe(0.5);
+  expect(defer?.objectives?.["go.defer:lifo_order"]).toBe(0.05);
+  expect(Object.values(defer?.objectives ?? {}).filter((value) => value === 0).length).toBe(
+    Object.keys(defer?.objectives ?? {}).length - 2,
+  );
+  expect(defer?.status).toBe("learning");
+  expect(defer?.evidence.checkPassedCount).toBe(1);
 });
 
 test("イベントの生ログは返さない", async () => {
@@ -209,7 +231,10 @@ test("外部履歴由来の Familiarity を concepts とは別に返す", async 
 });
 
 /** apps/web/src/client/check-result.ts が送るのと同じ形で、確認問題の結果を1件同期する。 */
-async function syncCheckFromWeb(type: "check_passed" | "check_failed") {
+async function syncCheckFromWeb(
+  type: "check_passed" | "check_failed",
+  extra: { conceptIds?: string[]; objectiveIds?: string[] } = {},
+) {
   const sync = await app.request(
     "/v1/learning-events:sync",
     {
@@ -224,6 +249,7 @@ async function syncCheckFromWeb(type: "check_passed" | "check_failed") {
             type,
             origin: "web",
             conceptIds: ["go.defer"],
+            ...extra,
           },
         ],
       }),
@@ -237,13 +263,15 @@ async function syncCheckFromWeb(type: "check_passed" | "check_failed") {
 }
 
 test("Web から同期した確認問題の正解が習熟度に反映され、自力解決1回と合わせて confirmed になる", async () => {
-  // Issue #77。confirmed の条件は `solvedIndependentlyCount + checkPassedCount >= 2`
-  // （packages/domain/src/mastery.ts）。確認問題は confirmed へ至る経路の一本である。
-  await seed("user-a", [{ id: "solved-1", type: "solved_independently" }]);
+  // Issue #77。「理解すること」がまだ無い Concept の confirmed の条件は
+  // `solvedIndependentlyCount + checkPassedCount >= 2`（packages/domain/src/mastery.ts）。
+  await seed("user-a", [
+    { id: "solved-1", type: "solved_independently", conceptIds: ["git.commit"] },
+  ]);
   const before = (await (await getProfile()).json()) as LearningProfileResponse;
   expect(before.concepts[0]?.status).not.toBe("confirmed");
 
-  await syncCheckFromWeb("check_passed");
+  await syncCheckFromWeb("check_passed", { conceptIds: ["git.commit"] });
 
   const after = (await (await getProfile()).json()) as LearningProfileResponse;
   expect(after.concepts[0]?.evidence.checkPassedCount).toBe(1);
@@ -258,4 +286,12 @@ test("Web から同期した確認問題の不正解は check_failed として�
   expect(body.concepts[0]?.evidence.recentTypes).toEqual(["check_failed"]);
   expect(body.concepts[0]?.evidence.checkFailedCount).toBe(1);
   expect(body.concepts[0]?.evidence.checkPassedCount).toBe(0);
+});
+
+test("同期で届いた項目 ID が保存され、狙った項目を最大にする（#223）", async () => {
+  await syncCheckFromWeb("check_passed", { objectiveIds: ["go.defer:lifo_order"] });
+
+  const body = (await (await getProfile()).json()) as LearningProfileResponse;
+
+  expect(body.concepts[0]?.objectives?.["go.defer:lifo_order"]).toBe(1);
 });

@@ -14,7 +14,12 @@
  */
 
 import { Hono } from "hono";
-import { deriveMasteryFromEvents, type Concept, type MasteryStatus } from "@gakushu-sochi/domain";
+import {
+  deriveMasteryFromEvents,
+  MOCK_LEARNING_OBJECTIVES,
+  type Concept,
+  type MasteryStatus,
+} from "@gakushu-sochi/domain";
 import {
   AREA_COMPLETIONS_RESPONSE_VERSION,
   type AreaCompletionsResponse,
@@ -81,7 +86,9 @@ export function createAreaCompletionsRoute(resolve: AreaCompletionDepsResolver) 
     // 習熟度は保存値ではなくイベントから導出し、その上へ手動上書きを重ねる。
     // 画面（apps/web の applyOverrides）と同じ重ね順にしないと、判定が食い違う。
     const statusOf = new Map<string, MasteryStatus>();
-    for (const mastery of Object.values(deriveMasteryFromEvents(events))) {
+    for (const mastery of Object.values(
+      deriveMasteryFromEvents(events, MOCK_LEARNING_OBJECTIVES),
+    )) {
       if (mastery !== undefined) statusOf.set(mastery.conceptId, mastery.status);
     }
     for (const [conceptId, override] of Object.entries(overrides)) {

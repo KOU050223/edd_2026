@@ -61,6 +61,7 @@ interface EventRow {
   language: string | null;
   diagnostic_code: string | null;
   session_id: string | null;
+  objective_ids: string | null;
 }
 
 async function hasActiveDeletion(db: D1Database, userId: string, nowMs: number): Promise<boolean> {
@@ -78,20 +79,11 @@ async function hasActiveDeletion(db: D1Database, userId: string, nowMs: number):
 /**
  * D1 の行を `LearningEvent` へ戻す。
  *
- * `concept_ids` のパースに失敗したら例外にする。空配列へ丸めると、
- * そのイベントが習熟度の導出から黙って消え、Learning Map が理由の分からない形で
- * 欠ける。書き込み時に JSON 化しているので通常は起きず、起きたなら DB の破損である。
+ * JSON 配列の列のパースに失敗したら例外にする（{@link parseStringArrayColumn}）。
+ * 書き込み時に JSON 化しているので通常は起きず、起きたなら DB の破損である。
  */
 function toLearningEvent(row: EventRow): LearningEvent {
-  let conceptIds: unknown;
-  try {
-    conceptIds = JSON.parse(row.concept_ids);
-  } catch (cause) {
-    throw new Error(`learning_events.concept_ids is not valid JSON (id=${row.id})`, { cause });
-  }
-  if (!Array.isArray(conceptIds) || conceptIds.some((id) => typeof id !== "string")) {
-    throw new Error(`learning_events.concept_ids is not string[] (id=${row.id})`);
-  }
+  const conceptIds = parseStringArrayColumn("concept_ids", row.concept_ids, row.id);
 
   return {
     id: row.id,
@@ -103,7 +95,31 @@ function toLearningEvent(row: EventRow): LearningEvent {
     ...(row.language === null ? {} : { language: row.language }),
     ...(row.diagnostic_code === null ? {} : { diagnosticCode: row.diagnostic_code }),
     ...(row.session_id === null ? {} : { sessionId: row.session_id }),
+    // NULL は「項目の情報を持たないイベント」（0011 より前のイベントを含む）。
+    // 空配列とは区別して戻す。
+    ...(row.objective_ids === null
+      ? {}
+      : { objectiveIds: parseStringArrayColumn("objective_ids", row.objective_ids, row.id) }),
   };
+}
+
+/**
+ * learning_events の JSON 配列の列を `string[]` へ戻す。
+ *
+ * パースに失敗したら例外にする。空配列へ丸めると、そのイベントが習熟度の導出から
+ * 黙って消え、Learning Map が理由の分からない形で欠ける。
+ */
+function parseStringArrayColumn(column: string, value: string, eventId: string): string[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch (cause) {
+    throw new Error(`learning_events.${column} is not valid JSON (id=${eventId})`, { cause });
+  }
+  if (!Array.isArray(parsed) || parsed.some((item) => typeof item !== "string")) {
+    throw new Error(`learning_events.${column} is not string[] (id=${eventId})`);
+  }
+  return parsed as string[];
 }
 
 export class D1LearningEventRepository implements LearningEventRepository {
@@ -122,9 +138,9 @@ export class D1LearningEventRepository implements LearningEventRepository {
     const statement = this.db.prepare(
       `INSERT INTO learning_events (
          id, user_id, occurred_at, occurred_at_ms, type, origin, concept_ids,
-         language, diagnostic_code, session_id, client_id, received_at_ms
+         language, diagnostic_code, session_id, objective_ids, client_id, received_at_ms
        )
-       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
        WHERE NOT EXISTS (
          SELECT 1 FROM account_deletions
          WHERE user_id = ? AND started_at_ms > ?
@@ -151,6 +167,7 @@ export class D1LearningEventRepository implements LearningEventRepository {
         event.language ?? null,
         event.diagnosticCode ?? null,
         event.sessionId ?? null,
+        event.objectiveIds === undefined ? null : JSON.stringify(event.objectiveIds),
         clientId,
         receivedAtMs,
         userId,
@@ -209,7 +226,8 @@ export class D1LearningEventRepository implements LearningEventRepository {
   async listByUser(userId: string): Promise<LearningEvent[]> {
     const { results } = await this.db
       .prepare(
-        `SELECT id, occurred_at, type, origin, concept_ids, language, diagnostic_code, session_id
+        `SELECT id, occurred_at, type, origin, concept_ids, language, diagnostic_code, session_id,
+                objective_ids
          FROM learning_events
          WHERE user_id = ?
          ORDER BY occurred_at_ms ASC, id ASC`,

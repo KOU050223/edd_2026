@@ -22,6 +22,24 @@ test("任意項目を含むイベントを受理する", () => {
     language: "go",
     diagnosticCode: "S1000",
     sessionId: "session-1",
+    objectiveIds: ["go.defer:lifo_order"],
+  });
+
+  expect(result.success).toBe(true);
+});
+
+test("項目 ID の形でない objectiveIds は拒否する", () => {
+  for (const objectiveIds of [["go.defer"], ["lifo_order"], ["go.defer:LIFO"], "go.defer:lifo"]) {
+    const result = v.safeParse(learningEventSchema, { ...validEvent, objectiveIds });
+    expect(result.success, JSON.stringify(objectiveIds)).toBe(false);
+  }
+});
+
+test("項目一覧に無い項目 ID でも、形が正しければ受理する", () => {
+  // 一覧は生成で入れ替わりうる。届いた時点の一覧で拒否するとオフラインキューのイベントが失われる。
+  const result = v.safeParse(learningEventSchema, {
+    ...validEvent,
+    objectiveIds: ["go.defer:no_such_objective"],
   });
 
   expect(result.success).toBe(true);

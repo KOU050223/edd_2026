@@ -15,6 +15,7 @@ import { Hono } from "hono";
 import {
   LEARNER_PROFILE_VERSION,
   deriveMasteryFromEvents,
+  MOCK_LEARNING_OBJECTIVES,
   type LearnerProfile,
 } from "@gakushu-sochi/domain";
 import type { AuthVariables } from "../auth/middleware.js";
@@ -97,7 +98,7 @@ export function createLearningDataRoute(resolve: LearningDataDepsResolver) {
     const body: LearnerProfile = {
       version: LEARNER_PROFILE_VERSION,
       updatedAt: deps.nowIso(),
-      mastery: deriveMasteryFromEvents(events),
+      mastery: deriveMasteryFromEvents(events, MOCK_LEARNING_OBJECTIVES),
       events,
     };
     await deps.audit.record({

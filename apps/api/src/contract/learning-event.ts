@@ -10,7 +10,12 @@
  */
 
 import * as v from "valibot";
-import { CONCEPT_ID_PATTERN, isIsoDateTime, type LearningEvent } from "@gakushu-sochi/domain";
+import {
+  CONCEPT_ID_PATTERN,
+  isIsoDateTime,
+  LEARNING_OBJECTIVE_ID_PATTERN,
+  type LearningEvent,
+} from "@gakushu-sochi/domain";
 
 /**
  * 受け入れるイベント種別。packages/domain の `LearningEventType` と一致させる。
@@ -80,6 +85,19 @@ const conceptIdSchema = v.pipe(
 );
 
 /**
+ * 「理解すること」の項目 ID（設計/04 #223）。形だけを検査し、項目一覧に載っているかは見ない。
+ *
+ * 一覧は AI の生成で入れ替わりうる（#224）。送信時点で正しかった ID を、届いた時点の一覧に
+ * 無いという理由で拒否すると、オフラインキューのイベントが失われる。一覧に無い ID は
+ * 導出のときに無視される。
+ */
+const objectiveIdSchema = v.pipe(
+  v.string(),
+  v.maxLength(MAX_ID_LENGTH),
+  v.regex(LEARNING_OBJECTIVE_ID_PATTERN, "objectiveId must match <prefix>.<concept>:<key>"),
+);
+
+/**
  * 1件の学習イベント。
  *
  * `v.object` ではなく `v.strictObject` を使う。未知のキーを黙って捨てるのではなく
@@ -97,6 +115,7 @@ export const learningEventSchema = v.strictObject({
   language: v.optional(v.pipe(v.string(), v.maxLength(64))),
   diagnosticCode: v.optional(v.pipe(v.string(), v.maxLength(128))),
   sessionId: v.optional(v.pipe(v.string(), v.maxLength(MAX_ID_LENGTH))),
+  objectiveIds: v.optional(v.array(objectiveIdSchema)),
 });
 
 /**
