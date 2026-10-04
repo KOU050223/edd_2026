@@ -3,7 +3,12 @@
  * 共有するロジック。描画に依存しない判断は `learning-map.ts` 側へ寄せる。
  */
 
-import { CONCEPTS, type Concept as DomainConcept } from "@gakushu-sochi/domain";
+import {
+  CONCEPTS,
+  MOCK_LEARNING_OBJECTIVES,
+  type Concept as DomainConcept,
+  type LearningObjective,
+} from "@gakushu-sochi/domain";
 import { useNavigate, useRouter } from "@tanstack/react-router";
 import { useEffect, useRef, useState, type RefObject } from "react";
 import {
@@ -138,6 +143,14 @@ export const AREAS = conceptAreas(TREES);
 export const CONCEPT_BY_ID: ReadonlyMap<string, DomainConcept> = new Map(
   CONCEPTS.map((concept) => [concept.id, concept]),
 );
+// 「理解すること」（#224）。生成の口ができるまでは Go だけのモックを表示する。
+export const OBJECTIVES_BY_CONCEPT: ReadonlyMap<string, readonly LearningObjective[]> = (() => {
+  const byConcept = new Map<string, LearningObjective[]>();
+  for (const objective of MOCK_LEARNING_OBJECTIVES) {
+    byConcept.set(objective.conceptId, [...(byConcept.get(objective.conceptId) ?? []), objective]);
+  }
+  return byConcept;
+})();
 
 // 応答は観測済みの Concept だけなので、定義の全件と突き合わせて未観測を補う。
 // 手動上書きは補ったあとに重ねる。未観測の Concept も手動で確認済みにできる。
@@ -450,10 +463,23 @@ export function ConceptDetail({
   panel: RefObject<HTMLElement | null>;
 }) {
   const summary = CONCEPT_BY_ID.get(concept.conceptId)?.summary;
+  const objectives = OBJECTIVES_BY_CONCEPT.get(concept.conceptId) ?? [];
   return (
     <aside className="detail" aria-label="Concept の詳細" ref={panel}>
       <h2>{nameOf(concept)}</h2>
       {summary && <p className="detail-summary">{summary}</p>}
+      {objectives.length > 0 && (
+        <section className="detail-objectives" aria-label="理解すること">
+          <h3>
+            理解すること <span className="muted">（仮データ）</span>
+          </h3>
+          <ul>
+            {objectives.map((objective) => (
+              <li key={objective.id}>{objective.label}</li>
+            ))}
+          </ul>
+        </section>
+      )}
       <p className="detail-status">
         {isCurrent && <em className="badge">現在地</em>}
         <span className={`status ${concept.status}`}>{statusLabel[concept.status]}</span>
