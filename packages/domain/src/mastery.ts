@@ -17,6 +17,7 @@
  * 設計の帰結である。差異はクライアントが同期後にサーバーの Profile を取り込んで解消する。
  */
 
+import type { LearningObjective } from "./learning-objective.js";
 import {
   MASTERY_SCORE_RANGE,
   type ConceptId,
@@ -43,6 +44,32 @@ const SCORE_DELTA: Record<LearningEventType, number> = {
   check_passed: 0.2,
   check_failed: -0.15,
 };
+
+/** 質問だけで上がる、項目1つあたりの理解度の上限。docs/concepts.md 参照。 */
+const QUESTION_OBJECTIVE_CAP = 0.5;
+
+/**
+ * イベント種別ごとの、触れた「理解すること」の項目1つへの影響（設計/04 #223）。
+ * docs/concepts.md の表と一致させること。Record にしている理由は {@link SCORE_DELTA} と同じ。
+ *
+ * 質問は上げるだけで下げない。下げるのは確認問題の不正解だけで、
+ * 同じエラーの再発（`error_recurred`）は evidence に記録するだけで項目の値は動かさない。
+ */
+const OBJECTIVE_UPDATE: Record<LearningEventType, (value: number) => number> = {
+  question_asked: (value) =>
+    value >= QUESTION_OBJECTIVE_CAP ? value : Math.min(value + 0.05, QUESTION_OBJECTIVE_CAP),
+  answer_viewed: (value) => value,
+  solved_independently: (value) => Math.min(value + 0.5, 1),
+  error_recurred: (value) => value,
+  check_passed: () => 1,
+  check_failed: (value) => Math.max(value - 0.25, 0),
+};
+
+/**
+ * 項目の平均がこれ以上（0.01 単位。90 は 0.9）で、かつ全項目に進みがあれば確認済み。
+ * docs/concepts.md 参照。浮動小数を掛けて作らないよう、最初から整数で持つ。
+ */
+const OBJECTIVE_CONFIRMED_AVERAGE_HUNDREDTHS = 90;
 
 /** recentTypes に保持する直近イベントの上限件数。docs/concepts.md 参照。 */
 const RECENT_TYPES_LIMIT = 5;
@@ -104,16 +131,51 @@ function incrementEvidenceCount(
 }
 
 /**
+ * 項目の値を 0.01 単位へ丸める。
+ *
+ * 係数は 0.05 刻みだが、浮動小数で足し続けると 0.15000000000000002 のような値になり、
+ * 確認済みの閾値（平均 0.9）をわずかに下回って判定が揺れる。
+ */
+function roundObjectiveValue(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+/**
+ * 項目ごとの値から、その Concept の status と score を導く（設計/04 #223）。
+ *
+ * score は項目の平均。確認済みは「平均が 0.9 以上」かつ
+ * 「値が 0 の項目が無い」。閾値だけだと、項目の多い Concept で1項目まったく触れて
+ * いなくても届くため、2つを組み合わせる。比較は 0.01 単位の整数で行い、浮動小数の誤差を持ち込まない。
+ */
+function deriveFromObjectives(values: Record<string, number>): {
+  status: MasteryStatus;
+  score: number;
+} {
+  const hundredths = Object.values(values).map((value) => Math.round(value * 100));
+  const total = hundredths.reduce((sum, value) => sum + value, 0);
+  const confirmed =
+    total >= OBJECTIVE_CONFIRMED_AVERAGE_HUNDREDTHS * hundredths.length &&
+    hundredths.every((value) => value > 0);
+  return { status: confirmed ? "confirmed" : "learning", score: total / (100 * hundredths.length) };
+}
+
+/**
  * 1件のイベントを、ある Concept の習熟度へ畳み込む唯一の規則。
  *
  * {@link applyEvent} と {@link deriveMasteryFromEvents} の双方がこれを呼ぶ。
  * 係数や判定順序をここ以外に複製すると、クライアントとサーバーで習熟度の意味が
- * ずれる。docs/concepts.md の通り、status を先に判定してから score をクランプする。
+ * ずれる。
+ *
+ * `conceptObjectives`（この Concept の「理解すること」の一覧）が空なら、回数による
+ * 従来の判定を使う。docs/concepts.md の通り、status を先に判定してから score をクランプする。
+ * 空でなければ、項目ごとの値を更新し、その平均と全項目の進みで判定する（設計/04 #223）。
+ * 項目の値は毎回この一覧に合わせ直すので、消えた項目の値は捨てられ、増えた項目は 0 から始まる。
  */
 export function foldEventIntoMastery(
   conceptId: ConceptId,
   mastery: ConceptMastery | undefined,
   event: LearningEvent,
+  conceptObjectives: readonly LearningObjective[] = [],
 ): ConceptMastery {
   const previousEvidence = mastery?.evidence ?? EMPTY_EVIDENCE;
   const evidence: MasteryEvidence = {
@@ -122,10 +184,34 @@ export function foldEventIntoMastery(
     lastObservedAt: event.occurredAt,
   };
 
-  const status = deriveStatus(evidence);
-  const score = clampScore((mastery?.score ?? 0) + SCORE_DELTA[event.type], status);
+  if (conceptObjectives.length === 0) {
+    const status = deriveStatus(evidence);
+    const score = clampScore((mastery?.score ?? 0) + SCORE_DELTA[event.type], status);
+    return { conceptId, status, score, evidence };
+  }
 
-  return { conceptId, status, score, evidence };
+  const previous = mastery?.objectives ?? {};
+  const touched = new Set(event.objectiveIds ?? []);
+  const objectives: Record<string, number> = {};
+  for (const { id } of conceptObjectives) {
+    const before = previous[id] ?? 0;
+    objectives[id] = touched.has(id)
+      ? roundObjectiveValue(OBJECTIVE_UPDATE[event.type](before))
+      : before;
+  }
+
+  return { conceptId, ...deriveFromObjectives(objectives), evidence, objectives };
+}
+
+/** 「理解すること」の一覧を Concept ごとにまとめる。 */
+function groupObjectivesByConcept(
+  objectives: readonly LearningObjective[],
+): Map<ConceptId, LearningObjective[]> {
+  const byConcept = new Map<ConceptId, LearningObjective[]>();
+  for (const objective of objectives) {
+    byConcept.set(objective.conceptId, [...(byConcept.get(objective.conceptId) ?? []), objective]);
+  }
+  return byConcept;
 }
 
 /**
@@ -134,13 +220,25 @@ export function foldEventIntoMastery(
  *
  * `event.conceptIds` が空の場合は events への追記のみ行い、mastery は変えない
  * （AIがConceptを特定できなかった質問も、記録自体は残す）。
+ *
+ * @param objectives その時点の「理解すること」の一覧。{@link foldEventIntoMastery} を参照。
  */
-export function applyEvent(profile: LearnerProfile, event: LearningEvent): LearnerProfile {
+export function applyEvent(
+  profile: LearnerProfile,
+  event: LearningEvent,
+  objectives: readonly LearningObjective[] = [],
+): LearnerProfile {
   const events = [...profile.events, event].slice(-EVENT_HISTORY_LIMIT);
 
+  const objectivesByConcept = groupObjectivesByConcept(objectives);
   const mastery = { ...profile.mastery };
   for (const conceptId of uniqueConceptIds(event)) {
-    mastery[conceptId] = foldEventIntoMastery(conceptId, mastery[conceptId], event);
+    mastery[conceptId] = foldEventIntoMastery(
+      conceptId,
+      mastery[conceptId],
+      event,
+      objectivesByConcept.get(conceptId),
+    );
   }
 
   return { ...profile, updatedAt: event.occurredAt, mastery, events };
@@ -171,6 +269,8 @@ function uniqueConceptIds(event: LearningEvent): Iterable<ConceptId> {
  * 前提に設計する」に対応する。
  *
  * @param events 任意の順序でよい。この関数は引数を書き換えない。
+ * @param objectives その時点の「理解すること」の一覧。項目の増減は、この一覧で
+ *   導出し直すことで反映される（設計/04 #223）。{@link foldEventIntoMastery} を参照。
  * @returns Concept ID をキーにした習熟度。イベントが1件も無い Concept は
  *   キー自体が存在しない。`unobserved` を値として持たせると「未観測」と
  *   「観測した結果スコアが0」を UI が区別できなくなるため、
@@ -178,8 +278,10 @@ function uniqueConceptIds(event: LearningEvent): Iterable<ConceptId> {
  */
 export function deriveMasteryFromEvents(
   events: readonly LearningEvent[],
+  objectives: readonly LearningObjective[] = [],
 ): Record<ConceptId, ConceptMastery | undefined> {
   const mastery: Record<ConceptId, ConceptMastery | undefined> = {};
+  const objectivesByConcept = groupObjectivesByConcept(objectives);
 
   // 並べ替える前に全件の時刻を検証する。sort は要素が1件だと比較関数を呼ばないため、
   // compareEventOrder の中の検査だけに頼ると、イベントが1件のときに壊れた occurredAt が
@@ -189,7 +291,12 @@ export function deriveMasteryFromEvents(
 
   for (const { event } of ordered) {
     for (const conceptId of uniqueConceptIds(event)) {
-      mastery[conceptId] = foldEventIntoMastery(conceptId, mastery[conceptId], event);
+      mastery[conceptId] = foldEventIntoMastery(
+        conceptId,
+        mastery[conceptId],
+        event,
+        objectivesByConcept.get(conceptId),
+      );
     }
   }
 

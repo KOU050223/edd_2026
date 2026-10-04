@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import { CONCEPTS } from "./concepts.generated.js";
-import { isLearningObjectiveIdOf } from "./learning-objective.js";
+import { isLearningObjectiveIdOf, LEARNING_OBJECTIVE_ID_PATTERN } from "./learning-objective.js";
 import { MOCK_LEARNING_OBJECTIVES } from "./learning-objectives.mock.js";
 
 const GO_CONCEPT_IDS = CONCEPTS.filter((concept) => concept.language === "go").map(
@@ -22,6 +22,7 @@ test("項目 ID は一意で、所属する Concept の ID で始まる", () => 
   expect(new Set(ids).size).toBe(ids.length);
   for (const objective of MOCK_LEARNING_OBJECTIVES) {
     expect(isLearningObjectiveIdOf(objective.id, objective.conceptId), objective.id).toBe(true);
+    expect(LEARNING_OBJECTIVE_ID_PATTERN.test(objective.id), objective.id).toBe(true);
     expect(objective.label.trim(), objective.id).not.toBe("");
   }
 });
