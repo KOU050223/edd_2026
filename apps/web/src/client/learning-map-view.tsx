@@ -3,7 +3,7 @@
  * 共有するロジック。描画に依存しない判断は `learning-map.ts` 側へ寄せる。
  */
 
-import { CONCEPTS } from "@gakushu-sochi/domain";
+import { CONCEPTS, type Concept as DomainConcept } from "@gakushu-sochi/domain";
 import { useNavigate, useRouter } from "@tanstack/react-router";
 import { useEffect, useRef, useState, type RefObject } from "react";
 import {
@@ -134,6 +134,10 @@ export function parseConceptSearch(search: Record<string, unknown>): { concept?:
 export const LINKS = linkConcepts(CONCEPTS);
 export const TREES = layoutTrees(CONCEPTS);
 export const AREAS = conceptAreas(TREES);
+// summary は定義側の情報で、API の応答（OverlaidConcept）には載らない。conceptId で定義から引く。
+export const CONCEPT_BY_ID: ReadonlyMap<string, DomainConcept> = new Map(
+  CONCEPTS.map((concept) => [concept.id, concept]),
+);
 
 // 応答は観測済みの Concept だけなので、定義の全件と突き合わせて未観測を補う。
 // 手動上書きは補ったあとに重ねる。未観測の Concept も手動で確認済みにできる。
@@ -445,9 +449,11 @@ export function ConceptDetail({
   onSelect: (conceptId: string) => void;
   panel: RefObject<HTMLElement | null>;
 }) {
+  const summary = CONCEPT_BY_ID.get(concept.conceptId)?.summary;
   return (
     <aside className="detail" aria-label="Concept の詳細" ref={panel}>
       <h2>{nameOf(concept)}</h2>
+      {summary && <p className="detail-summary">{summary}</p>}
       <p className="detail-status">
         {isCurrent && <em className="badge">現在地</em>}
         <span className={`status ${concept.status}`}>{statusLabel[concept.status]}</span>
