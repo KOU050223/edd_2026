@@ -56,6 +56,7 @@ export const CONSENT_NOTICE_DETAIL = [
   "会話本文そのものは保存しません。",
   "",
   "Web 版からはコードや質問文を AI へ送りません。",
+  "ただし確認問題を作るときだけは、送る内容をその場で示し、同意を得てから送ります。",
   "",
   "送るもの（お使いのクライアントが持つもののうち、該当するもの）:",
   "選択したコード・テキスト本文、質問文、AI 応答の口調設定（人格）。",
@@ -111,3 +112,33 @@ export function isConsentGranted(stored: unknown): stored is ConsentRecord {
 export function createConsentRecord(grantedAt: string): ConsentRecord {
   return { version: CONSENT_NOTICE_VERSION, grantedAt };
 }
+
+/**
+ * 確認問題の生成で AI へ送る内容の同意（#236）。
+ *
+ * 送信の同意（{@link CONSENT_NOTICE_VERSION}）とは別に、**問題を作るその場で**確認する。
+ * 問題を作らない人に同意を取り直させないためである。版を上げると、
+ * 「今後表示しない」を選んだ人にも再び確認を出す。
+ *
+ * 版の履歴:
+ * - 1: 技術レベル・範囲・「理解すること」と、その項目で自力解決した質問の本文を送る（#236）
+ */
+export const CHECK_GENERATION_CONSENT_VERSION = 1;
+
+/** 確認問題の生成で、1組の材料に載せる自力解決した質問の最大件数。 */
+export const CHECK_MATERIAL_MAX_QUESTIONS = 3;
+
+/** 確認問題の生成で、材料に載せる質問1件の最大文字数。超えた分は切り詰める。 */
+export const CHECK_MATERIAL_MAX_QUESTION_LENGTH = 600;
+
+/** 確認問題を作る前に示す文面。docs/data-privacy.md「確認問題の生成」と揃える。 */
+export const CHECK_GENERATION_NOTICE = [
+  "確認問題を作るため、次の内容を運営が契約する AI（Google Gemini）へ送ります。",
+  "・この Concept の定義と、選んだ技術レベル・範囲・「理解すること」の項目",
+  "・その項目であなたが自力解決に至った質問の本文" +
+    `（「質問履歴の保存」を有効にしていて、該当する質問があるときだけ。` +
+    `新しい順に最大 ${String(CHECK_MATERIAL_MAX_QUESTIONS)} 件、各 ${String(CHECK_MATERIAL_MAX_QUESTION_LENGTH)} 文字まで）`,
+  "選択したコードと AI の回答は送りません。",
+  "作った問題はあなたの学習データとして保存し、学習データの削除や退会で一緒に消えます。",
+  "選んだ答えは保存しません。1組作るごとに AI の利用回数を1回使います。",
+].join("\n");

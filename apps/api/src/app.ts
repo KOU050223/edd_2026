@@ -8,13 +8,14 @@ import {
   D1AiUsageRepository,
   D1AreaCompletionRepository,
   D1AuditLogRepository,
-  D1ConceptCheckRepository,
+  D1CheckGenerationConsentRepository,
   D1ConversationRepository,
   D1IdentityRepository,
   D1ImportSessionRepository,
   D1LearningEventRepository,
   D1LearningEvidenceRepository,
   D1MasteryOverrideRepository,
+  D1PersonalCheckRepository,
   D1UserSettingsRepository,
 } from "./repository/d1.js";
 import { createLearningEventsRoute } from "./routes/learning-events.js";
@@ -180,8 +181,7 @@ app.route(
   })),
 );
 
-// 確認問題（#184 / #185）。保存済みがあれば生成せず、無ければ生成して保存する。
-// 生成は `ai_usage` の回数上限の対象外で、歯止めの本体はこの保存である（`routes/checks.ts`）。
+// 確認問題（#184 / #236）。利用者ごとに生成して保存する。生成は `ai_usage` に1組1回で数える。
 // レート制限はルート側が自分で掛けている。
 app.route(
   "/v1",
@@ -189,9 +189,15 @@ app.route(
     apiKey: env.GEMINI_API_KEY,
     model: env.GEMINI_MODEL,
     fetch: (input, init) => globalThis.fetch(input, init),
-    // 全利用者で共有する問題なので、users(id) を参照しない表に置く
-    // （migrations/0009_concept_checks.sql）。
-    checks: new D1ConceptCheckRepository(env.DB),
+    // 個人の学習データなので users(id) を CASCADE で参照する表に置く
+    // （migrations/0012_user_concept_checks.sql）。
+    checks: new D1PersonalCheckRepository(env.DB),
+    consents: new D1CheckGenerationConsentRepository(env.DB),
+    events: new D1LearningEventRepository(env.DB),
+    conversations: new D1ConversationRepository(env.DB),
+    usage: new D1AiUsageRepository(env.DB),
+    identity: new D1IdentityRepository(env.DB),
+    audit: new D1AuditLogRepository(env.DB),
     now: () => new Date(),
   })),
 );
@@ -243,6 +249,7 @@ app.route(
     evidence: new D1LearningEvidenceRepository(env.DB),
     sessions: new D1ImportSessionRepository(env.DB),
     conversations: new D1ConversationRepository(env.DB),
+    checks: new D1PersonalCheckRepository(env.DB),
     audit: new D1AuditLogRepository(env.DB),
     nowIso: () => new Date().toISOString(),
     nowMs: () => Date.now(),

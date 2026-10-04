@@ -5,6 +5,15 @@
  * 発生時刻が2列であることは、この外へ漏らさない。
  */
 
+import {
+  CHECK_LEVELS,
+  CHECK_SCOPES,
+  checkTargetOf,
+  type CheckLevel,
+  type CheckScope,
+  type ConsentRecord,
+  type PersonalConceptCheck,
+} from "@gakushu-sochi/domain";
 import type {
   Conversation,
   ConversationMessage,
@@ -36,6 +45,7 @@ import type {
   AreaCompletionRepository,
   AuditLogEntry,
   AuditLogRepository,
+  CheckGenerationConsentRepository,
   ConceptCheckRepository,
   ConversationListParams,
   ConversationRepository,
@@ -45,6 +55,7 @@ import type {
   LearningEvidenceRepository,
   MasteryOverride,
   MasteryOverrideRepository,
+  PersonalCheckRepository,
   StoredConceptCheck,
   StoredEventInput,
   StoredImportSessionInput,
@@ -1428,5 +1439,161 @@ export class D1ImportSessionRepository implements ImportSessionRepository {
       throw new Error("D1 delete result has no meta.changes");
     }
     return changes;
+  }
+}
+
+/** user_concept_checks の1行。SELECT する列と対応させる。 */
+interface PersonalCheckRow {
+  concept_id: string;
+  scope: string;
+  objective_id: string | null;
+  level: string;
+  body: string;
+  model: string;
+  generated_at: string;
+}
+
+const PERSONAL_CHECK_COLUMNS = "concept_id, scope, objective_id, level, body, model, generated_at";
+
+/**
+ * D1 の行を `PersonalConceptCheck` へ戻す。
+ *
+ * 書き込み時に検証した形しか入らないはずなので、読めなければ DB の破損である。
+ * 黙って捨てると、利用者には問題が消えたように見える（RULE-004）。
+ */
+function toPersonalCheck(row: PersonalCheckRow): PersonalConceptCheck {
+  const parsed = parseConceptCheck(row.body, row.concept_id);
+  if (!parsed.ok) {
+    throw new Error(
+      `user_concept_checks contains invalid data (concept_id=${row.concept_id}, reason=${parsed.reason})`,
+    );
+  }
+  if (!(CHECK_SCOPES as readonly string[]).includes(row.scope)) {
+    throw new Error(`user_concept_checks.scope is invalid (concept_id=${row.concept_id})`);
+  }
+  if (!(CHECK_LEVELS as readonly string[]).includes(row.level)) {
+    throw new Error(`user_concept_checks.level is invalid (concept_id=${row.concept_id})`);
+  }
+  if (Number.isNaN(Date.parse(row.generated_at))) {
+    throw new Error(`user_concept_checks.generated_at is invalid (concept_id=${row.concept_id})`);
+  }
+  return {
+    ...parsed.check,
+    scope: row.scope as CheckScope,
+    level: row.level as CheckLevel,
+    ...(row.objective_id === null ? {} : { objectiveId: row.objective_id }),
+    model: row.model,
+    generatedAt: row.generated_at,
+  };
+}
+
+/**
+ * 利用者ごとの確認問題（migrations/0012_user_concept_checks.sql、Issue #236）。
+ *
+ * 表は `users(id)` を ON DELETE CASCADE で参照する。退会で一緒に消える。
+ */
+export class D1PersonalCheckRepository implements PersonalCheckRepository {
+  constructor(private readonly db: D1Database) {}
+
+  async listByConcept(userId: string, conceptId: string): Promise<PersonalConceptCheck[]> {
+    const { results } = await this.db
+      .prepare(
+        `SELECT ${PERSONAL_CHECK_COLUMNS}
+         FROM user_concept_checks
+         WHERE user_id = ? AND concept_id = ?
+         ORDER BY generated_at DESC, target ASC`,
+      )
+      .bind(userId, conceptId)
+      .all<PersonalCheckRow>();
+    return results.map(toPersonalCheck);
+  }
+
+  async put(userId: string, check: PersonalConceptCheck): Promise<void> {
+    const { conceptId, overview, practice } = check;
+    // 本文は生成時の JSON と同じ形で持つ。読み出しで `parseConceptCheck` をそのまま通せる。
+    const body = JSON.stringify({ conceptId, overview, practice });
+    await this.db
+      .prepare(
+        `INSERT INTO user_concept_checks (
+           user_id, concept_id, target, scope, objective_id, level, body, model, generated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (user_id, concept_id, target) DO UPDATE SET
+           scope = excluded.scope,
+           objective_id = excluded.objective_id,
+           level = excluded.level,
+           body = excluded.body,
+           model = excluded.model,
+           generated_at = excluded.generated_at`,
+      )
+      .bind(
+        userId,
+        conceptId,
+        checkTargetOf(check),
+        check.scope,
+        check.objectiveId ?? null,
+        check.level,
+        body,
+        check.model,
+        check.generatedAt,
+      )
+      .run();
+  }
+
+  async listAllByUser(userId: string): Promise<PersonalConceptCheck[]> {
+    const { results } = await this.db
+      .prepare(
+        `SELECT ${PERSONAL_CHECK_COLUMNS}
+         FROM user_concept_checks
+         WHERE user_id = ?
+         ORDER BY concept_id ASC, target ASC`,
+      )
+      .bind(userId)
+      .all<PersonalCheckRow>();
+    return results.map(toPersonalCheck);
+  }
+
+  async deleteAllByUser(userId: string): Promise<number> {
+    const result = await this.db
+      .prepare("DELETE FROM user_concept_checks WHERE user_id = ?")
+      .bind(userId)
+      .run();
+    const changes = result.meta.changes;
+    if (typeof changes !== "number") {
+      throw new Error("D1 delete result has no meta.changes");
+    }
+    return changes;
+  }
+}
+
+/** 確認問題の生成への同意（migrations/0012_user_concept_checks.sql、Issue #236）。 */
+export class D1CheckGenerationConsentRepository implements CheckGenerationConsentRepository {
+  constructor(private readonly db: D1Database) {}
+
+  async get(userId: string): Promise<ConsentRecord | null> {
+    const row = await this.db
+      .prepare("SELECT version, granted_at FROM check_generation_consents WHERE user_id = ?")
+      .bind(userId)
+      .first<{ version: number; granted_at: string }>();
+    return row === null ? null : { version: row.version, grantedAt: row.granted_at };
+  }
+
+  async put(userId: string, record: ConsentRecord): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT INTO check_generation_consents (user_id, version, granted_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT (user_id) DO UPDATE SET
+           version = excluded.version,
+           granted_at = excluded.granted_at`,
+      )
+      .bind(userId, record.version, record.grantedAt)
+      .run();
+  }
+
+  async delete(userId: string): Promise<void> {
+    await this.db
+      .prepare("DELETE FROM check_generation_consents WHERE user_id = ?")
+      .bind(userId)
+      .run();
   }
 }

@@ -9,7 +9,7 @@ import {
   type Concept as DomainConcept,
   type LearningObjective,
 } from "@gakushu-sochi/domain";
-import { useNavigate, useRouter } from "@tanstack/react-router";
+import { Link, useNavigate, useRouter } from "@tanstack/react-router";
 import { useEffect, useRef, useState, type RefObject } from "react";
 import {
   ApiError,
@@ -539,7 +539,25 @@ export function ConceptDetail({
         empty="この先に続く Concept はありません"
         onSelect={onSelect}
       />
-      {loggedIn && <MasteryPicker concept={concept} pending={pending} onChange={onChange} />}
+      {loggedIn && (
+        <>
+          <h3>確認問題</h3>
+          <p className="muted">
+            概要問題と実践問題の2問に両方正解すると、理解の確認として記録します。
+          </p>
+          {/* 先読みしない。この loader は問題が無ければ AI に生成させるので、
+              ポインタを乗せただけで生成を走らせないようにする。 */}
+          <Link
+            to="/check/$conceptId"
+            params={{ conceptId: concept.conceptId }}
+            preload={false}
+            className="check-link"
+          >
+            確認問題を解く
+          </Link>
+          <MasteryPicker concept={concept} pending={pending} onChange={onChange} />
+        </>
+      )}
     </aside>
   );
 }

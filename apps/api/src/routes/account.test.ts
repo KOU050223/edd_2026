@@ -6,9 +6,11 @@ import { storedCheck } from "../checks/test-check.js";
 import {
   createInMemoryRepositoryStore,
   InMemoryAuditLogRepository,
+  InMemoryCheckGenerationConsentRepository,
   InMemoryConceptCheckRepository,
   InMemoryIdentityRepository,
   InMemoryLearningEventRepository,
+  InMemoryPersonalCheckRepository,
 } from "../repository/memory.js";
 import { createAccountRoute, type IdentityProviderUsers } from "./account.js";
 
@@ -159,6 +161,26 @@ describe("DELETE /v1/me", () => {
     expect(response.status).toBe(204);
     expect(deps.identity.users.has("auth0|user-a")).toBe(false);
     await expect(checks.get("go.defer")).resolves.toEqual(storedCheck("go.defer"));
+  });
+
+  it("退会で、利用者ごとの確認問題と生成への同意は消える", async () => {
+    // user_concept_checks / check_generation_consents は users(id) を CASCADE で参照する（#236）。
+    const deps = buildDeps();
+    await deps.identity.ensureUser({ userId: "auth0|user-a", nowMs: 0 });
+    const checks = new InMemoryPersonalCheckRepository(deps.store);
+    const consents = new InMemoryCheckGenerationConsentRepository(deps.store);
+    await checks.put("auth0|user-a", {
+      ...storedCheck("go.defer").check,
+      scope: "summary",
+      level: "basic",
+    });
+    await consents.put("auth0|user-a", { version: 1, grantedAt: "2026-10-01T00:00:00.000Z" });
+
+    const response = await request(buildApp(deps));
+
+    expect(response.status).toBe(204);
+    await expect(checks.listAllByUser("auth0|user-a")).resolves.toEqual([]);
+    await expect(consents.get("auth0|user-a")).resolves.toBeNull();
   });
 
   it("退会の完了は構造化ログに残す", async () => {

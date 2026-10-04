@@ -2,6 +2,13 @@ import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { ApiError, createSubmitGuard } from "../../../api.js";
 import {
+  changeGenerationConsent,
+  exportChecksFileName,
+  fetchChecksExport,
+  fetchGenerationConsent,
+  type CheckGenerationConsent,
+} from "../../../check.js";
+import {
   deleteAllConversations,
   exportConversationsFileName,
   fetchConversationsExport,
@@ -138,8 +145,9 @@ function DataSettings() {
       <article className="plan-card">
         <h3>削除</h3>
         <p className="muted">
-          サーバー上の学習イベントと習熟度をすべて削除します。アカウント、設定、手動で変更した理解度は残ります。
-          VS Code 拡張など他の端末に残っているコピーは、その端末が次回同期したときに削除されます。
+          サーバー上の学習イベントと習熟度をすべて削除します。保存した質問履歴と、作った確認問題も一緒に削除します。
+          アカウント、設定、手動で変更した理解度は残ります。 VS Code
+          拡張など他の端末に残っているコピーは、その端末が次回同期したときに削除されます。
         </p>
         {confirmingDelete ? (
           <div className="confirm-delete">
@@ -186,6 +194,8 @@ function DataSettings() {
       <ImportSessionsCard />
 
       <ConversationHistoryCard />
+
+      <ChecksCard />
     </section>
   );
 }
@@ -474,6 +484,121 @@ function ImportSessionsCard() {
             ))}
           </ul>
         </>
+      )}
+      {actionError && (
+        <p className="error-text" role="alert">
+          操作に失敗しました：{actionError}
+        </p>
+      )}
+    </article>
+  );
+}
+
+/**
+ * 確認問題のエクスポートと、生成への同意の取り消し（Issue #236）。
+ *
+ * 生成の画面で「今後表示しない」を選ぶと、次回から AI へ送る内容の確認を出さずに作る。
+ * その記録を取り消す受け皿がここにある（#227 の「同意の欄が見つけにくい」を繰り返さない）。
+ */
+function ChecksCard() {
+  const submitGuard = useRef(createSubmitGuard());
+  const [consent, setConsent] = useState<CheckGenerationConsent>();
+  const [loadError, setLoadError] = useState<string>();
+  const [actionError, setActionError] = useState<string>();
+  const [exporting, setExporting] = useState(false);
+  const [exported, setExported] = useState(false);
+  const [revoking, setRevoking] = useState(false);
+
+  // 設定画面を開いたタイミングで一度だけ取る。
+  useEffect(() => {
+    fetchGenerationConsent(fetch, takeLoginRetry())
+      .then(setConsent)
+      .catch((value: unknown) => {
+        if (value instanceof ApiError && value.kind === "login_required") return;
+        setLoadError(toErrorText(value));
+      });
+  }, []);
+
+  const runExport = () => {
+    // 入口で弾く（RULE-007）。
+    if (submitGuard.current.isRunning("export")) return;
+    setActionError(undefined);
+    setExported(false);
+    setExporting(true);
+    void submitGuard.current
+      .run("export", async () => {
+        try {
+          const result = await fetchChecksExport(fetch, takeLoginRetry());
+          downloadJson(result, exportChecksFileName(new Date()));
+          setExported(true);
+        } catch (value: unknown) {
+          if (value instanceof ApiError && value.kind === "session_expired") {
+            window.location.href = "/login";
+            return;
+          }
+          setActionError(toErrorText(value));
+        }
+      })
+      .finally(() => setExporting(false));
+  };
+
+  const revoke = () => {
+    if (submitGuard.current.isRunning("revoke")) return;
+    setActionError(undefined);
+    setRevoking(true);
+    void submitGuard.current
+      .run("revoke", async () => {
+        try {
+          setConsent(await changeGenerationConsent("revoke"));
+        } catch (value: unknown) {
+          if (value instanceof ApiError && value.kind === "session_expired") {
+            window.location.href = "/login";
+            return;
+          }
+          setActionError(toErrorText(value));
+        }
+      })
+      .finally(() => setRevoking(false));
+  };
+
+  return (
+    <article className="plan-card">
+      <h3>確認問題</h3>
+      <p className="muted">
+        確認問題の画面で作った問題です。学習データの削除と退会で一緒に消えます。選んだ答えは保存していません。
+      </p>
+      <div className="actions">
+        <button type="button" disabled={exporting} onClick={runExport}>
+          {exporting ? "取得中…" : "問題をダウンロード"}
+        </button>
+      </div>
+      {exported && !actionError && (
+        <p className="message saved" role="status">
+          ダウンロードしました
+        </p>
+      )}
+      <h4>AI へ送る内容の確認</h4>
+      {loadError ? (
+        <p className="error-text" role="alert">
+          状態を読み込めませんでした：{loadError}
+        </p>
+      ) : consent === undefined ? (
+        <p className="muted">読み込み中…</p>
+      ) : consent.granted ? (
+        <>
+          <p className="muted">
+            「今後表示しない」を選んでいます（
+            {consent.grantedAt ? new Date(consent.grantedAt).toLocaleString("ja-JP") : "日時不明"}
+            ）。問題を作るときに、送る内容の確認を出さずに作ります。
+          </p>
+          <div className="actions">
+            <button type="button" disabled={revoking} onClick={revoke}>
+              {revoking ? "取り消し中…" : "取り消して、毎回確認する"}
+            </button>
+          </div>
+        </>
+      ) : (
+        <p className="muted">問題を作るたびに、AI へ送る内容を確認してから作ります。</p>
       )}
       {actionError && (
         <p className="error-text" role="alert">

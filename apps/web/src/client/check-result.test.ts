@@ -49,6 +49,23 @@ test.each([
   expect(event(overview, practice).type).toBe("check_failed");
 });
 
+test("「理解すること」を狙った組なら、その項目 ID を載せる", () => {
+  // 正解でその項目を 1.0、不正解でその項目だけ −0.25 にする規則はサーバーが導出する（#223）。
+  const targeted = checkResultEvent({
+    conceptId: "go.defer",
+    correct: { overview: true, practice: false },
+    objectiveId: "go.defer:execution_timing",
+    id: "check-1",
+    now: NOW,
+  });
+  expect(targeted).toMatchObject({
+    type: "check_failed",
+    conceptIds: ["go.defer"],
+    objectiveIds: ["go.defer:execution_timing"],
+  });
+  expect(event(true, true)).not.toHaveProperty("objectiveIds");
+});
+
 test("発生時刻は API の契約（オフセット必須の ISO 8601）を満たす", () => {
   expect(isIsoDateTime(event(true, true).occurredAt)).toBe(true);
 });

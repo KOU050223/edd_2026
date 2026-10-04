@@ -7,6 +7,11 @@
  * SQL 側と一致させてある。
  */
 
+import {
+  checkTargetOf,
+  type ConsentRecord,
+  type PersonalConceptCheck,
+} from "@gakushu-sochi/domain";
 import type {
   Conversation,
   HistoryProviderId,
@@ -21,6 +26,7 @@ import type {
   AppendResult,
   AuditLogEntry,
   AuditLogRepository,
+  CheckGenerationConsentRepository,
   ConceptCheckRepository,
   ConversationListParams,
   ConversationRepository,
@@ -28,6 +34,7 @@ import type {
   ImportSessionRepository,
   LearningEventRepository,
   LearningEvidenceRepository,
+  PersonalCheckRepository,
   StoredConceptCheck,
   StoredEventInput,
   StoredImportSessionInput,
@@ -62,6 +69,10 @@ export interface InMemoryRepositoryStore {
    * これを巻き込まないことを、同じストアを共有したテストで確かめるため（#185）。
    */
   readonly conceptChecks: Map<string, StoredConceptCheck>;
+  /** userId -> (`conceptId` + 狙い -> 確認問題)。D1 の user_concept_checks に対応する。 */
+  readonly personalChecksByUser: Map<string, Map<string, PersonalConceptCheck>>;
+  /** userId -> 生成への同意。D1 の check_generation_consents に対応する。 */
+  readonly checkGenerationConsents: Map<string, ConsentRecord>;
 }
 
 export function createInMemoryRepositoryStore(): InMemoryRepositoryStore {
@@ -76,6 +87,8 @@ export function createInMemoryRepositoryStore(): InMemoryRepositoryStore {
     importSessionsByUser: new Map(),
     conversationsByUser: new Map(),
     conceptChecks: new Map(),
+    personalChecksByUser: new Map(),
+    checkGenerationConsents: new Map(),
   };
 }
 
@@ -234,6 +247,9 @@ export class InMemoryIdentityRepository implements IdentityRepository {
     this.store.evidenceByUser.delete(userId);
     this.store.importSessionsByUser.delete(userId);
     this.store.conversationsByUser.delete(userId);
+    // user_concept_checks / check_generation_consents も CASCADE で参照する（#236）。
+    this.store.personalChecksByUser.delete(userId);
+    this.store.checkGenerationConsents.delete(userId);
     // D1 の audit_log は users(id) を ON DELETE CASCADE で参照している。
     // 退会で監査ログも消えるという実際の振る舞いに合わせる。
     for (let i = this.store.auditLog.length - 1; i >= 0; i--) {
@@ -566,6 +582,71 @@ export class InMemoryConceptCheckRepository implements ConceptCheckRepository {
 
   put(stored: StoredConceptCheck): Promise<void> {
     this.store.conceptChecks.set(stored.check.conceptId, structuredClone(stored));
+    return Promise.resolve();
+  }
+}
+
+/**
+ * `PersonalCheckRepository` のインメモリ実装。テスト用。
+ *
+ * キーは Concept ID と狙いの組（D1 の複合主キー）。区切り文字で連結すると一意にならないので、
+ * `JSON.stringify` した配列をキーにする。
+ */
+export class InMemoryPersonalCheckRepository implements PersonalCheckRepository {
+  constructor(private readonly store: InMemoryRepositoryStore = createInMemoryRepositoryStore()) {}
+
+  listByConcept(userId: string, conceptId: string): Promise<PersonalConceptCheck[]> {
+    const checks = [...(this.store.personalChecksByUser.get(userId)?.values() ?? [])]
+      .filter((check) => check.conceptId === conceptId)
+      .sort(
+        (a, b) =>
+          b.generatedAt.localeCompare(a.generatedAt) ||
+          checkTargetOf(a).localeCompare(checkTargetOf(b)),
+      );
+    return Promise.resolve(structuredClone(checks));
+  }
+
+  put(userId: string, check: PersonalConceptCheck): Promise<void> {
+    let checks = this.store.personalChecksByUser.get(userId);
+    if (checks === undefined) {
+      checks = new Map();
+      this.store.personalChecksByUser.set(userId, checks);
+    }
+    checks.set(JSON.stringify([check.conceptId, checkTargetOf(check)]), structuredClone(check));
+    return Promise.resolve();
+  }
+
+  listAllByUser(userId: string): Promise<PersonalConceptCheck[]> {
+    const checks = [...(this.store.personalChecksByUser.get(userId)?.values() ?? [])].sort(
+      (a, b) =>
+        a.conceptId.localeCompare(b.conceptId) || checkTargetOf(a).localeCompare(checkTargetOf(b)),
+    );
+    return Promise.resolve(structuredClone(checks));
+  }
+
+  deleteAllByUser(userId: string): Promise<number> {
+    const count = this.store.personalChecksByUser.get(userId)?.size ?? 0;
+    this.store.personalChecksByUser.delete(userId);
+    return Promise.resolve(count);
+  }
+}
+
+/** `CheckGenerationConsentRepository` のインメモリ実装。テスト用。 */
+export class InMemoryCheckGenerationConsentRepository implements CheckGenerationConsentRepository {
+  constructor(private readonly store: InMemoryRepositoryStore = createInMemoryRepositoryStore()) {}
+
+  get(userId: string): Promise<ConsentRecord | null> {
+    const record = this.store.checkGenerationConsents.get(userId);
+    return Promise.resolve(record === undefined ? null : { ...record });
+  }
+
+  put(userId: string, record: ConsentRecord): Promise<void> {
+    this.store.checkGenerationConsents.set(userId, { ...record });
+    return Promise.resolve();
+  }
+
+  delete(userId: string): Promise<void> {
+    this.store.checkGenerationConsents.delete(userId);
     return Promise.resolve();
   }
 }
