@@ -18,6 +18,15 @@ export interface LearningObjective {
   label: string;
 }
 
+/**
+ * 1件の学習イベントに載せられる項目 ID の最大件数。
+ *
+ * 1回の質問が触れる項目はせいぜい数件で、Concept あたりの項目も 4〜5 件である。
+ * 上限が無いと、巨大な配列がそのまま D1 に保存され、読み出しと習熟度の導出のたびに
+ * コストを払い続ける。API はこれを超えるイベントを拒否するので、送る側も同じ値で切る。
+ */
+export const MAX_OBJECTIVE_IDS_PER_EVENT = 64;
+
 const LEARNING_OBJECTIVE_KEY_PATTERN = /^[a-z0-9_]+$/;
 
 /**

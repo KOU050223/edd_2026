@@ -12,7 +12,7 @@
 
 import * as vscode from "vscode";
 import type { AIProvider } from "./provider";
-import { buildPrompt, knownConceptsFor } from "./prompt";
+import { buildPrompt, knownConceptsFor, knownObjectivesFor } from "./prompt";
 import { MAX_HISTORY_TURNS, parseAnswer } from "./answer";
 import { buildNoModelGuidance, selectModel } from "./model-selection";
 import {
@@ -145,10 +145,13 @@ export class VSCodeLMProvider implements AIProvider {
       const parsed = parseAnswer(
         raw,
         new Set(knownConceptsFor(request).map((concept) => concept.id)),
+        new Map(
+          knownObjectivesFor(request).map((objective) => [objective.id, objective.conceptId]),
+        ),
       );
 
       this.debug(
-        `--- Concept抽出結果 ---\nconceptIds: ${JSON.stringify(parsed.conceptIds)}\nresolution: ${String(parsed.resolution)}`,
+        `--- Concept抽出結果 ---\nconceptIds: ${JSON.stringify(parsed.conceptIds)}\nobjectiveIds: ${JSON.stringify(parsed.objectiveIds)}\nresolution:${String(parsed.resolution)}`,
       );
 
       return {
@@ -156,6 +159,7 @@ export class VSCodeLMProvider implements AIProvider {
         answer: {
           text: parsed.text,
           conceptIds: parsed.conceptIds,
+          objectiveIds: parsed.objectiveIds,
           model: model.id,
           ...(parsed.resolution ? { resolution: parsed.resolution } : {}),
         },

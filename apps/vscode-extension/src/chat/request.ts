@@ -1,4 +1,9 @@
-import type { AIRequest, CodeContext, ConversationTurn } from "@gakushu-sochi/domain";
+import type {
+  AIRequest,
+  CodeContext,
+  ConversationTurn,
+  ProfileSummary,
+} from "@gakushu-sochi/domain";
 
 /**
  * VS Code Chat の入力を、AI 層の共通契約へ変換する。
@@ -14,6 +19,7 @@ export function createChatAIRequest(
   history: ConversationTurn[] = [],
   diagnostics: string[] = [],
   persona?: string,
+  profile?: ProfileSummary,
 ): AIRequest {
   const trimmedPersona = persona?.trim();
   return {
@@ -25,5 +31,7 @@ export function createChatAIRequest(
     ...(history.length > 0 ? { history } : {}),
     // 空白だけの persona は未設定と同じ意味なのでキー自体を省略する。
     ...(trimmedPersona ? { persona: trimmedPersona } : {}),
+    // 満点の「理解すること」をプロンプトから除くのに使う（knownObjectivesFor）。
+    ...(profile ? { profile } : {}),
   };
 }

@@ -237,6 +237,20 @@ test("記録したイベントは読み直しても残る", async () => {
   expect(loadProfile(context).events).toEqual(updated.events);
 });
 
+test("「理解すること」を持つ Concept は、触れた項目の理解度を積み上げる (#223)", async () => {
+  // サーバーの導出と同じ項目一覧で畳み込む。一覧を渡し忘れると回数の判定になり、
+  // objectives が作られない。
+  const context = mutableContext();
+
+  const updated = await recordEvent(context, loadProfile(context), {
+    ...eventWith("go.defer"),
+    type: "question_asked",
+    objectiveIds: ["go.defer:lifo_order"],
+  });
+
+  expect(updated.mastery["go.defer"]?.objectives?.["go.defer:lifo_order"]).toBe(0.05);
+});
+
 test("保存に失敗しても例外を外へ出さず、更新後のプロファイルを返す", async () => {
   // 「保存失敗時も質問フローを止めない」の確認。update が reject しても
   // 呼び出し側（extension.ts の persistEvent）へ例外を伝播させない。

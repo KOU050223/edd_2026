@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { buildPrompt, effectiveQuestion } from ".";
+import { buildPrompt, effectiveQuestion, knownObjectivesFor } from ".";
 
 const baseRequest = {
   context: {
@@ -88,6 +88,60 @@ test("言語のConceptに加えて、領域横断のConceptも一覧に含める
   expect(prompt).toContain("git.commit");
   expect(prompt).toContain("db.relational_model");
   expect(prompt).not.toContain("go.variable_declaration");
+});
+
+describe("既知の項目一覧（設計/04 #223）", () => {
+  const goRequest = { context: { ...baseRequest.context, languageId: "go" } };
+
+  test("言語で絞った Concept の「理解すること」を一覧に載せる", () => {
+    const ids = knownObjectivesFor(goRequest).map((objective) => objective.id);
+
+    expect(ids).toContain("go.variable_declaration:var_vs_short");
+    expect(ids.every((id) => id.startsWith("go."))).toBe(true);
+    expect(buildPrompt(goRequest)).toContain("go.variable_declaration:var_vs_short: var と :=");
+  });
+
+  test("項目を持たない言語では一覧を出さず、objectiveIds を空にさせる", () => {
+    const prompt = buildPrompt(baseRequest);
+
+    expect(knownObjectivesFor(baseRequest)).toEqual([]);
+    expect(prompt).not.toContain("--- 既知の項目一覧");
+    expect(prompt).toContain("objectiveIds は空配列にしてください");
+  });
+
+  test("利用者が満点の項目は載せない", () => {
+    const request = {
+      ...goRequest,
+      profile: {
+        masteries: [
+          {
+            conceptId: "go.variable_declaration",
+            status: "learning" as const,
+            score: 0.3,
+            evidence: {
+              questionCount: 0,
+              answerViewCount: 0,
+              solvedIndependentlyCount: 0,
+              errorRecurrenceCount: 0,
+              checkPassedCount: 1,
+              checkFailedCount: 0,
+              recentTypes: [],
+            },
+            objectives: {
+              "go.variable_declaration:var_vs_short": 1,
+              "go.variable_declaration:type_inference": 0.5,
+            },
+          },
+        ],
+      },
+    };
+
+    const ids = knownObjectivesFor(request).map((objective) => objective.id);
+
+    expect(ids).not.toContain("go.variable_declaration:var_vs_short");
+    expect(ids).toContain("go.variable_declaration:type_inference");
+    expect(buildPrompt(request)).not.toContain("go.variable_declaration:var_vs_short");
+  });
 });
 
 describe("応答の人物像（persona）", () => {

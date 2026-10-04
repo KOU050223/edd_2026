@@ -5,6 +5,7 @@ import {
   createEmptyProfile,
   PERSONA_MAX_LENGTH,
   type CodeContext,
+  type ConceptMastery,
   type ConversationTurn,
   type LearningEvent,
 } from "@gakushu-sochi/domain";
@@ -588,7 +589,13 @@ export function activate(context: vscode.ExtensionContext): void {
       }
       // #204: 質問履歴の occurredAt として使うため、送信前の時刻を取る。
       const askedAt = nowIso();
-      const aiRequest = createChatAIRequest(codeContext, question, history, diagnostics, persona);
+      // #223: 利用者が満点の「理解すること」はプロンプトへ載せないため、手元の習熟度を渡す。
+      const masteries = Object.values(profile.mastery).filter(
+        (mastery): mastery is ConceptMastery => mastery !== undefined,
+      );
+      const aiRequest = createChatAIRequest(codeContext, question, history, diagnostics, persona, {
+        masteries,
+      });
       const aiResponse = await provider.ask(aiRequest);
 
       if (!aiResponse.ok) {
@@ -616,6 +623,20 @@ export function activate(context: vscode.ExtensionContext): void {
       // 診断/02 (#76): 時間窓の内に解説したエラーが再び解説対象になったら、
       // 前回の理解が定着していなかった根拠として記録する。
       await recordRecurrences(errorKeys, aiResponse.answer.conceptIds, {
+        language: codeContext.languageId,
+        sessionId,
+      });
+
+      // #223: 質問で触れた「理解すること」を +0.05 する根拠。項目を持たない Concept では
+      // 回数として残るだけで score は動かない（docs/concepts.md）。
+      const objectiveIds = aiResponse.answer.objectiveIds ?? [];
+      await persistEvent({
+        id: randomUUID(),
+        occurredAt: askedAt,
+        type: "question_asked",
+        origin: "vscode",
+        conceptIds: aiResponse.answer.conceptIds,
+        ...(objectiveIds.length > 0 ? { objectiveIds } : {}),
         language: codeContext.languageId,
         sessionId,
       });
@@ -652,6 +673,7 @@ export function activate(context: vscode.ExtensionContext): void {
           type: "solved_independently",
           origin: "vscode",
           conceptIds: aiResponse.answer.conceptIds,
+          ...(objectiveIds.length > 0 ? { objectiveIds } : {}),
           language: codeContext.languageId,
           sessionId,
         });

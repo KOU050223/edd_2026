@@ -14,6 +14,7 @@ import {
   CONCEPT_ID_PATTERN,
   isIsoDateTime,
   LEARNING_OBJECTIVE_ID_PATTERN,
+  MAX_OBJECTIVE_IDS_PER_EVENT,
   type LearningEvent,
 } from "@gakushu-sochi/domain";
 
@@ -59,14 +60,9 @@ assertNever<Exclude<(typeof EVENT_ORIGINS)[number], LearningEvent["origin"]>>();
 /** ID の最大長。際限なく長い ID を DB の主キーへ入れないための上限。 */
 const MAX_ID_LENGTH = 128;
 
-/**
- * 1件のイベントに載せられる項目 ID の最大件数。
- *
- * 1回の質問が触れる項目はせいぜい数件で、Concept あたりの項目も 4〜5 件である。
- * 上限が無いと、巨大な配列がそのまま D1 に保存され、読み出しと習熟度の導出のたびに
- * コストを払い続ける。
- */
-export const MAX_OBJECTIVE_IDS_PER_EVENT = 64;
+// 1件のイベントに載せられる項目 ID の最大件数。値と理由は packages/domain に置き、
+// VS Code 拡張も同じ値で切って送る。
+export { MAX_OBJECTIVE_IDS_PER_EVENT };
 
 /** 1リクエストで受け付けるイベントの最大件数。 */
 export const MAX_EVENTS_PER_SYNC = 500;
