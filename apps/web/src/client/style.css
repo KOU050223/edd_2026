@@ -394,6 +394,18 @@ a.area-card.complete {
   line-height: 1.6;
   color: #334155;
 }
+.detail-objectives {
+  margin: 0 0 14px;
+}
+.detail-objectives h3 {
+  margin-top: 0;
+}
+.detail-objectives ul {
+  margin: 0;
+  padding-left: 1.2em;
+  font-size: 14px;
+  line-height: 1.6;
+}
 .detail-status {
   display: flex;
   gap: 6px;
