@@ -324,11 +324,16 @@ test("質問で触れた「理解すること」を question_asked として記�
   const chatOpen = executeCommand.mock.calls.find(
     ([command]) => command === "workbench.action.chat.open",
   );
-  await participantHandlers[0]?.(
+  const result = await participantHandlers[0]?.(
     { prompt: `${chatOpen?.[1].query.replace("@gakushu-sochi ", "")}let と const の違いは？` },
     { history: [] },
     { markdown: vi.fn(), progress: vi.fn() },
   );
+
+  // 次のターンの自力解決で使えるよう、回答が触れた項目を応答の metadata に残す。
+  expect(result).toEqual({
+    metadata: { objectiveIds: ["ts.variable_declaration:let_vs_const"] },
+  });
 
   // 満点の項目をプロンプトから除けるよう、手元の習熟度を AI へ渡す。
   expect(askedRequests[0]?.profile).toEqual({ masteries: [mastery] });
@@ -609,6 +614,9 @@ test("同じエラーを2回解説させるとerror_recurredを記録する", as
     expect.any(Function),
   );
   expect(recordedTypes().filter((type) => type === "error_recurred")).toHaveLength(1);
+  // 送信前の時刻を持つ question_asked は、再発（現在時刻）より先に記録する。手元は記録順、
+  // サーバーは発生時刻順に畳み込むので、順序が食い違わないようにする（PR #232 のレビュー）。
+  expect(recordedTypes().slice(-3)).toEqual(["question_asked", "error_recurred", "answer_viewed"]);
 });
 
 test("別のエラーではerror_recurredを記録しない", async () => {
