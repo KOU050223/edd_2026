@@ -30,6 +30,7 @@ import { createAreaCompletionsRoute } from "./routes/area-completions.js";
 import { createMasteryOverridesRoute } from "./routes/mastery-overrides.js";
 import { createUserSettingsRoute } from "./routes/user-settings.js";
 import { createConversationsRoute } from "./routes/conversations.js";
+import { createConversationLearningEventsRoute } from "./routes/conversation-learning-events.js";
 
 /** Cloudflare Worker から提供する HTTP API。 */
 export const app = new Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>();
@@ -312,5 +313,12 @@ app.route(
     audit: new D1AuditLogRepository(env.DB),
     nowIso: () => new Date().toISOString(),
     nowMs: () => Date.now(),
+  })),
+);
+
+app.route(
+  "/v1",
+  createConversationLearningEventsRoute((env) => ({
+    events: new D1LearningEventRepository(env.DB),
   })),
 );

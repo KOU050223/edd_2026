@@ -280,6 +280,66 @@ export function deriveMasteryFromEvents(
   events: readonly LearningEvent[],
   objectives: readonly LearningObjective[] = [],
 ): Record<ConceptId, ConceptMastery | undefined> {
+  return foldEventLog(events, objectives);
+}
+
+/** あるイベントが触れた「理解すること」1項目の、そのイベントの前後の値。 */
+export interface ObjectiveChange {
+  conceptId: ConceptId;
+  objectiveId: string;
+  before: number;
+  after: number;
+}
+
+/**
+ * イベントごとに、触れた「理解すること」の値がいくつからいくつへ動いたかを導出する（Web/15 #233）。
+ *
+ * 加算幅はイベントだけからは決まらない（質問は各項目 0.5 で頭打ち、不正解は 0 で止まる）ため、
+ * {@link deriveMasteryFromEvents} と同じ順序・同じ規則でログ全体を畳み込み、その途中の値を拾う。
+ * 対象の会話のイベントだけを渡すと前の値が分からないので、利用者の全イベントを渡すこと。
+ *
+ * @returns イベント ID → 触れた項目の変化（項目一覧の順）。項目一覧に載る項目に1つも
+ *   触れていないイベント（`objectiveIds` を持たない、一覧に無い ID だけ、など）はキー自体が無い。
+ *   触れたが値が動かなかった項目は `before === after` で含める。
+ */
+export function deriveObjectiveChanges(
+  events: readonly LearningEvent[],
+  objectives: readonly LearningObjective[],
+): Record<string, ObjectiveChange[]> {
+  const changes: Record<string, ObjectiveChange[]> = {};
+  foldEventLog(events, objectives, (event, conceptObjectives, before, after) => {
+    const touched = new Set(event.objectiveIds ?? []);
+    for (const { id, conceptId } of conceptObjectives) {
+      if (!touched.has(id)) {
+        continue;
+      }
+      (changes[event.id] ??= []).push({
+        conceptId,
+        objectiveId: id,
+        before: before?.objectives?.[id] ?? 0,
+        after: after.objectives?.[id] ?? 0,
+      });
+    }
+  });
+  return changes;
+}
+
+/**
+ * イベントログを発生時刻順に畳み込む。{@link deriveMasteryFromEvents} と
+ * {@link deriveObjectiveChanges} が同じ順序・同じ規則で数えるための共通の入口。
+ *
+ * @param onFold 1件のイベントを1つの Concept へ畳み込むたびに、その前後の習熟度を受け取る。
+ */
+function foldEventLog(
+  events: readonly LearningEvent[],
+  objectives: readonly LearningObjective[],
+  onFold?: (
+    event: LearningEvent,
+    conceptObjectives: readonly LearningObjective[],
+    before: ConceptMastery | undefined,
+    after: ConceptMastery,
+  ) => void,
+): Record<ConceptId, ConceptMastery | undefined> {
   const mastery: Record<ConceptId, ConceptMastery | undefined> = {};
   const objectivesByConcept = groupObjectivesByConcept(objectives);
 
@@ -291,12 +351,11 @@ export function deriveMasteryFromEvents(
 
   for (const { event } of ordered) {
     for (const conceptId of uniqueConceptIds(event)) {
-      mastery[conceptId] = foldEventIntoMastery(
-        conceptId,
-        mastery[conceptId],
-        event,
-        objectivesByConcept.get(conceptId),
-      );
+      const conceptObjectives = objectivesByConcept.get(conceptId) ?? [];
+      const before = mastery[conceptId];
+      const after = foldEventIntoMastery(conceptId, before, event, conceptObjectives);
+      mastery[conceptId] = after;
+      onFold?.(event, conceptObjectives, before, after);
     }
   }
 
