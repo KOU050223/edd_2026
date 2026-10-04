@@ -56,6 +56,11 @@ export interface AIError {
 export interface AIAnswer {
   text: string;
   conceptIds: ConceptId[];
+  /**
+   * 回答が触れた「理解すること」（`LearningObjective`）の ID（設計/04 #223）。
+   * 項目を判定しない経路（判定に未対応の Provider など）ではキー自体を省略する。
+   */
+  objectiveIds?: string[];
   model?: string;
   resolution?: "resolved" | "unclear";
 }

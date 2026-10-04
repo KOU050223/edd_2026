@@ -164,14 +164,22 @@ ALTER TABLE user_settings
 
 ## API
 
-| メソッドとパス                 | 内容                                   |
-| ------------------------------ | -------------------------------------- |
-| `PUT /v1/conversations/:id`    | upsert。本文を含む会話全体を受け取る   |
-| `GET /v1/conversations`        | 一覧。メタデータのみ（本文は返さない） |
-| `GET /v1/conversations/:id`    | 本文込みの詳細                         |
-| `DELETE /v1/conversations/:id` | 1件削除                                |
-| `DELETE /v1/conversations`     | 全件削除。オプトインを切るときの掃除用 |
-| `GET /v1/conversations:export` | 全件エクスポート。取り出し権の対称性   |
+| メソッドとパス                              | 内容                                             |
+| ------------------------------------------- | ------------------------------------------------ |
+| `PUT /v1/conversations/:id`                 | upsert。本文を含む会話全体を受け取る             |
+| `GET /v1/conversations`                     | 一覧。メタデータのみ（本文は返さない）           |
+| `GET /v1/conversations/:id`                 | 本文込みの詳細                                   |
+| `DELETE /v1/conversations/:id`              | 1件削除                                          |
+| `DELETE /v1/conversations`                  | 全件削除。オプトインを切るときの掃除用           |
+| `GET /v1/conversations:export`              | 全件エクスポート。取り出し権の対称性             |
+| `GET /v1/conversations/:id/learning-events` | その会話で動いた「理解すること」と加算幅（下記） |
+
+### `GET /v1/conversations/:id/learning-events`
+
+履歴の詳細画面で「この会話でどの Concept のどの項目がどれだけ上がったか」を見せるための読み取り（Web/15 #233）。
+会話 ID と同じ `sessionId` を持つ学習イベントのうち、項目に触れたものだけを、Concept・項目名・前後の値つきで返す。
+前後の値は利用者の全イベントを `deriveMasteryFromEvents` と同じ規則で畳み込んで出す（質問の頭打ちなどで動かなかった項目は前後が同じ）。
+本文は返さないので、保存設定に関わらず返す。Desktop は学習イベントを送らないので、Desktop の会話では常に空になる。
 
 ### `PUT /v1/conversations/:id`
 

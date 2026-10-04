@@ -1,5 +1,5 @@
 import { afterEach, expect, test, vi } from "vitest";
-import type { AIRequest, CodeContext, LearningEvent } from "@gakushu-sochi/domain";
+import type { AIRequest, CodeContext, ConceptMastery, LearningEvent } from "@gakushu-sochi/domain";
 import { buildPrompt } from "../ai/prompt";
 
 type ChatResponse = { markdown: ReturnType<typeof vi.fn>; progress: ReturnType<typeof vi.fn> };
@@ -114,6 +114,7 @@ vi.mock("../ai/vscodeLm", () => ({
         answer: {
           text: "変数宣言についての回答",
           conceptIds: ["ts.variable_declaration"],
+          objectiveIds: ["ts.variable_declaration:let_vs_const"],
           model: "fake",
         },
       };
@@ -288,6 +289,66 @@ test("選択したコードの文脈をChatの質問から回答記録まで引�
     }),
     expect.any(Function),
   );
+});
+
+test("質問で触れた「理解すること」を question_asked として記録する (#223)", async () => {
+  collectFromEditor.mockResolvedValueOnce(CONTEXT);
+  const mastery: ConceptMastery = {
+    conceptId: "ts.variable_declaration",
+    status: "learning",
+    score: 0.5,
+    evidence: {
+      questionCount: 1,
+      answerViewCount: 0,
+      solvedIndependentlyCount: 0,
+      errorRecurrenceCount: 0,
+      checkPassedCount: 0,
+      checkFailedCount: 0,
+      recentTypes: ["question_asked"],
+    },
+    objectives: { "ts.variable_declaration:let_vs_const": 1 },
+  };
+  loadProfile.mockReturnValueOnce({
+    events: [],
+    mastery: { "ts.variable_declaration": mastery },
+  });
+  recordEvent.mockImplementation(async (_context, profile: LearnerProfile) => profile);
+  getConfiguration.mockReturnValue({
+    get: (key: string, fallback: string) => (key === "api.baseUrl" ? "" : fallback),
+  });
+
+  const context = createExtensionContext(true);
+  activate(context as never);
+  await registeredCommands.get("gakushuSochi.askSelection")?.();
+
+  const chatOpen = executeCommand.mock.calls.find(
+    ([command]) => command === "workbench.action.chat.open",
+  );
+  const result = await participantHandlers[0]?.(
+    { prompt: `${chatOpen?.[1].query.replace("@gakushu-sochi ", "")}let と const の違いは？` },
+    { history: [] },
+    { markdown: vi.fn(), progress: vi.fn() },
+  );
+
+  // 次のターンの自力解決で使えるよう、回答が触れた項目を応答の metadata に残す。
+  expect(result).toEqual({
+    metadata: { objectiveIds: ["ts.variable_declaration:let_vs_const"] },
+  });
+
+  // 満点の項目をプロンプトから除けるよう、手元の習熟度を AI へ渡す。
+  expect(askedRequests[0]?.profile).toEqual({ masteries: [mastery] });
+  const events = recordEvent.mock.calls.map(([, , event]) => event as LearningEvent);
+  expect(events.map((event) => event.type)).toEqual(["question_asked", "answer_viewed"]);
+  expect(events[0]).toEqual(
+    expect.objectContaining({
+      conceptIds: ["ts.variable_declaration"],
+      objectiveIds: ["ts.variable_declaration:let_vs_const"],
+    }),
+  );
+  // 答えを見たことは項目を動かさないので、項目 ID は載せない。
+  expect(events[1]).not.toHaveProperty("objectiveIds");
+  // 質問と回答の閲覧は同じ会話として辿れる。
+  expect(events[0]?.sessionId).toBe(events[1]?.sessionId);
 });
 
 test("回答に含まれるConceptをAPI同期内容へ引き継ぐ", async () => {
@@ -553,6 +614,9 @@ test("同じエラーを2回解説させるとerror_recurredを記録する", as
     expect.any(Function),
   );
   expect(recordedTypes().filter((type) => type === "error_recurred")).toHaveLength(1);
+  // 送信前の時刻を持つ question_asked は、再発（現在時刻）より先に記録する。手元は記録順、
+  // サーバーは発生時刻順に畳み込むので、順序が食い違わないようにする（PR #232 のレビュー）。
+  expect(recordedTypes().slice(-3)).toEqual(["question_asked", "error_recurred", "answer_viewed"]);
 });
 
 test("別のエラーではerror_recurredを記録しない", async () => {
@@ -912,8 +976,11 @@ test("他端末がサーバー側を削除したら、同期応答の削除時�
   expect(context.globalState.get(LEARNER_PROFILE_KEY)).toBeUndefined();
   // 直前に受理されたイベントは削除の後にサーバーへ書かれているため、
   // 消したあとの空のプロファイルへ記録し直して齟齬しないようにする。
-  const lastCall = recordEvent.mock.calls.at(-1);
-  expect((lastCall?.[1] as LearnerProfile).events).toEqual([]);
+  // 1回の質問は question_asked → answer_viewed の順に記録する。追従するのは
+  // 最初の question_asked の同期応答なので、その記録し直しが2回目の呼び出しになる。
+  const reRecorded = recordEvent.mock.calls[1];
+  expect((reRecorded?.[2] as LearningEvent).type).toBe("question_asked");
+  expect((reRecorded?.[1] as LearnerProfile).events).toEqual([]);
 });
 
 test("削除境界に吞まれたイベントは、追従しても記録し直さない", async () => {
@@ -944,8 +1011,11 @@ test("削除境界に吞まれたイベントは、追従しても記録し直�
 
   // 削除への追従自体は行われる。
   expect(context.globalState.get(APPLIED_RESET_KEY)).toBe(5_000);
-  // recordEvent は persistEvent 冒頭の1回だけ。追従後の記録し直しは無い。
-  expect(recordEvent).toHaveBeenCalledTimes(1);
+  // recordEvent は各イベントの persistEvent 冒頭の1回ずつだけ。追従後の記録し直しは無い。
+  expect(recordEvent.mock.calls.map(([, , event]) => (event as LearningEvent).type)).toEqual([
+    "question_asked",
+    "answer_viewed",
+  ]);
 });
 
 test("削除の実行中にコマンドを再度呼んでも二重には走らない", async () => {

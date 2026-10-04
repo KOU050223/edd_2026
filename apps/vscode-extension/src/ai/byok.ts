@@ -13,7 +13,7 @@
  */
 
 import type { AIProvider } from "./provider";
-import { buildPrompt, knownConceptsFor } from "./prompt";
+import { buildPrompt, knownConceptsFor, knownObjectivesFor } from "./prompt";
 import { MAX_HISTORY_TURNS, parseAnswer } from "./answer";
 import type { AIError, AIRequest, AIResponse } from "./types";
 
@@ -434,10 +434,13 @@ export class BYOKProvider implements AIProvider {
       const parsed = parseAnswer(
         text,
         new Set(knownConceptsFor(request).map((concept) => concept.id)),
+        new Map(
+          knownObjectivesFor(request).map((objective) => [objective.id, objective.conceptId]),
+        ),
       );
 
       this.debug(
-        `--- Concept抽出結果 ---\nconceptIds: ${JSON.stringify(parsed.conceptIds)}\nresolution: ${String(parsed.resolution)}`,
+        `--- Concept抽出結果 ---\nconceptIds: ${JSON.stringify(parsed.conceptIds)}\nobjectiveIds: ${JSON.stringify(parsed.objectiveIds)}\nresolution:${String(parsed.resolution)}`,
       );
 
       return {
@@ -445,6 +448,7 @@ export class BYOKProvider implements AIProvider {
         answer: {
           text: parsed.text,
           conceptIds: parsed.conceptIds,
+          objectiveIds: parsed.objectiveIds,
           model,
           ...(parsed.resolution ? { resolution: parsed.resolution } : {}),
         },

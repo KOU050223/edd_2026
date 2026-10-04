@@ -2,6 +2,13 @@ import { createFileRoute, Link, useNavigate, useRouter } from "@tanstack/react-r
 import { useRef, useState } from "react";
 import type { ConversationMessageRole } from "@gakushu-sochi/domain";
 import { ApiError, createSubmitGuard } from "../../api.js";
+import {
+  eventTypeLabel,
+  fetchConversationLearningEvents,
+  formatObjectiveDelta,
+  groupChangesByConcept,
+  type ConversationLearningEvent,
+} from "../../conversation-learning.js";
 import { deleteConversation, fetchConversation, originLabel } from "../../conversations.js";
 import { toErrorText } from "../../errors.js";
 import { takeLoginRetry } from "../../session.js";
@@ -12,12 +19,66 @@ const ROLE_LABEL: Record<ConversationMessageRole, string> = {
   assistant: "回答",
 };
 
+type LearningResult =
+  { ok: true; events: ConversationLearningEvent[] } | { ok: false; message: string };
+
+/**
+ * この会話で動いた「理解すること」（Web/15 #233）。
+ * 項目に触れたイベントだけが届く（answer_viewed や項目を持たない Concept は API が除く）。
+ */
+function LearningSection({ learning }: { learning: LearningResult }) {
+  return (
+    <section className="history-learning">
+      <h2>この会話で記録した学習</h2>
+      {!learning.ok ? (
+        <p className="error-text" role="alert">
+          学習の記録を読み込めませんでした：{learning.message}
+        </p>
+      ) : learning.events.length === 0 ? (
+        <p className="muted">この会話で理解度が動いた項目はありません。</p>
+      ) : (
+        <ul className="history-learning-events">
+          {learning.events.map((event) => (
+            <li key={event.id}>
+              <div className="msg-head">
+                <strong>{eventTypeLabel(event.type)}</strong>
+                <time dateTime={event.occurredAt} className="muted">
+                  {new Date(event.occurredAt).toLocaleString("ja-JP")}
+                </time>
+              </div>
+              {groupChangesByConcept(event.changes).map((group) => (
+                <div key={group.conceptId} className="history-learning-concept">
+                  <span className="history-learning-concept-label">{group.conceptLabel}</span>
+                  <ul>
+                    {group.changes.map((change) => (
+                      <li key={change.objectiveId}>
+                        {change.objectiveLabel}{" "}
+                        <span className="history-learning-delta">
+                          {formatObjectiveDelta(change)}
+                        </span>{" "}
+                        <span className="muted">
+                          （{Math.round(change.before * 100)}% → {Math.round(change.after * 100)}
+                          %）
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
 /**
  * 1会話の詳細（Issue #206）。一覧の `ConversationSummary` には本文が無いので、
  * ここでだけ `GET /v1/conversations/:id` を取る。
  */
 function ConversationDetail() {
-  const { conversation } = Route.useLoaderData();
+  const { conversation, learning } = Route.useLoaderData();
   const router = useRouter();
   const navigate = useNavigate();
   const submitGuard = useRef(createSubmitGuard());
@@ -86,6 +147,8 @@ function ConversationDetail() {
         )}
       </dl>
 
+      <LearningSection learning={learning} />
+
       <div className="history-messages">
         {conversation.messages.map((message, index) => (
           <article key={index} className={`history-message ${message.role}`}>
@@ -138,7 +201,17 @@ export const Route = createFileRoute("/_framed/history/$conversationId")({
   staleTime: 0,
   loader: async ({ params }) => {
     const conversation = await fetchConversation(fetch, takeLoginRetry(), params.conversationId);
-    return { conversation };
+    // ログイン直後の再試行は会話の取得で使い切っている（セッションは張れている）ので 0 回。
+    // 学習の表示は補足なので、取れなくても会話本文は見せ、失敗は節の中で伝える（RULE-004）。
+    const learning: LearningResult = await fetchConversationLearningEvents(
+      fetch,
+      0,
+      params.conversationId,
+    ).then(
+      (events) => ({ ok: true, events }),
+      (error: unknown) => ({ ok: false, message: toErrorText(error) }),
+    );
+    return { conversation, learning };
   },
   component: ConversationDetail,
 });

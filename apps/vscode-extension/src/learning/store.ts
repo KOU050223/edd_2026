@@ -12,6 +12,7 @@ import {
   applyEvent,
   createEmptyProfile,
   LEARNER_PROFILE_VERSION,
+  MOCK_LEARNING_OBJECTIVES,
   type LearnerProfile,
   type LearningEvent,
 } from "@gakushu-sochi/domain";
@@ -114,7 +115,9 @@ export async function recordEvent(
   event: LearningEvent,
   onError?: (error: unknown) => void,
 ): Promise<LearnerProfile> {
-  const updated = applyEvent(profile, event);
+  // 「理解すること」の一覧はサーバーの導出（apps/api の deriveMasteryFromEvents）と同じものを渡す。
+  // 渡さないと、項目を持つ Concept まで回数による判定で畳み込まれ、サーバーと意味がずれる。
+  const updated = applyEvent(profile, event, MOCK_LEARNING_OBJECTIVES);
   await saveProfile(context, updated, onError);
   return updated;
 }

@@ -1,4 +1,10 @@
-import { CONCEPTS, type AIRequest, type Concept } from "@gakushu-sochi/domain";
+import {
+  CONCEPTS,
+  MOCK_LEARNING_OBJECTIVES,
+  type AIRequest,
+  type Concept,
+  type LearningObjective,
+} from "@gakushu-sochi/domain";
 
 /** 応答本文の末尾に付けさせる、表示しないメタ情報の開始マーカー。 */
 export const META_MARKER = "<<code-companion-meta>>";
@@ -35,6 +41,30 @@ export function knownConceptsFor(request: AIRequest): readonly Concept[] {
     (concept) =>
       CROSS_DOMAIN_PREFIXES.has(concept.language) ||
       (languageId !== undefined && concept.language === conceptLanguageFor(languageId)),
+  );
+}
+
+/**
+ * このリクエストの「既知の項目一覧」に載る「理解すること」（設計/04 #223）。
+ *
+ * 2段で絞る。
+ * 1. 「既知の概念一覧」（{@link knownConceptsFor}）に載る Concept の項目だけ
+ * 2. 利用者がすでに満点（1.0）の項目は除く。質問は項目を上げるだけなので、
+ *    満点の項目は触れたと判定しても何も変わらず、プロンプトを長くするだけになる。
+ *
+ * 満点かどうかは `request.profile` の習熟度で見る。profile が無ければ除かない。
+ * {@link knownConceptsFor} と同じく、応答のパース側もこの結果で受理範囲を決める。
+ */
+export function knownObjectivesFor(request: AIRequest): readonly LearningObjective[] {
+  const conceptIds = new Set(knownConceptsFor(request).map((concept) => concept.id));
+  const values = new Map<string, number>();
+  for (const mastery of request.profile?.masteries ?? []) {
+    for (const [id, value] of Object.entries(mastery.objectives ?? {})) {
+      values.set(id, value);
+    }
+  }
+  return MOCK_LEARNING_OBJECTIVES.filter(
+    (objective) => conceptIds.has(objective.conceptId) && (values.get(objective.id) ?? 0) < 1,
   );
 }
 
@@ -165,14 +195,26 @@ export function buildPrompt(request: AIRequest): string {
     );
   }
 
+  const knownObjectives = knownObjectivesFor(request);
+  if (knownObjectives.length > 0) {
+    lines.push(
+      "",
+      "--- 既知の項目一覧（id: 理解すること） ---",
+      ...knownObjectives.map((objective) => `${objective.id}: ${objective.label}`),
+    );
+  }
+
   lines.push(
     "",
     "--- 出力形式 ---",
     `本文を書き終えたら、必ず最後に ${META_MARKER} という行を書き、続けてJSONを1つだけ書いてください。`,
-    '形式: {"conceptIds": ["関係する概念のID。分からなければ空配列"], "resolution": "resolved か unclear"}',
+    '形式: {"conceptIds": ["関係する概念のID。分からなければ空配列"], "objectiveIds": ["回答で説明した項目のID。分からなければ空配列"], "resolution": "resolved か unclear"}',
     knownConcepts.length > 0
       ? "conceptIds には、上記の「既知の概念一覧」に載っているIDの中から今回の話題に一致するものだけを入れてください。一覧に無い概念を無理に当てはめず、一致するものが無ければ空配列にしてください。"
       : "この言語向けの既知の概念一覧が無いため、conceptIds は空配列にしてください。",
+    knownObjectives.length > 0
+      ? "objectiveIds には、上記の「既知の項目一覧」に載っているIDの中から、今回の回答で実際に説明した項目だけを入れてください。話題が近いだけの項目は入れず、該当するものが無ければ空配列にしてください。項目を入れたときは、その項目の概念（ID の「:」より前）も conceptIds に入れてください。"
+      : "既知の項目一覧が無いため、objectiveIds は空配列にしてください。",
   );
 
   if ((request.history?.length ?? 0) > 0) {

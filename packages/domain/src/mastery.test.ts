@@ -6,8 +6,13 @@
  * イベントの到着順に依存せず結果が一意に決まることを確かめる。
  */
 
-import { expect, test } from "vitest";
-import { applyEvent, deriveMasteryFromEvents, isIsoDateTime } from "./mastery.js";
+import { describe, expect, test } from "vitest";
+import {
+  applyEvent,
+  deriveMasteryFromEvents,
+  deriveObjectiveChanges,
+  isIsoDateTime,
+} from "./mastery.js";
 import type { LearningObjective } from "./learning-objective.js";
 import { createEmptyProfile, type LearningEvent } from "./profile.js";
 
@@ -253,6 +258,56 @@ function objectiveEvent(type: LearningEvent["type"], objectiveIds: string[]): Le
     objectiveIds,
   };
 }
+
+describe("deriveObjectiveChanges（Web/15 #233）", () => {
+  test("イベントごとに、触れた項目の前後の値を返す。頭打ちで動かなかった項目も含める", () => {
+    const events = [
+      ...Array.from({ length: 10 }, () => objectiveEvent("question_asked", ["go.defer:timing"])),
+      objectiveEvent("question_asked", ["go.defer:timing", "go.defer:args"]),
+      objectiveEvent("solved_independently", ["go.defer:timing"]),
+    ];
+    const [, , , , , , , , , , capped, solved] = events;
+
+    const changes = deriveObjectiveChanges(events, DEFER_OBJECTIVES);
+
+    expect(changes[capped!.id]).toEqual([
+      { conceptId: "go.defer", objectiveId: "go.defer:timing", before: 0.5, after: 0.5 },
+      { conceptId: "go.defer", objectiveId: "go.defer:args", before: 0, after: 0.05 },
+    ]);
+    expect(changes[solved!.id]).toEqual([
+      { conceptId: "go.defer", objectiveId: "go.defer:timing", before: 0.5, after: 1 },
+    ]);
+  });
+
+  test("発生時刻順に畳み込み、最後の値は deriveMasteryFromEvents と一致する", () => {
+    const first = objectiveEvent("check_failed", ["go.defer:lifo"]);
+    const second = objectiveEvent("question_asked", ["go.defer:lifo"]);
+    const third = objectiveEvent("check_passed", ["go.defer:lifo"]);
+
+    // 到着順が入れ替わっても、発生時刻順の値になる。
+    const changes = deriveObjectiveChanges([third, second, first], DEFER_OBJECTIVES);
+
+    expect(changes[first.id]?.[0]).toMatchObject({ before: 0, after: 0 });
+    expect(changes[second.id]?.[0]).toMatchObject({ before: 0, after: 0.05 });
+    expect(changes[third.id]?.[0]).toMatchObject({ before: 0.05, after: 1 });
+    expect(deriveDefer([first, second, third])?.objectives?.["go.defer:lifo"]).toBe(
+      changes[third.id]?.[0]?.after,
+    );
+  });
+
+  test("一覧に載る項目に触れていないイベントは含めない", () => {
+    const noObjectives = event("plain", "2026-09-21T00:00:00.000Z", "question_asked", ["go.defer"]);
+    const unknownOnly = objectiveEvent("question_asked", ["go.defer:unknown"]);
+    const otherConcept = objectiveEvent("question_asked", ["go.slice:append"]);
+
+    const changes = deriveObjectiveChanges(
+      [noObjectives, unknownOnly, otherConcept],
+      DEFER_OBJECTIVES,
+    );
+
+    expect(changes).toEqual({});
+  });
+});
 
 function deriveDefer(events: LearningEvent[], objectives = DEFER_OBJECTIVES) {
   return deriveMasteryFromEvents(events, objectives)["go.defer"];
