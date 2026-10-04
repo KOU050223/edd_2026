@@ -85,7 +85,8 @@ roadmap.sh（`nilbuild/developer-roadmap`）の Go ロードマップは、各�
 
 `概要`（`Concept.summary`）は 1〜2 文で、次の2か所が読む。
 
-- UI での補足表示
+- Web の Concept 詳細パネル（見出しの下）。定義側の情報なので API の応答には載せず、
+  クライアントが `conceptId` で `CONCEPTS` から引く
 - **確認問題の生成（#184）が AI へ渡す入力**
 
 表示名だけでは問題の粒度と深さが決まらないため、生成の入力はここに依存する。
