@@ -11,9 +11,10 @@
  * （#184）。AI が例示コードごと生成する形へ読み替えてある。
  *
  * この型は API（生成・検証）とクライアント（出題・採点）で共有する。
- * **生成の入力に利用者個人の情報は入らない**ので、ここに `status` / `score` /
- * `evidence` に相当するものを持たせてはならない。問題は全利用者で共有できる
- * 静的コンテンツであり、それが #185 で 1 Concept 1組を使い回せる前提になっている。
+ *
+ * 問題は**利用者ごとに**生成して保存する（#236）。生成のときに利用者が技術レベル
+ * （{@link CheckLevel}）と範囲（{@link CheckScope}）を選び、「理解すること」を狙う組では
+ * その項目で自力解決した本人の質問を材料に渡す。保存した1組が {@link PersonalConceptCheck}。
  */
 
 import type { ConceptId } from "./profile.js";
@@ -91,6 +92,69 @@ export interface ConceptCheck {
   model?: string;
   /** 生成時刻。ISO 8601 形式。Concept の定義が変わった後の扱い（#185）に使う。 */
   generatedAt?: string;
+}
+
+/**
+ * 生成のときに利用者が選ぶ技術レベル（#236）。並びは易しい順。
+ *
+ * 出題の難しさを AI へ伝えるだけで、採点や理解度の増減には影響しない。
+ */
+export type CheckLevel = "intro" | "basic" | "advanced";
+
+export const CHECK_LEVELS: readonly CheckLevel[] = ["intro", "basic", "advanced"];
+
+export const CHECK_LEVEL_LABELS: Readonly<Record<CheckLevel, string>> = {
+  intro: "入門",
+  basic: "基礎",
+  advanced: "応用",
+};
+
+/**
+ * 保存した1組の狙い（#236）。
+ *
+ * - `objective`: 「理解すること」の1項目。1項目につき1組を作る（#226）
+ * - `concept`: Concept の定義から作った1組。**「理解すること」を持たない Concept だけ**に使う
+ *
+ * 画面の「Concept 単位」は、項目を持つ Concept では「まだ 1.0 でない項目を自動ですべて選ぶ」
+ * ことを意味し、作る組はどれも `objective` になる。項目を持つ Concept で `concept` の組を作ると、
+ * 正誤が項目の理解度に効かない（#223 決定 6）ため、API が受け付けない
+ * （#236 のコメント 5987364522）。概要単位は同じ理由で廃止した。
+ */
+export type CheckScope = "concept" | "objective";
+
+export const CHECK_SCOPES: readonly CheckScope[] = ["concept", "objective"];
+
+export const CHECK_SCOPE_LABELS: Readonly<Record<CheckScope, string>> = {
+  concept: "Concept 単位",
+  objective: "理解すること",
+};
+
+/**
+ * 利用者ごとに生成して保存した1組（#236）。
+ *
+ * 同じ利用者・Concept・狙い（{@link checkTargetOf}）につき1組だけを持ち、
+ * 「作り直す」と上書きする。
+ */
+export interface PersonalConceptCheck extends ConceptCheck {
+  scope: CheckScope;
+  level: CheckLevel;
+  /** `scope` が `objective` のときだけ持つ。狙った「理解すること」の ID。 */
+  objectiveId?: string;
+  model: string;
+  generatedAt: string;
+}
+
+/**
+ * 保存の単位（狙い）を表す文字列。`concept` か項目 ID。
+ *
+ * 項目 ID は `<Concept ID>:<識別子>` の形でコロンを含むので、`concept` と衝突しない。
+ */
+export function checkTargetOf(check: Pick<PersonalConceptCheck, "scope" | "objectiveId">): string {
+  if (check.scope !== "objective") return check.scope;
+  if (check.objectiveId === undefined) {
+    throw new Error("「理解すること」を狙う確認問題に項目 ID がありません");
+  }
+  return check.objectiveId;
 }
 
 /**

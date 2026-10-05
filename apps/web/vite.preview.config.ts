@@ -230,6 +230,34 @@ function sampleApi(): Plugin {
           void handleCompletionCheck(json);
           return;
         }
+        if (path === "/api/v1/checks") {
+          const conceptId = new URL(request.url ?? "", "http://preview").searchParams.get(
+            "conceptId",
+          );
+          return json({ checks: savedChecks.filter((check) => check.conceptId === conceptId) });
+        }
+        if (path === "/api/v1/checks:export") {
+          return json({ version: 1, exportedAt: new Date().toISOString(), checks: savedChecks });
+        }
+        if (path === "/api/v1/checks:generate") {
+          if (request.method !== "POST") return json({ error: "unavailable" }, 405);
+          void handleCheckGenerate(request, json);
+          return;
+        }
+        if (path === "/api/v1/check-generation-consent") {
+          if (request.method === "PUT") generationConsent = new Date().toISOString();
+          if (request.method === "DELETE") generationConsent = undefined;
+          return json({
+            version: 1,
+            granted: generationConsent !== undefined,
+            ...(generationConsent === undefined ? {} : { grantedAt: generationConsent }),
+          });
+        }
+        if (path === "/api/v1/learning-events:sync") {
+          if (request.method !== "POST") return json({ error: "unavailable" }, 405);
+          void handleEventsSync(request, json);
+          return;
+        }
         // 標本を用意していない経路を 200 で誤魔化さない。何が足りないかを画面に出す。
         if (path.startsWith("/api/")) return json({ error: "unavailable" }, 501);
         next();
@@ -260,6 +288,119 @@ async function handleOverridePut(
   } catch (error: unknown) {
     // 失敗を握りつぶさない（RULE-004）。標本側の壊れ方も画面に出す。
     console.error("標本 API の PUT が壊れた", error);
+    json({ error: "unavailable" }, 500);
+  }
+}
+
+/**
+ * 確認問題の標本（#43 / #236）。どの Concept・狙いにも同じ2問を返し、利用者ごとの保存を真似る。
+ * 本番は AI が生成して時間がかかるので、待ち表示が見えるよう少し遅らせる。
+ * `git.` の Concept は生成の失敗を返し、失敗の表示を確かめられるようにしてある。
+ */
+const savedChecks: Record<string, unknown>[] = [];
+/** 「今後表示しない」を選んだ時刻。未選択は undefined。 */
+let generationConsent: string | undefined;
+
+async function handleCheckGenerate(
+  request: IncomingMessage,
+  json: (body: unknown, status?: number) => void,
+) {
+  try {
+    const body = JSON.parse(await readBody(request)) as {
+      conceptId?: string;
+      scope?: string;
+      level?: string;
+      objectiveId?: string;
+      consentVersion?: number;
+    };
+    const { conceptId, scope, level, objectiveId } = body;
+    if (typeof conceptId !== "string" || typeof scope !== "string" || typeof level !== "string")
+      return json({ error: "unavailable" }, 400);
+    if (body.consentVersion !== 1 && generationConsent === undefined) {
+      return json(
+        {
+          error: "check generation consent required",
+          message: "問題を作る前に、AI へ送る内容を確認して同意してください。",
+          version: 1,
+        },
+        403,
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    if (conceptId.startsWith("git.")) {
+      return json(
+        {
+          error: "check generation failed",
+          reason: "truncated",
+          message: "AI の応答が途中で切れました。もう一度お試しください。",
+        },
+        502,
+      );
+    }
+    const check = {
+      conceptId,
+      overview: {
+        prompt: "Promise の説明として最も適切なものはどれですか。",
+        choices: [
+          "非同期処理の最終的な完了（または失敗）とその結果の値を表すオブジェクト",
+          "処理を必ず別スレッドで実行するための仕組み",
+          "同期処理を高速化するためのキャッシュ",
+          "例外を握りつぶして処理を続けるための構文",
+        ],
+        answerIndex: 0,
+        explanation:
+          "Promise は pending から fulfilled / rejected のどちらかへ一度だけ遷移し、その結果を then / await で受け取る。",
+      },
+      practice: {
+        prompt: "次のコードを実行したとき、コンソールに出る順番はどれですか。",
+        code: [
+          'console.log("A");',
+          'Promise.resolve().then(() => console.log("B"));',
+          'console.log("C");',
+        ].join("\n"),
+        choices: ["A → B → C", "A → C → B", "B → A → C", "C → A → B"],
+        answerIndex: 1,
+        explanation:
+          "then のコールバックはマイクロタスクとして、現在の同期処理（A と C の出力）が終わったあとに実行される。",
+      },
+      scope,
+      level,
+      ...(objectiveId === undefined ? {} : { objectiveId }),
+      model: "preview",
+      generatedAt: new Date().toISOString(),
+    };
+    const target = objectiveId ?? scope;
+    const index = savedChecks.findIndex(
+      (saved) => saved.conceptId === conceptId && (saved.objectiveId ?? saved.scope) === target,
+    );
+    if (index >= 0) savedChecks.splice(index, 1);
+    savedChecks.unshift(check);
+    json(check);
+  } catch (error: unknown) {
+    console.error("標本 API の確認問題が壊れた", error);
+    json({ error: "unavailable" }, 500);
+  }
+}
+
+/** 学習イベントの同期。1件ずつ受理したことにする。2回目以降の同じ id は duplicate。 */
+const syncedEventIds = new Set<string>();
+
+async function handleEventsSync(
+  request: IncomingMessage,
+  json: (body: unknown, status?: number) => void,
+) {
+  try {
+    const { events } = JSON.parse(await readBody(request)) as { events?: { id: string }[] };
+    if (!Array.isArray(events)) return json({ error: "unavailable" }, 400);
+    console.info("標本 API が学習イベントを受けた", events);
+    const results = events.map((event, index) => {
+      const status = syncedEventIds.has(event.id) ? "duplicate" : "accepted";
+      syncedEventIds.add(event.id);
+      return { index, id: event.id, status };
+    });
+    json({ results, historyResetAtMs: null });
+  } catch (error: unknown) {
+    console.error("標本 API の同期が壊れた", error);
     json({ error: "unavailable" }, 500);
   }
 }

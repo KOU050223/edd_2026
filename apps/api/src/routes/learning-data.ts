@@ -26,6 +26,7 @@ import type {
   ImportSessionRepository,
   LearningEventRepository,
   LearningEvidenceRepository,
+  PersonalCheckRepository,
 } from "../repository/types.js";
 
 export interface LearningDataDeps {
@@ -46,6 +47,11 @@ export interface LearningDataDeps {
    * docs/conversation-history.md「保存期間と既知の限界」で受け入れている。
    */
   conversations: ConversationRepository;
+  /**
+   * 利用者ごとの確認問題（Issue #236）。本人の学習データを材料に作った個人データなので、
+   * 学習データの削除で一緒に消す。全員共通の `concept_checks` は対象外のまま。
+   */
+  checks: PersonalCheckRepository;
   /** 監査ログ（Issue #122）。エクスポートと削除を「誰がいつ何をしたか」として残す。 */
   audit: AuditLogRepository;
   /** 現在時刻を ISO 8601 で返す。テストで固定できるよう注入する。 */
@@ -67,6 +73,8 @@ export interface DeleteLearningEventsResponse {
   deletedSessionCount: number;
   /** 一緒に消した会話履歴の件数（Issue #204）。 */
   deletedConversationCount: number;
+  /** 一緒に消した確認問題の件数（Issue #236）。 */
+  deletedCheckCount: number;
   /**
    * `learning_history_resets` へ記録した削除時刻（epoch ミリ秒）。
    *
@@ -130,6 +138,8 @@ export function createLearningDataRoute(resolve: LearningDataDepsResolver) {
     // 質問履歴も消す。オプトインで保存した本文データが「学習データを消した」
     // あとに残ると、利用者から見て削除が約束どおり働いていない（Issue #204）。
     const deletedConversationCount = await deps.conversations.deleteAllByUser(userId);
+    // 確認問題も消す。質問履歴を材料に作った問題が、履歴を消したあとに残らないようにする（#236）。
+    const deletedCheckCount = await deps.checks.deleteAllByUser(userId);
 
     await deps.audit.record({
       userId,
@@ -140,6 +150,7 @@ export function createLearningDataRoute(resolve: LearningDataDepsResolver) {
         deletedEvidenceCount,
         deletedSessionCount,
         deletedConversationCount,
+        deletedCheckCount,
       },
     });
 
@@ -160,6 +171,7 @@ export function createLearningDataRoute(resolve: LearningDataDepsResolver) {
       deletedEvidenceCount,
       deletedSessionCount,
       deletedConversationCount,
+      deletedCheckCount,
       resetAtMs,
     };
     return c.json(body);

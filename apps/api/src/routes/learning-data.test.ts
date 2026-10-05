@@ -19,6 +19,7 @@ import {
   InMemoryImportSessionRepository,
   InMemoryLearningEventRepository,
   InMemoryLearningEvidenceRepository,
+  InMemoryPersonalCheckRepository,
   type InMemoryRepositoryStore,
 } from "../repository/memory.js";
 import type { LearningProfileResponse } from "../contract/learning-profile.js";
@@ -33,6 +34,7 @@ let events: InMemoryLearningEventRepository;
 let evidence: InMemoryLearningEvidenceRepository;
 let sessions: InMemoryImportSessionRepository;
 let conversations: InMemoryConversationRepository;
+let personalChecks: InMemoryPersonalCheckRepository;
 /** 現在時刻（epoch ミリ秒）。テストの中で進めて、削除の前後を作る。 */
 let clockMs: number;
 let app: Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>;
@@ -53,6 +55,7 @@ beforeEach(() => {
   evidence = new InMemoryLearningEvidenceRepository(store);
   sessions = new InMemoryImportSessionRepository(store);
   conversations = new InMemoryConversationRepository(store);
+  personalChecks = new InMemoryPersonalCheckRepository(store);
   clockMs = 1_000;
   app = new Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>();
   app.use("/v1/*", stubAuth(TOKENS));
@@ -66,6 +69,7 @@ beforeEach(() => {
       evidence,
       sessions,
       conversations,
+      checks: personalChecks,
       audit: new InMemoryAuditLogRepository(store),
       nowIso: () => NOW,
       nowMs: () => clockMs,
@@ -174,6 +178,7 @@ test("削除は自分のイベントを全件消し、件数と削除時刻を�
     deletedEvidenceCount: 0,
     deletedSessionCount: 0,
     deletedConversationCount: 0,
+    deletedCheckCount: 0,
     resetAtMs: 1_000,
   });
   expect(await events.countByUser("user-a")).toBe(0);
@@ -192,6 +197,7 @@ test("削除を再実行しても失敗しない", async () => {
     deletedEvidenceCount: 0,
     deletedSessionCount: 0,
     deletedConversationCount: 0,
+    deletedCheckCount: 0,
     resetAtMs: 1_000,
   });
 });
@@ -233,6 +239,7 @@ test("削除は外部履歴由来の Evidence と Import Session も一緒に消
     deletedEvidenceCount: 1,
     deletedSessionCount: 1,
     deletedConversationCount: 0,
+    deletedCheckCount: 0,
     resetAtMs: 1_000,
   });
   expect(await evidence.listByUser("user-a")).toEqual([]);
@@ -279,6 +286,7 @@ test("削除は質問履歴の会話も一緒に消す", async () => {
     deletedEvidenceCount: 0,
     deletedSessionCount: 0,
     deletedConversationCount: 1,
+    deletedCheckCount: 0,
     resetAtMs: 1_000,
   });
   // 他人の会話は残る。会話 ID はユーザー単位でしか一意にならない。
@@ -346,6 +354,7 @@ test("削除は監査ログに件数とともに記録される", async () => {
         deletedEvidenceCount: 0,
         deletedSessionCount: 0,
         deletedConversationCount: 0,
+        deletedCheckCount: 0,
       },
     },
   ]);
@@ -395,6 +404,7 @@ test("削除しても他人のイベントと習熟度は残る", async () => {
     deletedEvidenceCount: 0,
     deletedSessionCount: 0,
     deletedConversationCount: 0,
+    deletedCheckCount: 0,
     resetAtMs: 1_000,
   });
   expect(await events.countByUser("user-b")).toBe(2);
@@ -451,6 +461,7 @@ test("まだ一度も同期していない利用者の削除も、並行する�
     deletedEvidenceCount: 0,
     deletedSessionCount: 0,
     deletedConversationCount: 0,
+    deletedCheckCount: 0,
     resetAtMs: 1_000,
   });
 
@@ -476,6 +487,7 @@ test("削除応答の削除時刻は、巻き戻らなかった記録後の実�
     deletedEvidenceCount: 0,
     deletedSessionCount: 0,
     deletedConversationCount: 0,
+    deletedCheckCount: 0,
     resetAtMs: 2_000,
   });
 });
@@ -526,4 +538,22 @@ test("保存した確認問題は学習データの削除で消えず、エク�
   expect(deleted.status).toBe(200);
   expect(await events.countByUser("user-a")).toBe(0);
   await expect(checks.get("go.defer")).resolves.toEqual(storedCheck("go.defer"));
+});
+
+test("利用者ごとの確認問題は学習データの削除で一緒に消え、他人の分は残る", async () => {
+  // 本人の質問履歴を材料に作った個人データなので、履歴と一緒に消す（#236）。
+  const personal = {
+    ...storedCheck("go.defer").check,
+    scope: "concept" as const,
+    level: "basic" as const,
+  };
+  await personalChecks.put("user-a", personal, 0);
+  await personalChecks.put("user-b", personal, 0);
+  await seed("user-a", [event({ id: "e1" })]);
+
+  const deleted = await request("/v1/learning-events", "token-a", "DELETE");
+  expect(deleted.status).toBe(200);
+  expect(((await deleted.json()) as DeleteLearningEventsResponse).deletedCheckCount).toBe(1);
+  await expect(personalChecks.listAllByUser("user-a")).resolves.toEqual([]);
+  await expect(personalChecks.listAllByUser("user-b")).resolves.toEqual([personal]);
 });

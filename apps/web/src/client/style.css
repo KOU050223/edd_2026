@@ -927,6 +927,324 @@ button.link:disabled {
   font-weight: 600;
 }
 
+/* 確認問題（Issue #43）。Concept 詳細からの導線と、2問を解く専用ページ。 */
+.check-link {
+  display: inline-block;
+  border-radius: 8px;
+  padding: 8px 12px;
+  background: #0f766e;
+  color: #fff;
+  font-size: 14px;
+  text-decoration: none;
+}
+.check-page {
+  max-width: 760px;
+}
+.check-page h1 {
+  font-size: 1.25rem;
+  margin: 0 0 8px;
+}
+.check-page form {
+  display: grid;
+  gap: 16px;
+  margin-top: 16px;
+}
+.check-question {
+  margin: 0;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 14px 18px;
+  min-width: 0;
+}
+.check-question.correct {
+  border-color: #047857;
+}
+.check-question.incorrect {
+  border-color: #b91c1c;
+}
+.check-question legend {
+  padding: 0 6px;
+  font-weight: 600;
+  font-size: 14px;
+  color: #475569;
+}
+/* 正誤は色だけで伝えない。「正解」「不正解」の文字を必ず並べる。 */
+.check-verdict {
+  margin-left: 10px;
+}
+.check-question.correct .check-verdict {
+  color: #047857;
+}
+.check-question.incorrect .check-verdict {
+  color: #b91c1c;
+}
+.check-prompt {
+  margin: 4px 0 10px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+.check-code {
+  margin: 0 0 12px;
+  padding: 12px 14px;
+  background: #0f172a;
+  color: #e2e8f0;
+  border-radius: 8px;
+  overflow-x: auto;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.check-choices {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.check-choice label {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  padding: 8px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  cursor: pointer;
+  line-height: 1.5;
+}
+.check-choice label:has(input:checked) {
+  border-color: #0f766e;
+  background: #f0fdfa;
+}
+.check-choice input:disabled {
+  cursor: default;
+}
+.check-choice.answer label {
+  border-color: #047857;
+  background: #ecfdf5;
+}
+.check-choice.wrong label {
+  border-color: #b91c1c;
+  background: #fef2f2;
+}
+.check-mark {
+  margin-left: auto;
+  flex: none;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 600;
+}
+.check-choice.answer .check-mark {
+  color: #047857;
+}
+.check-choice.wrong .check-mark {
+  color: #b91c1c;
+}
+.check-explanation {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  background: #f8fafc;
+  border-radius: 8px;
+  font-size: 14px;
+  line-height: 1.6;
+}
+.check-page .actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+.check-page .actions button {
+  border: 0;
+  border-radius: 8px;
+  padding: 10px 14px;
+  background: #0f766e;
+  color: #fff;
+  font: inherit;
+  cursor: pointer;
+}
+.check-page .actions button:disabled {
+  background: #cbd5e1;
+  color: #475569;
+  cursor: not-allowed;
+}
+.check-result {
+  margin-top: 20px;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 14px 18px;
+}
+.check-result.passed {
+  border-color: #047857;
+}
+.check-result p {
+  margin: 0 0 10px;
+}
+.check-record-failed {
+  margin-bottom: 10px;
+}
+/* 問題を作る（#236）。技術レベル・範囲・項目を選び、送る内容を確認してから作る。 */
+.check-generate,
+.check-sets {
+  margin-top: 24px;
+}
+.check-generate {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 14px 18px;
+}
+.check-generate h2,
+.check-sets h2 {
+  font-size: 16px;
+  margin: 0 0 10px;
+}
+.check-field {
+  margin-bottom: 14px;
+}
+.check-field > .muted {
+  margin: 6px 0 0;
+  font-size: 13px;
+}
+.check-field-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: #475569;
+  margin-bottom: 6px;
+}
+.check-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.check-option {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  padding: 6px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 14px;
+}
+.check-option:has(input:checked) {
+  border-color: #0f766e;
+  background: #f0fdfa;
+}
+.check-option:has(input:disabled) {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+.check-objectives {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+.check-objectives label {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  padding: 6px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.check-objectives label:hover {
+  background: #f8fafc;
+}
+.check-objective-meta {
+  margin-left: auto;
+  flex: none;
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  color: #64748b;
+  font-variant-numeric: tabular-nums;
+}
+.check-consent {
+  border: 1px solid #0f766e;
+  background: #f0fdfa;
+  border-radius: 10px;
+  padding: 12px 14px;
+  font-size: 14px;
+  line-height: 1.6;
+}
+.check-consent p {
+  margin: 0;
+}
+.check-consent-remember {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 10px 0;
+}
+.check-failures {
+  margin: 10px 0 0;
+  padding-left: 1.2em;
+}
+.check-set {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid #e2e8f0;
+}
+.check-set:first-of-type {
+  border-top: 0;
+  padding-top: 0;
+}
+.check-set-head {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+.check-set-head h3 {
+  font-size: 15px;
+  margin: 0;
+}
+.check-set-head .muted {
+  margin: 2px 0 0;
+  font-size: 13px;
+}
+.check-set form {
+  margin-top: 10px;
+}
+.check-result h4 {
+  font-size: 15px;
+  margin: 0 0 6px;
+}
+.check-page .actions button.secondary,
+.check-set-head button.secondary {
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 6px 12px;
+  background: #fff;
+  color: #334155;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  flex: none;
+}
+.check-set-head button.secondary:disabled,
+.check-page .actions button.secondary:disabled {
+  color: #94a3b8;
+  cursor: not-allowed;
+}
+.check-record-failed button {
+  margin-top: 8px;
+  border: 0;
+  border-radius: 8px;
+  padding: 8px 12px;
+  background: #0f766e;
+  color: #fff;
+  font: inherit;
+  cursor: pointer;
+}
+
 @media (max-width: 600px) {
   .map-layout {
     grid-template-columns: 1fr;

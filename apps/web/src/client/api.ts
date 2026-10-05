@@ -145,19 +145,24 @@ async function sendJson<T>(
   }
   if (!response.ok) {
     const body = (await response.json().catch(() => ({}))) as { error?: string };
-    if (body.error === "login_required") throw new ApiError("login_required");
-    if (body.error === "session_expired") throw new ApiError("session_expired");
-    if (body.error === "auth_unavailable") throw new ApiError("auth_unavailable");
-    if (body.error === "consent_required") throw new ApiError("consent_required");
-    if (response.status === 429) throw new ApiError("rate_limited");
-    if (response.status === 404) throw new ApiError("not_found");
-    throw new ApiError("unavailable");
+    throw writeErrorOf(response.status, body);
   }
   try {
     return (await response.json()) as T;
   } catch {
     throw new ApiError("unavailable");
   }
+}
+
+/** 書き込みが 2xx 以外で返ったときの失敗。本文を独自に読む経路（確認問題の生成）も同じ規則で分ける。 */
+export function writeErrorOf(status: number, body: { error?: unknown }): ApiError {
+  if (body.error === "login_required") return new ApiError("login_required");
+  if (body.error === "session_expired") return new ApiError("session_expired");
+  if (body.error === "auth_unavailable") return new ApiError("auth_unavailable");
+  if (body.error === "consent_required") return new ApiError("consent_required");
+  if (status === 429) return new ApiError("rate_limited");
+  if (status === 404) return new ApiError("not_found");
+  return new ApiError("unavailable");
 }
 
 /** 理解度の手動上書きを保存する。 */

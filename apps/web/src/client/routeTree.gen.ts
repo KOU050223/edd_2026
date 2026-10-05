@@ -14,6 +14,7 @@ import { Route as LoginFailedRouteImport } from './routes/login-failed'
 import { Route as FramedIndexRouteImport } from './routes/_framed/index'
 import { Route as FramedActivityRouteImport } from './routes/_framed/activity'
 import { Route as FramedSettingsRouteRouteImport } from './routes/_framed/settings/route'
+import { Route as FramedCheckConceptIdRouteImport } from './routes/_framed/check.$conceptId'
 import { Route as FramedHistoryIndexRouteImport } from './routes/_framed/history.index'
 import { Route as FramedHistoryConversationIdRouteImport } from './routes/_framed/history.$conversationId'
 import { Route as FramedMapLanguageRouteImport } from './routes/_framed/map.$language'
@@ -44,6 +45,11 @@ const FramedActivityRoute = FramedActivityRouteImport.update({
 const FramedSettingsRouteRoute = FramedSettingsRouteRouteImport.update({
   id: '/settings',
   path: '/settings',
+  getParentRoute: () => FramedRouteRoute,
+} as any)
+const FramedCheckConceptIdRoute = FramedCheckConceptIdRouteImport.update({
+  id: '/check/$conceptId',
+  path: '/check/$conceptId',
   getParentRoute: () => FramedRouteRoute,
 } as any)
 const FramedHistoryIndexRoute = FramedHistoryIndexRouteImport.update({
@@ -88,6 +94,7 @@ export interface FileRoutesByFullPath {
   '/login-failed': typeof LoginFailedRoute
   '/settings': typeof FramedSettingsRouteRouteWithChildren
   '/activity': typeof FramedActivityRoute
+  '/check/$conceptId': typeof FramedCheckConceptIdRoute
   '/history/$conversationId': typeof FramedHistoryConversationIdRoute
   '/map/$language': typeof FramedMapLanguageRoute
   '/settings/billing': typeof FramedSettingsBillingRoute
@@ -100,6 +107,7 @@ export interface FileRoutesByTo {
   '/login-failed': typeof LoginFailedRoute
   '/activity': typeof FramedActivityRoute
   '/': typeof FramedIndexRoute
+  '/check/$conceptId': typeof FramedCheckConceptIdRoute
   '/history/$conversationId': typeof FramedHistoryConversationIdRoute
   '/map/$language': typeof FramedMapLanguageRoute
   '/settings/billing': typeof FramedSettingsBillingRoute
@@ -115,6 +123,7 @@ export interface FileRoutesById {
   '/_framed/settings': typeof FramedSettingsRouteRouteWithChildren
   '/_framed/activity': typeof FramedActivityRoute
   '/_framed/': typeof FramedIndexRoute
+  '/_framed/check/$conceptId': typeof FramedCheckConceptIdRoute
   '/_framed/history/$conversationId': typeof FramedHistoryConversationIdRoute
   '/_framed/map/$language': typeof FramedMapLanguageRoute
   '/_framed/settings/billing': typeof FramedSettingsBillingRoute
@@ -130,6 +139,7 @@ export interface FileRouteTypes {
     | '/login-failed'
     | '/settings'
     | '/activity'
+    | '/check/$conceptId'
     | '/history/$conversationId'
     | '/map/$language'
     | '/settings/billing'
@@ -142,6 +152,7 @@ export interface FileRouteTypes {
     | '/login-failed'
     | '/activity'
     | '/'
+    | '/check/$conceptId'
     | '/history/$conversationId'
     | '/map/$language'
     | '/settings/billing'
@@ -156,6 +167,7 @@ export interface FileRouteTypes {
     | '/_framed/settings'
     | '/_framed/activity'
     | '/_framed/'
+    | '/_framed/check/$conceptId'
     | '/_framed/history/$conversationId'
     | '/_framed/map/$language'
     | '/_framed/settings/billing'
@@ -205,6 +217,13 @@ declare module '@tanstack/react-router' {
       path: '/settings'
       fullPath: '/settings'
       preLoaderRoute: typeof FramedSettingsRouteRouteImport
+      parentRoute: typeof FramedRouteRoute
+    }
+    '/_framed/check/$conceptId': {
+      id: '/_framed/check/$conceptId'
+      path: '/check/$conceptId'
+      fullPath: '/check/$conceptId'
+      preLoaderRoute: typeof FramedCheckConceptIdRouteImport
       parentRoute: typeof FramedRouteRoute
     }
     '/_framed/history/': {
@@ -280,6 +299,7 @@ interface FramedRouteRouteChildren {
   FramedSettingsRouteRoute: typeof FramedSettingsRouteRouteWithChildren
   FramedActivityRoute: typeof FramedActivityRoute
   FramedIndexRoute: typeof FramedIndexRoute
+  FramedCheckConceptIdRoute: typeof FramedCheckConceptIdRoute
   FramedHistoryConversationIdRoute: typeof FramedHistoryConversationIdRoute
   FramedMapLanguageRoute: typeof FramedMapLanguageRoute
   FramedHistoryIndexRoute: typeof FramedHistoryIndexRoute
@@ -289,6 +309,7 @@ const FramedRouteRouteChildren: FramedRouteRouteChildren = {
   FramedSettingsRouteRoute: FramedSettingsRouteRouteWithChildren,
   FramedActivityRoute: FramedActivityRoute,
   FramedIndexRoute: FramedIndexRoute,
+  FramedCheckConceptIdRoute: FramedCheckConceptIdRoute,
   FramedHistoryConversationIdRoute: FramedHistoryConversationIdRoute,
   FramedMapLanguageRoute: FramedMapLanguageRoute,
   FramedHistoryIndexRoute: FramedHistoryIndexRoute,

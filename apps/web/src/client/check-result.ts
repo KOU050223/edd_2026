@@ -41,10 +41,15 @@ export type CheckCorrectness = Readonly<Record<CheckQuestionKind, boolean>>;
  * **2問とも正解のときだけ** `check_passed`、どちらか不正解なら `check_failed`（#43）。
  * 再送しても二重に数えられないよう、呼び出し側は同じイベント（同じ `id`）を持ち回して
  * 送り直す。`id` を引数で受けるのはそのためである。
+ *
+ * 「理解すること」を狙った組なら `objectiveId` を載せる。正解でその項目を 1.0、
+ * 不正解でその項目だけ −0.25 にする規則（docs/concepts.md「項目ごとの理解度」）は
+ * サーバーがイベントから導出する。狙っていない組では項目を動かさない。
  */
 export function checkResultEvent(input: {
   conceptId: ConceptId;
   correct: CheckCorrectness;
+  objectiveId?: string;
   id: string;
   now: Date;
 }): LearningEvent {
@@ -56,6 +61,7 @@ export function checkResultEvent(input: {
     type: passed ? "check_passed" : "check_failed",
     origin: "web",
     conceptIds: [input.conceptId],
+    ...(input.objectiveId === undefined ? {} : { objectiveIds: [input.objectiveId] }),
   };
 }
 

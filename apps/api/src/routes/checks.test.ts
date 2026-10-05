@@ -1,21 +1,31 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
+import {
+  CHECK_GENERATION_CONSENT_VERSION,
+  type LearningEvent,
+  type LearningObjective,
+} from "@gakushu-sochi/domain";
 import { createAuth, type AuthVariables } from "../auth/middleware.js";
 import type { AuthVerifier } from "../auth/verifier.js";
 import { AI_USAGE_LIMITS } from "../contract/ai-usage.js";
 import { InMemoryAiUsageRepository } from "../repository/ai-usage.js";
-import { CHECK_FORMAT_VERSION, promptSha256 } from "../checks/cache.js";
-import { buildCheckPrompt, checkPromptInputFor } from "../checks/prompt.js";
+import { InMemoryUserSettingsRepository } from "../repository/user-settings.js";
 import {
-  InMemoryConceptCheckRepository,
+  createInMemoryRepositoryStore,
+  InMemoryAuditLogRepository,
+  InMemoryCheckGenerationConsentRepository,
+  InMemoryConversationRepository,
   InMemoryIdentityRepository,
+  InMemoryLearningEventRepository,
+  InMemoryPersonalCheckRepository,
+  type InMemoryRepositoryStore,
 } from "../repository/memory.js";
-import type { AiUsageRepository, ConceptCheckRepository } from "../repository/types.js";
 import { createAiRoute } from "./ai.js";
 import { createChecksRoute } from "./checks.js";
 
 const CONCEPT_ID = "go.pointer_receiver";
 const NOW = new Date("2026-09-26T09:00:00.000Z");
+const USER_A = "auth0|user-a";
 
 const PASSING_LIMITER = {
   limit: () => Promise.resolve({ success: true }),
@@ -27,31 +37,47 @@ const BLOCKING_LIMITER = {
 
 /**
  * 認証を通ったものとして、トークンごとに固定の sub を返す検証器（`ai.test.ts` と同じ継ぎ目）。
- * 保存した問題が利用者をまたいで使い回されることを見るため、2人分を持つ。
+ * 問題と材料が利用者をまたがないことを見るため、2人分を持つ。
  */
 const VERIFIER: AuthVerifier = {
   verify: (token) => {
-    if (token === "valid-token") return Promise.resolve({ sub: "auth0|user-a" });
+    if (token === "valid-token") return Promise.resolve({ sub: USER_A });
     if (token === "other-token") return Promise.resolve({ sub: "auth0|user-b" });
     return Promise.reject(new Error("unexpected token in test"));
   },
 };
 
+const OBJECTIVE_ID = `${CONCEPT_ID}:copy`;
+const OBJECTIVES: LearningObjective[] = [
+  { id: OBJECTIVE_ID, conceptId: CONCEPT_ID, label: "値レシーバには複製が渡る" },
+  { id: `${CONCEPT_ID}:choose`, conceptId: CONCEPT_ID, label: "レシーバの選び方" },
+];
+
 interface Harness {
   app: Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>;
-  usage: AiUsageRepository;
-  checks: ConceptCheckRepository;
+  store: InMemoryRepositoryStore;
+  checks: InMemoryPersonalCheckRepository;
+  consents: InMemoryCheckGenerationConsentRepository;
+  events: InMemoryLearningEventRepository;
+  conversations: InMemoryConversationRepository;
+  settings: InMemoryUserSettingsRepository;
 }
 
 /**
  * `app.ts` と同じ組み立てを、生成ルートの分だけ作る。
  *
- * AI ルートも同じ `AiUsageRepository` へ載せる。生成が回数を消費していないことを、
+ * AI ルートも同じ `AiUsageRepository` へ載せる。生成が回数を消費したことを、
  * 利用者向けの読み取り（`GET /v1/ai/usage`）から確かめられるようにするため。
  */
-function buildApp(checks: ConceptCheckRepository = new InMemoryConceptCheckRepository()): Harness {
+function buildApp(objectives: readonly LearningObjective[] = []): Harness {
+  const store = createInMemoryRepositoryStore();
   const usage = new InMemoryAiUsageRepository();
-  const identity = new InMemoryIdentityRepository();
+  const identity = new InMemoryIdentityRepository(store);
+  const checks = new InMemoryPersonalCheckRepository(store);
+  const consents = new InMemoryCheckGenerationConsentRepository(store);
+  const events = new InMemoryLearningEventRepository(store);
+  const conversations = new InMemoryConversationRepository(store);
+  const settings = new InMemoryUserSettingsRepository();
   const app = new Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>();
   app.use(
     "/v1/*",
@@ -64,6 +90,14 @@ function buildApp(checks: ConceptCheckRepository = new InMemoryConceptCheckRepos
       model: env.GEMINI_MODEL,
       fetch: (input, init) => globalThis.fetch(input, init),
       checks,
+      consents,
+      events,
+      conversations,
+      settings,
+      usage,
+      identity,
+      audit: new InMemoryAuditLogRepository(store),
+      objectives,
       now: () => NOW,
     })),
   );
@@ -78,7 +112,7 @@ function buildApp(checks: ConceptCheckRepository = new InMemoryConceptCheckRepos
       now: () => NOW,
     })),
   );
-  return { app, usage, checks };
+  return { app, store, checks, consents, events, conversations, settings };
 }
 
 const ENV = {
@@ -125,9 +159,19 @@ function stubUpstream(text: string, totalTokenCount = 900) {
   return fetchMock;
 }
 
+/** その場で同意した、Concept 単位・基礎の生成（項目を持たない Concept で使う）。 */
+const CONCEPT_BASIC = {
+  conceptId: CONCEPT_ID,
+  scope: "concept",
+  level: "basic",
+  consentVersion: CHECK_GENERATION_CONSENT_VERSION,
+};
+
+const OBJECTIVE_BASIC = { ...CONCEPT_BASIC, scope: "objective", objectiveId: OBJECTIVE_ID };
+
 function generate(
   harness: Harness,
-  body: Record<string, unknown> = { conceptId: CONCEPT_ID },
+  body: Record<string, unknown> = CONCEPT_BASIC,
   env: CloudflareBindings = ENV,
   token = "valid-token",
 ) {
@@ -142,7 +186,77 @@ function generate(
   );
 }
 
-/** 生成のコストが載る唯一の記録なので、テスト中は黙らせた上で内容を確かめる。 */
+function call(
+  harness: Harness,
+  path: string,
+  init: { method?: string; body?: string } = {},
+  token = "valid-token",
+) {
+  return harness.app.request(
+    `https://api.example.test/v1${path}`,
+    {
+      ...init,
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    },
+    ENV,
+  );
+}
+
+async function usedToday(harness: Harness): Promise<number> {
+  const usage = await call(harness, "/ai/usage");
+  const body = (await usage.json()) as { managedAi: { daily: { used: number } } };
+  return body.managedAi.daily.used;
+}
+
+/**
+ * 本人が項目を自力解決した会話を、学習イベントと会話の両方に置く。
+ * 「質問履歴の保存」も有効にする（会話が保存されるのは有効なときだけなので、実際の状態に揃える）。
+ */
+async function seedSolvedConversation(
+  harness: Harness,
+  conversationId: string,
+  occurredAt: string,
+  questionText: string,
+) {
+  await harness.settings.put(USER_A, { saveConversationHistory: true }, occurredAt);
+  const event: LearningEvent = {
+    id: `event-${conversationId}`,
+    occurredAt,
+    type: "solved_independently",
+    origin: "vscode",
+    conceptIds: [CONCEPT_ID],
+    objectiveIds: [OBJECTIVE_ID],
+    sessionId: conversationId,
+  };
+  await harness.events.append(USER_A, [
+    { event, clientId: "vscode-1", receivedAtMs: Date.parse(occurredAt) },
+  ]);
+  await harness.conversations.upsert(
+    USER_A,
+    {
+      id: conversationId,
+      origin: "vscode",
+      occurredAt,
+      updatedAt: occurredAt,
+      complete: true,
+      messages: [
+        { role: "context", text: "SELECTED-CODE-SECRET", at: occurredAt },
+        { role: "user", text: questionText, at: occurredAt },
+        { role: "assistant", text: "ASSISTANT-ANSWER", at: occurredAt },
+      ],
+    },
+    Date.parse(occurredAt),
+  );
+}
+
+/** 上流へ送ったプロンプトの本文。 */
+function sentPrompt(fetchMock: ReturnType<typeof stubUpstream>): string {
+  const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+  const body = JSON.parse(String(init.body)) as { contents: { parts: { text: string }[] }[] };
+  return body.contents[0]!.parts[0]!.text;
+}
+
+/** 生成の記録は運用で追う材料なので、テスト中は黙らせた上で内容を確かめる。 */
 function silenceInfo() {
   return vi.spyOn(console, "info").mockImplementation(() => undefined);
 }
@@ -157,22 +271,27 @@ afterEach(() => {
 });
 
 describe("POST /v1/checks:generate", () => {
-  it("概要問題と実践問題の2問を返す", async () => {
+  it("概要問題と実践問題の2問を、選んだ範囲とレベル付きで返して保存する", async () => {
     const fetchMock = stubUpstream(generatedCheck());
     silenceInfo();
+    const harness = buildApp();
 
-    const response = await generate(buildApp());
+    const response = await generate(harness);
 
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("no-store");
-    await expect(response.json()).resolves.toEqual({
+    const expected = {
       conceptId: CONCEPT_ID,
       overview: question(),
       practice: question({ code: "func (c Counter) Add() { c.n++ }" }),
+      scope: "concept",
+      level: "basic",
       model: "gemini-3.6-flash",
       generatedAt: NOW.toISOString(),
-    });
+    };
+    await expect(response.json()).resolves.toEqual(expected);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    await expect(harness.checks.listByConcept(USER_A, CONCEPT_ID)).resolves.toEqual([expected]);
   });
 
   it("上流へはタイムアウトと出力上限を付けて送る", async () => {
@@ -197,69 +316,322 @@ describe("POST /v1/checks:generate", () => {
     });
   });
 
-  it("プロンプトに Concept の定義だけを載せ、個人の情報を送らない", async () => {
-    const fetchMock = stubUpstream(generatedCheck());
-    silenceInfo();
-
-    await generate(buildApp());
-
-    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    const sent = String(init.body);
-    expect(sent).toContain(CONCEPT_ID);
-    // コード本文・質問文・AI の回答文も、習熟度も渡さない（#184 の完了条件）。
-    for (const forbidden of ["score", "status", "evidence", "diagnosticCode", "selection"]) {
-      expect(sent).not.toContain(forbidden);
-    }
-  });
-
-  it("ai_usage の回数を加算しない", async () => {
-    // 生成は全利用者で使い回す問題を作る。最初に開いた利用者の枠から引かない（#184）。
-    stubUpstream(generatedCheck());
+  it("1組の生成につき ai_usage を1回数える", async () => {
+    stubUpstream(generatedCheck(), 1500);
     silenceInfo();
     const harness = buildApp();
 
     await generate(harness);
+    await generate(harness);
 
-    const usage = await harness.app.request(
-      "https://api.example.test/v1/ai/usage",
-      { headers: { Authorization: "Bearer valid-token" } },
-      ENV,
-    );
-    expect(usage.status).toBe(200);
-    expect(await usage.json()).toMatchObject({
-      managedAi: {
-        daily: { used: 0, limit: AI_USAGE_LIMITS.dailyRequests },
-        monthly: { used: 0, limit: AI_USAGE_LIMITS.monthlyRequests },
-      },
+    expect(await usedToday(harness)).toBe(2);
+  });
+
+  it("日の上限に達していたら上流を叩かず、作ってある問題は解けると伝える", async () => {
+    const fetchMock = stubUpstream(generatedCheck());
+    silenceInfo();
+    const harness = buildApp();
+    for (let i = 0; i < AI_USAGE_LIMITS.dailyRequests; i++) await generate(harness);
+    fetchMock.mockClear();
+
+    const response = await generate(harness);
+
+    expect(response.status).toBe(429);
+    expect(fetchMock).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toMatchObject({
+      error: "ai usage limit reached",
+      limit: "daily",
+      message: expect.stringContaining("作ってある問題は、回数を使わずにそのまま解けます"),
     });
   });
 
-  it("生成にかかったトークンをログへ残す", async () => {
-    // `ai_usage` に載らないため、これが生成のコストを追える唯一の記録である。
-    stubUpstream(generatedCheck(), 1500);
+  it("同意が無ければ、送る前に止めて回数も使わない", async () => {
+    const fetchMock = stubUpstream(generatedCheck());
+    const harness = buildApp();
+
+    const response = await generate(harness, { ...CONCEPT_BASIC, consentVersion: undefined });
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "check generation consent required",
+      version: CHECK_GENERATION_CONSENT_VERSION,
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(await usedToday(harness)).toBe(0);
+  });
+
+  it("古い版へのその場の同意では生成しない", async () => {
+    const fetchMock = stubUpstream(generatedCheck());
+
+    const response = await generate(buildApp(), {
+      ...CONCEPT_BASIC,
+      consentVersion: CHECK_GENERATION_CONSENT_VERSION - 1,
+    });
+
+    expect(response.status).toBe(403);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("「今後表示しない」の記録が今の版なら、その場の同意なしで生成する", async () => {
+    stubUpstream(generatedCheck());
+    silenceInfo();
+    const harness = buildApp();
+    await harness.consents.put(USER_A, {
+      version: CHECK_GENERATION_CONSENT_VERSION,
+      grantedAt: "2026-09-01T00:00:00.000Z",
+    });
+
+    const response = await generate(harness, { ...CONCEPT_BASIC, consentVersion: undefined });
+
+    expect(response.status).toBe(200);
+  });
+
+  it("「理解すること」を狙うと、その項目だけを的にし、項目 ID を付けて保存する", async () => {
+    const fetchMock = stubUpstream(generatedCheck());
+    silenceInfo();
+
+    const response = await generate(buildApp(OBJECTIVES), OBJECTIVE_BASIC);
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      scope: "objective",
+      objectiveId: OBJECTIVE_ID,
+    });
+    expect(sentPrompt(fetchMock)).toContain(
+      "次の「理解すること」1項目だけを出題の的にする: 値レシーバには複製が渡る",
+    );
+  });
+
+  it("項目ごとに別の組として保存し、同じ項目で作り直すと上書きする", async () => {
+    stubUpstream(generatedCheck());
+    silenceInfo();
+    const harness = buildApp(OBJECTIVES);
+
+    await generate(harness, OBJECTIVE_BASIC);
+    await generate(harness, { ...OBJECTIVE_BASIC, objectiveId: `${CONCEPT_ID}:choose` });
+    await generate(harness, { ...OBJECTIVE_BASIC, level: "advanced" });
+
+    const saved = await harness.checks.listByConcept(USER_A, CONCEPT_ID);
+    expect(saved.map((check) => [check.objectiveId, check.level]).sort()).toEqual([
+      [`${CONCEPT_ID}:choose`, "basic"],
+      [OBJECTIVE_ID, "advanced"],
+    ]);
+  });
+
+  it.each([
+    ["項目の指定が無い", { scope: "objective" }],
+    ["別の Concept の項目を指定した", { scope: "objective", objectiveId: "go.defer:timing" }],
+    ["項目以外の範囲で項目を指定した", { scope: "concept", objectiveId: OBJECTIVE_ID }],
+  ])("%s要求は上流へ送らずに弾く", async (_, override) => {
+    const fetchMock = stubUpstream(generatedCheck());
+
+    const response = await generate(buildApp(OBJECTIVES), { ...CONCEPT_BASIC, ...override });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ error: "invalid objective" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("その項目で自力解決した質問の本文だけを、新しい順に3件まで材料に渡す", async () => {
+    const fetchMock = stubUpstream(generatedCheck());
     const info = silenceInfo();
+    const harness = buildApp(OBJECTIVES);
+    for (const [index, day] of ["01", "02", "03", "04"].entries()) {
+      await seedSolvedConversation(
+        harness,
+        `conv-${String(index)}`,
+        `2026-09-${day}T00:00:00.000Z`,
+        `質問${String(index)}: 値レシーバで n++ が効かない`,
+      );
+    }
 
-    await generate(buildApp());
+    await generate(harness, OBJECTIVE_BASIC);
 
+    const prompt = sentPrompt(fetchMock);
+    expect(prompt).toContain("<<<質問1\n質問3: 値レシーバで n++ が効かない\n質問1>>>");
+    expect(prompt).toContain("<<<質問3\n質問1: 値レシーバで n++ が効かない\n質問3>>>");
+    expect(prompt).not.toContain("質問0:");
+    // 選択したコードと AI の回答は送らない（#236 の決定）。
+    expect(prompt).not.toContain("SELECTED-CODE-SECRET");
+    expect(prompt).not.toContain("ASSISTANT-ANSWER");
     expect(info).toHaveBeenCalledWith(
       "check generation completed",
-      expect.objectContaining({ conceptId: CONCEPT_ID, totalTokens: 1500 }),
+      expect.objectContaining({ materialCount: 3 }),
     );
+  });
+
+  it("質問は上限の文字数で切る", async () => {
+    const fetchMock = stubUpstream(generatedCheck());
+    silenceInfo();
+    const harness = buildApp(OBJECTIVES);
+    await seedSolvedConversation(
+      harness,
+      "conv-long",
+      "2026-09-01T00:00:00.000Z",
+      "あ".repeat(700),
+    );
+
+    await generate(harness, OBJECTIVE_BASIC);
+
+    expect(sentPrompt(fetchMock)).toContain(`<<<質問1\n${"あ".repeat(600)}\n質問1>>>`);
+  });
+
+  it("会話が保存されていなければ、材料なしで1組作る", async () => {
+    const fetchMock = stubUpstream(generatedCheck());
+    silenceInfo();
+    const harness = buildApp(OBJECTIVES);
+    await seedSolvedConversation(harness, "conv-1", "2026-09-01T00:00:00.000Z", "質問");
+    await harness.conversations.deleteAllByUser(USER_A);
+
+    const response = await generate(harness, OBJECTIVE_BASIC);
+
+    expect(response.status).toBe(200);
+    expect(sentPrompt(fetchMock)).not.toContain("自力で解決した質問");
+  });
+
+  it("「質問履歴の保存」を後から無効にした人の会話は、保存済みでも渡さない", async () => {
+    // 無効にしても保存済みの履歴は残る。同意の文面は「有効にしているときだけ」と約束している。
+    const fetchMock = stubUpstream(generatedCheck());
+    const info = silenceInfo();
+    const harness = buildApp(OBJECTIVES);
+    await seedSolvedConversation(harness, "conv-1", "2026-09-01T00:00:00.000Z", "保存済みの質問");
+    await harness.settings.put(
+      USER_A,
+      { saveConversationHistory: false },
+      "2026-09-02T00:00:00.000Z",
+    );
+
+    const response = await generate(harness, OBJECTIVE_BASIC);
+
+    expect(response.status).toBe(200);
+    expect(sentPrompt(fetchMock)).not.toContain("保存済みの質問");
+    expect(info).toHaveBeenCalledWith(
+      "check generation completed",
+      expect.objectContaining({ materialCount: 0 }),
+    );
+  });
+
+  it("項目を持つ Concept では、項目を狙わない組を作らない", async () => {
+    // 正誤が項目の理解度に効かない組になるため（#223 決定 6、#236 の決定）。
+    const fetchMock = stubUpstream(generatedCheck());
+
+    const response = await generate(buildApp(OBJECTIVES), CONCEPT_BASIC);
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ error: "invalid objective" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("長い質問が揃っても入力の上限に収まるまで削り、生成できる", async () => {
+    const fetchMock = stubUpstream(generatedCheck());
+    silenceInfo();
+    const harness = buildApp(OBJECTIVES);
+    for (const [index, day] of ["01", "02", "03"].entries()) {
+      await seedSolvedConversation(
+        harness,
+        `conv-${String(index)}`,
+        `2026-09-${day}T00:00:00.000Z`,
+        `質問${String(index)}` + "長".repeat(700),
+      );
+    }
+
+    const response = await generate(harness, OBJECTIVE_BASIC);
+
+    expect(response.status).toBe(200);
+    const prompt = sentPrompt(fetchMock);
+    expect(new TextEncoder().encode(prompt).length).toBeLessThanOrEqual(
+      AI_USAGE_LIMITS.inputTokensPerRequest,
+    );
+    // 新しい質問から載せる。
+    expect(prompt).toContain("<<<質問1\n質問2長");
+  });
+
+  it("生成中に学習データが削除されたら、作った問題を保存しない", async () => {
+    const harness = buildApp(OBJECTIVES);
+    silenceInfo();
+    // 上流を待っている間に削除が終わった状態を作る。
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async () => {
+        await harness.events.deleteByUser(USER_A, NOW.getTime());
+        return new Response(
+          JSON.stringify({
+            candidates: [
+              { content: { parts: [{ text: generatedCheck() }] }, finishReason: "STOP" },
+            ],
+            usageMetadata: { totalTokenCount: 900 },
+          }),
+          { status: 200 },
+        );
+      }),
+    );
+
+    const response = await generate(harness, OBJECTIVE_BASIC);
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ error: "check discarded by reset" });
+    await expect(harness.checks.listAllByUser(USER_A)).resolves.toEqual([]);
+  });
+
+  it("本文が使えない応答でも、消費したトークンを利用量へ足す", async () => {
+    stubUpstream("", 2048);
+    silenceError();
+    const harness = buildApp();
+    const addTokens = vi.spyOn(InMemoryAiUsageRepository.prototype, "addTokens");
+
+    const response = await generate(harness);
+
+    expect(response.status).toBe(502);
+    expect(addTokens).toHaveBeenCalledWith(expect.objectContaining({ tokens: 2048 }));
+  });
+
+  it("項目を狙わない組には質問を渡さない", async () => {
+    const fetchMock = stubUpstream(generatedCheck());
+    silenceInfo();
+    const harness = buildApp();
+    await seedSolvedConversation(harness, "conv-1", "2026-09-01T00:00:00.000Z", "質問の本文");
+
+    await generate(harness);
+
+    expect(sentPrompt(fetchMock)).not.toContain("質問の本文");
+  });
+
+  it("他人の会話は材料にしない", async () => {
+    const fetchMock = stubUpstream(generatedCheck());
+    silenceInfo();
+    const harness = buildApp(OBJECTIVES);
+    await seedSolvedConversation(harness, "conv-1", "2026-09-01T00:00:00.000Z", "A さんの質問");
+
+    await generate(harness, OBJECTIVE_BASIC, ENV, "other-token");
+
+    expect(sentPrompt(fetchMock)).not.toContain("A さんの質問");
+  });
+
+  it("選んだ技術レベルをプロンプトへ伝える", async () => {
+    const fetchMock = stubUpstream(generatedCheck());
+    silenceInfo();
+
+    await generate(buildApp(), { ...CONCEPT_BASIC, level: "advanced" });
+
+    expect(sentPrompt(fetchMock)).toContain("技術レベル: 応用。");
   });
 
   it("一覧に無い conceptId は弾く", async () => {
     const fetchMock = stubUpstream(generatedCheck());
 
-    const response = await generate(buildApp(), { conceptId: "go.not_defined" });
+    const response = await generate(buildApp(), { ...CONCEPT_BASIC, conceptId: "go.not_defined" });
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toMatchObject({ error: "unknown concept" });
-    // 上流を叩く前に弾く。ここが生成回数の上界になっている。
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("Concept ID の形式を満たさない要求を弾く", async () => {
-    const response = await generate(buildApp(), { conceptId: "Go.PointerReceiver" });
+  it.each([
+    ["Concept ID の形式", { conceptId: "Go.PointerReceiver" }],
+    ["範囲", { scope: "everything" }],
+    ["技術レベル", { level: "expert" }],
+  ])("%sが契約に無い要求を弾く", async (_, override) => {
+    const response = await generate(buildApp(), { ...CONCEPT_BASIC, ...override });
 
     expect(response.status).toBe(400);
   });
@@ -267,19 +639,18 @@ describe("POST /v1/checks:generate", () => {
   it("認証が無ければ生成しない", async () => {
     const response = await buildApp().app.request(
       "https://api.example.test/v1/checks:generate",
-      { method: "POST", body: JSON.stringify({ conceptId: CONCEPT_ID }) },
+      { method: "POST", body: JSON.stringify(CONCEPT_BASIC) },
       ENV,
     );
 
     expect(response.status).toBe(401);
   });
 
-  it("レート制限は維持する", async () => {
-    // `ai_usage` の回数は数えないが、頻度の歯止めは残す（#184 の決定表）。
+  it("レート制限を掛ける", async () => {
     const fetchMock = stubUpstream(generatedCheck());
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
-    const response = await generate(buildApp(), { conceptId: CONCEPT_ID }, {
+    const response = await generate(buildApp(), CONCEPT_BASIC, {
       ...ENV,
       PROFILE_RATE_LIMITER: BLOCKING_LIMITER,
     } as unknown as CloudflareBindings);
@@ -293,7 +664,7 @@ describe("POST /v1/checks:generate", () => {
     const fetchMock = stubUpstream(generatedCheck());
     const error = silenceError();
 
-    const response = await generate(buildApp(), { conceptId: CONCEPT_ID }, {
+    const response = await generate(buildApp(), CONCEPT_BASIC, {
       ...ENV,
       GEMINI_MODEL: "gemini-3.5-pro-expensive",
     } as unknown as CloudflareBindings);
@@ -306,7 +677,7 @@ describe("POST /v1/checks:generate", () => {
   it("API キー未設定は運営側の障害として記録する", async () => {
     const error = silenceError();
 
-    const response = await generate(buildApp(), { conceptId: CONCEPT_ID }, {
+    const response = await generate(buildApp(), CONCEPT_BASIC, {
       PROFILE_RATE_LIMITER: PASSING_LIMITER,
     } as unknown as CloudflareBindings);
 
@@ -340,12 +711,13 @@ describe("POST /v1/checks:generate", () => {
     expect(error).toHaveBeenCalled();
   });
 
-  it("2問揃わない応答を受理せず、理由を利用者へ伝える", async () => {
+  it("2問揃わない応答を受理せず、理由を利用者へ伝え、保存しない", async () => {
     stubUpstream(JSON.stringify({ conceptId: CONCEPT_ID, overview: question() }));
     silenceInfo();
     silenceError();
+    const harness = buildApp();
 
-    const response = await generate(buildApp());
+    const response = await generate(harness);
 
     expect(response.status).toBe(502);
     const body = (await response.json()) as { reason: string; message: string };
@@ -353,9 +725,10 @@ describe("POST /v1/checks:generate", () => {
     expect(body.message).toContain("2問1組");
     // 検証の詳細（モデルの応答の断片）は利用者へ返さない。
     expect(Object.keys(body).sort()).toEqual(["error", "message", "reason"]);
+    await expect(harness.checks.listAllByUser(USER_A)).resolves.toEqual([]);
   });
 
-  it("正解が選択肢に無い応答を受理せず、理由を利用者へ伝える", async () => {
+  it("正解が選択肢に無い応答を受理しない", async () => {
     stubUpstream(generatedCheck({ overview: question({ answerIndex: 9 }) }));
     silenceInfo();
     silenceError();
@@ -390,156 +763,13 @@ describe("POST /v1/checks:generate", () => {
     expect(response.status).toBe(502);
     await expect(response.json()).resolves.toMatchObject({ reason: "not-json" });
   });
-});
-
-/** 今のプロンプトのハッシュ。保存済みの行を「最新」として作るときに使う。 */
-async function currentPromptSha256(): Promise<string> {
-  const resolved = checkPromptInputFor(CONCEPT_ID);
-  if (!resolved.ok) throw new Error(`test concept is not usable: ${resolved.reason}`);
-  return promptSha256(buildCheckPrompt(resolved.input));
-}
-
-const STORED_CHECK = {
-  conceptId: CONCEPT_ID,
-  overview: question({ prompt: "保存済みの概要問題" }),
-  practice: { ...question({ prompt: "保存済みの実践問題" }), code: "var c Counter" },
-  model: "gemini-3.6-flash",
-  generatedAt: "2026-09-01T00:00:00.000Z",
-};
-
-describe("POST /v1/checks:generate の保存と再利用（#185）", () => {
-  it("生成した問題を保存し、2回目は上流を叩かずに同じ問題を返す", async () => {
-    const fetchMock = stubUpstream(generatedCheck());
-    silenceInfo();
-    const harness = buildApp();
-
-    const first = await generate(harness);
-    const second = await generate(harness);
-
-    expect(first.status).toBe(200);
-    expect(second.status).toBe(200);
-    expect(await second.json()).toEqual(await first.json());
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    await expect(harness.checks.get(CONCEPT_ID)).resolves.toMatchObject({
-      formatVersion: CHECK_FORMAT_VERSION,
-      promptSha256: await currentPromptSha256(),
-    });
-  });
-
-  it("保存した問題は別の利用者にも使い回す", async () => {
-    const fetchMock = stubUpstream(generatedCheck());
-    silenceInfo();
-    const harness = buildApp();
-
-    await generate(harness);
-    const other = await generate(harness, { conceptId: CONCEPT_ID }, ENV, "other-token");
-
-    expect(other.status).toBe(200);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("2回目以降も Managed AI の回数を消費しない", async () => {
-    stubUpstream(generatedCheck());
-    silenceInfo();
-    const harness = buildApp();
-
-    await generate(harness);
-    await generate(harness);
-
-    const usage = await harness.app.request(
-      "https://api.example.test/v1/ai/usage",
-      { headers: { Authorization: "Bearer valid-token" } },
-      ENV,
-    );
-    expect(await usage.json()).toMatchObject({
-      managedAi: { daily: { used: 0 }, monthly: { used: 0 } },
-    });
-  });
-
-  it("保存済みで定義が変わっていなければ、AI の設定が無くても返す", async () => {
-    const fetchMock = stubUpstream(generatedCheck());
-    const checks = new InMemoryConceptCheckRepository();
-    await checks.put({
-      check: STORED_CHECK,
-      formatVersion: CHECK_FORMAT_VERSION,
-      promptSha256: await currentPromptSha256(),
-    });
-
-    const response = await generate(buildApp(checks), { conceptId: CONCEPT_ID }, {
-      PROFILE_RATE_LIMITER: PASSING_LIMITER,
-    } as unknown as CloudflareBindings);
-
-    expect(response.status).toBe(200);
-    expect(response.headers.get("cache-control")).toBe("no-store");
-    await expect(response.json()).resolves.toEqual(STORED_CHECK);
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("Concept の定義（プロンプト）が変わっていたら作り直して上書きする", async () => {
-    const fetchMock = stubUpstream(generatedCheck());
-    const info = silenceInfo();
-    const checks = new InMemoryConceptCheckRepository();
-    await checks.put({
-      check: STORED_CHECK,
-      formatVersion: CHECK_FORMAT_VERSION,
-      promptSha256: "0".repeat(64),
-    });
-
-    const response = await generate(buildApp(checks));
-
-    expect(response.status).toBe(200);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    await expect(response.json()).resolves.toMatchObject({ overview: question() });
-    await expect(checks.get(CONCEPT_ID)).resolves.toMatchObject({
-      check: { overview: question(), generatedAt: NOW.toISOString() },
-      promptSha256: await currentPromptSha256(),
-    });
-    expect(info).toHaveBeenCalledWith(
-      "stored check is outdated; regenerating",
-      expect.objectContaining({ conceptId: CONCEPT_ID, promptChanged: true }),
-    );
-  });
-
-  it("受理側の版が変わっていたら作り直す", async () => {
-    const fetchMock = stubUpstream(generatedCheck());
-    silenceInfo();
-    const checks = new InMemoryConceptCheckRepository();
-    await checks.put({
-      check: STORED_CHECK,
-      formatVersion: CHECK_FORMAT_VERSION - 1,
-      promptSha256: await currentPromptSha256(),
-    });
-
-    await generate(buildApp(checks));
-
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    await expect(checks.get(CONCEPT_ID)).resolves.toMatchObject({
-      formatVersion: CHECK_FORMAT_VERSION,
-    });
-  });
-
-  it("受理できなかった生成は保存せず、次の要求で生成し直す", async () => {
-    const fetchMock = stubUpstream(generatedCheck({ conceptId: "go.slice_append" }));
-    silenceInfo();
-    silenceError();
-    const harness = buildApp();
-
-    const first = await generate(harness);
-    const second = await generate(harness);
-
-    expect(first.status).toBe(502);
-    expect(second.status).toBe(502);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    await expect(harness.checks.get(CONCEPT_ID)).resolves.toBeNull();
-  });
 
   it("保存に失敗したら問題を返さず失敗にする", async () => {
-    // 保存の失敗を飲み込むと、以後の要求が毎回生成へ進み、歯止めが黙って外れる。
+    // 問題だけ返すと、次に開いたときに問題が無く、回数だけが減っている。
     stubUpstream(generatedCheck());
     silenceInfo();
-    const checks = new InMemoryConceptCheckRepository();
-    checks.put = () => Promise.reject(new Error("D1 is unavailable"));
-    const harness = buildApp(checks);
+    const harness = buildApp();
+    harness.checks.put = () => Promise.reject(new Error("D1 is unavailable"));
     const error = silenceError();
     harness.app.onError((err, c) => {
       console.error("unhandled error", { message: err.message });
@@ -550,5 +780,120 @@ describe("POST /v1/checks:generate の保存と再利用（#185）", () => {
 
     expect(response.status).toBe(500);
     expect(error).toHaveBeenCalledWith("unhandled error", { message: "D1 is unavailable" });
+  });
+});
+
+describe("GET /v1/checks", () => {
+  it("保存済みの組を、AI を呼ばず回数も使わずに返す", async () => {
+    const fetchMock = stubUpstream(generatedCheck());
+    silenceInfo();
+    const harness = buildApp();
+    await generate(harness);
+    fetchMock.mockClear();
+
+    const response = await call(harness, `/checks?conceptId=${CONCEPT_ID}`);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    const body = (await response.json()) as { checks: unknown[] };
+    expect(body.checks).toHaveLength(1);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(await usedToday(harness)).toBe(1);
+  });
+
+  it("他人の問題は返さない", async () => {
+    stubUpstream(generatedCheck());
+    silenceInfo();
+    const harness = buildApp();
+    await generate(harness);
+
+    const response = await call(harness, `/checks?conceptId=${CONCEPT_ID}`, {}, "other-token");
+
+    await expect(response.json()).resolves.toEqual({ checks: [] });
+  });
+
+  it("Concept ID の形式を満たさない要求を弾く", async () => {
+    const response = await call(buildApp(), "/checks?conceptId=Not.Valid");
+
+    expect(response.status).toBe(400);
+  });
+});
+
+describe("GET /v1/checks:export", () => {
+  it("本人の全件を返し、監査ログに残す", async () => {
+    stubUpstream(generatedCheck());
+    silenceInfo();
+    const harness = buildApp();
+    await generate(harness);
+
+    const response = await call(harness, "/checks:export");
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      version: 1,
+      exportedAt: NOW.toISOString(),
+      checks: [{ conceptId: CONCEPT_ID, scope: "concept" }],
+    });
+    expect(harness.store.auditLog).toContainEqual(
+      expect.objectContaining({
+        userId: USER_A,
+        action: "concept_checks.exported",
+        detail: { checkCount: 1 },
+      }),
+    );
+  });
+});
+
+describe("/v1/check-generation-consent", () => {
+  it("記録が無ければ未同意として今の版を返す", async () => {
+    const response = await call(buildApp(), "/check-generation-consent");
+
+    await expect(response.json()).resolves.toEqual({
+      version: CHECK_GENERATION_CONSENT_VERSION,
+      granted: false,
+    });
+  });
+
+  it("今の版で記録し、取り消せる", async () => {
+    const harness = buildApp();
+
+    const put = await call(harness, "/check-generation-consent", {
+      method: "PUT",
+      body: JSON.stringify({ version: CHECK_GENERATION_CONSENT_VERSION }),
+    });
+    expect(put.status).toBe(200);
+    await expect(put.json()).resolves.toEqual({
+      version: CHECK_GENERATION_CONSENT_VERSION,
+      granted: true,
+      grantedAt: NOW.toISOString(),
+    });
+
+    const deleted = await call(harness, "/check-generation-consent", { method: "DELETE" });
+    await expect(deleted.json()).resolves.toMatchObject({ granted: false });
+    await expect(harness.consents.get(USER_A)).resolves.toBeNull();
+  });
+
+  it("古い版への同意は記録しない", async () => {
+    const harness = buildApp();
+
+    const response = await call(harness, "/check-generation-consent", {
+      method: "PUT",
+      body: JSON.stringify({ version: CHECK_GENERATION_CONSENT_VERSION - 1 }),
+    });
+
+    expect(response.status).toBe(409);
+    await expect(harness.consents.get(USER_A)).resolves.toBeNull();
+  });
+
+  it("古い版の記録は同意として扱わない", async () => {
+    const harness = buildApp();
+    await harness.consents.put(USER_A, {
+      version: CHECK_GENERATION_CONSENT_VERSION - 1,
+      grantedAt: "2026-09-01T00:00:00.000Z",
+    });
+
+    const response = await call(harness, "/check-generation-consent");
+
+    await expect(response.json()).resolves.toMatchObject({ granted: false });
   });
 });

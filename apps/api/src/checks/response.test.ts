@@ -65,12 +65,14 @@ describe("readGeneratedText", () => {
     expect(result.ok && result.totalTokens).toBeUndefined();
   });
 
-  it("出力上限で切れた応答は拒否する", () => {
+  it("出力上限で切れた応答は拒否し、消費したトークンは残す", () => {
     // 途中まで読める JSON を受理すると、切り詰められた問題文が出題される。
+    // 切れた応答でも上流では課金されるので、利用量へ足せるよう数を返す。
     expect(readGeneratedText(envelope('{"conceptId"', { finishReason: "MAX_TOKENS" }))).toEqual({
       ok: false,
       reason: "truncated",
       detail: "出力上限に達した",
+      totalTokens: 1234,
     });
   });
 

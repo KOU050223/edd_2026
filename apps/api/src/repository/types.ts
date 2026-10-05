@@ -12,11 +12,13 @@
 
 import type {
   ConceptCheck,
+  ConsentRecord,
   Conversation,
   HistoryProviderId,
   LearningEvent,
   LearningEvidence,
   MasteryStatus,
+  PersonalConceptCheck,
   UnmappedCandidate,
 } from "@gakushu-sochi/domain";
 import type { AreaCompletion } from "../contract/area-completions.js";
@@ -438,7 +440,8 @@ export type AuditAction =
   | "learning_evidence.exported"
   | "learning_evidence.deleted"
   | "conversations.exported"
-  | "conversations.deleted";
+  | "conversations.deleted"
+  | "concept_checks.exported";
 
 /** 監査ログの1件。 */
 export interface AuditLogEntry {
@@ -485,6 +488,9 @@ export interface StoredConceptCheck {
 /**
  * 確認問題の保存（Issue #185）。1 Concept 1組で、同じ Concept への `put` は上書きする。
  *
+ * #236 で生成の口は利用者ごとの保存（{@link PersonalCheckRepository}）へ切り替わり、
+ * 今は使っていない。公開用の共通問題（#237）のために残している。
+ *
  * 作り直すかどうかの判定はここでは行わない。読み出した版とハッシュを見て
  * 呼び出し側（`routes/checks.ts`）が決める。
  */
@@ -492,4 +498,50 @@ export interface ConceptCheckRepository {
   /** 保存済みの1組。無ければ `null`。保存内容が読めなければ例外にする（RULE-004）。 */
   get(conceptId: string): Promise<StoredConceptCheck | null>;
   put(stored: StoredConceptCheck): Promise<void>;
+}
+
+/**
+ * 利用者ごとの確認問題（migrations/0012_user_concept_checks.sql、Issue #236）。
+ *
+ * 個人の学習データである。1人・1 Concept・1つの狙い（`checkTargetOf`）につき1組を持ち、
+ * 同じ狙いへの `put` は上書きする（「作り直す」）。
+ * 呼び出し前に `users` 行が存在している必要がある（外部キー）。
+ */
+export interface PersonalCheckRepository {
+  /** その Concept で保存済みの組。生成時刻の新しい順。無ければ空配列。 */
+  listByConcept(userId: string, conceptId: string): Promise<PersonalConceptCheck[]>;
+  /**
+   * 1組を保存する（同じ狙いは上書き）。
+   *
+   * **生成を始めた時刻（`startedAtMs`）が学習データの削除時刻（`learning_history_resets`）
+   * 以前なら書かず、`saved: false` を返す。** 生成は上流を待つ間に削除が終わりうる。
+   * 削除前の履歴から作った問題を後から書くと、消したはずのデータが戻る。
+   * 判定と書き込みは同じ文で行う（`LearningEventRepository.append` と同じ）。
+   */
+  put(
+    userId: string,
+    check: PersonalConceptCheck,
+    startedAtMs: number,
+  ): Promise<{ saved: boolean }>;
+  /** エクスポート用。全件を Concept ID・狙いの順で返す。 */
+  listAllByUser(userId: string): Promise<PersonalConceptCheck[]>;
+  /**
+   * 1ユーザーの全件を消す（学習データの削除への追随）。
+   * @returns 消した件数。0件でも成功とする。
+   */
+  deleteAllByUser(userId: string): Promise<number>;
+}
+
+/**
+ * 確認問題の生成への同意のうち「今後表示しない」の記録（Issue #236）。
+ *
+ * 版の判定はここでは行わない。読み出した版を呼び出し側が
+ * `CHECK_GENERATION_CONSENT_VERSION` と突き合わせる。
+ */
+export interface CheckGenerationConsentRepository {
+  get(userId: string): Promise<ConsentRecord | null>;
+  /** 呼び出し前に `users` 行が存在している必要がある（外部キー）。 */
+  put(userId: string, record: ConsentRecord): Promise<void>;
+  /** 記録を消す（取り消し）。無くても成功とする。 */
+  delete(userId: string): Promise<void>;
 }
