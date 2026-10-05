@@ -15,7 +15,9 @@
     // apps/web からの利用を許可する生成元をカンマ区切りで並べる。
     // 認証付きの API なので "*" にしない。空なら誰も許可しない。
     "CORS_ALLOWED_ORIGINS": "",
-    "GEMINI_MODEL": "gemini-3.6-flash",
+    // gemini-3.6-flash は 2026-10-06 に 503（混雑）が送り直しても続いたため切り替えた（#259）。
+    // 単価は同じ（src/contract/ai-usage.ts の MODEL_PRICING）。
+    "GEMINI_MODEL": "gemini-3.8-flash",
     // テスト中だけ、確認問題の生成の回数上限（日 15・月 150）を外す。
     // 確認問題の実装が終わったらこの行を消して上限を戻す（#255）。"off" 以外・未設定なら上限が効く。
     "CHECK_GENERATION_LIMITS": "off",
