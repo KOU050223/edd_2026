@@ -93,8 +93,10 @@ class Auth0ManagementUsers implements IdentityProviderUsers {
       response = await this.config.fetch(url, {
         method: "DELETE",
         headers: { authorization: `Bearer ${token}` },
-        // 資格情報を載せるのでリダイレクトを追跡しない（RULE-002）。
-        redirect: "error",
+        // 資格情報を載せるのでリダイレクトを追跡しない（RULE-002）。Workers は
+        // `redirect: "error"` を実装しておらず送信前に例外を投げるため、`manual` にして
+        // 3xx は下の判定（204 / 404 以外は失敗）で失敗として扱う（#253）。
+        redirect: "manual",
         // 単発の外向きリクエスト。応答が返らないまま待ち続けない（RULE-001）。
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
@@ -126,7 +128,8 @@ class Auth0ManagementUsers implements IdentityProviderUsers {
       response = await this.config.fetch(`${this.config.issuer}/oauth/token`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        redirect: "error",
+        // client secret を転送先へ流さない（RULE-002）。3xx は `!response.ok` で失敗になる（#253）。
+        redirect: "manual",
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
         body: JSON.stringify({
           grant_type: "client_credentials",

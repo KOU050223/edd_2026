@@ -285,7 +285,9 @@ export function createAiRoute(resolve: AiDepsResolver) {
           headers: { "x-goog-api-key": deps.apiKey, "Content-Type": "application/json" },
           // リダイレクトを自動追跡しない。転送先へ API キーごと送られると、
           // 資格情報が意図しない相手に渡る（.agents/rules/rules.md RULE-002）。
-          redirect: "error",
+          // Workers は `redirect: "error"` を実装しておらず送信前に例外を投げるので
+          // `manual` にする。3xx は下の `!upstream.ok` で失敗になる（#253）。
+          redirect: "manual",
           body: JSON.stringify({
             ...(systemInstruction === undefined
               ? {}
@@ -301,7 +303,7 @@ export function createAiRoute(resolve: AiDepsResolver) {
         },
       );
     } catch (cause) {
-      // fetch の拒否（ネットワーク断、`redirect: "error"` の拒否）は下の
+      // fetch の拒否（ネットワーク断など）は下の
       // !ok 分岐に届かない。AI 経路の失敗として数えられるよう、応答を返す
       // 前に構造化ログを出す（docs/api-ops.md「監視・監査ログ・障害時の再送」）。
       console.error("ai upstream request failed", { userId, model, cause });
@@ -480,8 +482,9 @@ export function createAiRoute(resolve: AiDepsResolver) {
           {
             method: "POST",
             headers: { "x-goog-api-key": deps.apiKey, "Content-Type": "application/json" },
-            // 資格情報を転送先へ流さない（RULE-002）。
-            redirect: "error",
+            // 資格情報を転送先へ流さない（RULE-002）。3xx は下の `!upstream.ok` で
+            // 失敗になる。Workers は `redirect: "error"` を実装していない（#253）。
+            redirect: "manual",
             // 複数会話の分析は時間がかかるが、応答が戻らないまま予約した
             // 回数枠をぶら下げ続けさせない（RULE-001）。
             signal: AbortSignal.timeout(120_000),

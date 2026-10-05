@@ -194,15 +194,35 @@ function carriesCredential(call) {
   });
 }
 
-/** リダイレクトを自動追跡しない指定があるか。Workers では `manual` を使う。 */
-function hasNoFollowRedirect(call) {
+/**
+ * Cloudflare Workers で動くコードのディレクトリ（`/` 区切り）。
+ *
+ * Workers の `fetch` は `redirect: "error"` を実装しておらず、送信前に例外を投げる
+ * （#253。workerd: "error" won't be implemented since it does not make sense at the edge）。
+ * Node.js で動く VS Code 拡張と Desktop では `"error"` も使える。
+ */
+const WORKERS_ROOTS = ["apps/api/src/", "apps/web/src/worker/"];
+
+function isWorkersFile(file) {
+  const normalized = file.split(path.sep).join("/");
+  return WORKERS_ROOTS.some((root) => normalized.startsWith(root));
+}
+
+/** `redirect` に書かれた文字列。指定が無い・文字列でなければ undefined。 */
+function redirectValue(call) {
   const redirect = optionProperty(call, "redirect");
-  return Boolean(
-    redirect &&
-    ts.isPropertyAssignment(redirect) &&
-    ts.isStringLiteral(redirect.initializer) &&
-    ["error", "manual"].includes(redirect.initializer.text),
-  );
+  if (!redirect || !ts.isPropertyAssignment(redirect)) return undefined;
+  return ts.isStringLiteral(redirect.initializer) ? redirect.initializer.text : undefined;
+}
+
+/**
+ * リダイレクトを自動追跡しない指定があるか。
+ * Workers のコードでは `manual` だけ、それ以外では `error` も認める。
+ */
+function hasNoFollowRedirect(call, file) {
+  const value = redirectValue(call);
+  if (value === "manual") return true;
+  return value === "error" && !isWorkersFile(file);
 }
 
 // RULE-001: 単発の外向き fetch にはタイムアウトを設定する。
@@ -235,7 +255,7 @@ test("RULE-002: 資格情報を送る fetch は redirect を自動追跡しな�
   for (const [file, text] of sources) {
     for (const call of findFetchCalls(text, file)) {
       if (!carriesCredential(call)) continue;
-      if (hasNoFollowRedirect(call)) continue;
+      if (hasNoFollowRedirect(call, file)) continue;
       violations.push(`${file}:${call.line}`);
     }
   }
@@ -243,6 +263,26 @@ test("RULE-002: 資格情報を送る fetch は redirect を自動追跡しな�
     violations,
     [],
     `資格情報を送る fetch がリダイレクトを自動追跡する` +
+      `（.agents/rules/rules.md RULE-002）:\n${violations.join("\n")}`,
+  );
+});
+
+// RULE-002（Workers）: Workers で動くコードは redirect: "error" を使わない。
+// Workers の fetch は "error" を実装しておらず送信前に例外を投げる。テストは fetch を
+// 差し替えるので検出できず、本番で確認問題の生成・Managed AI・退会が失敗した（#253）。
+// 資格情報の有無にかかわらず、すべての fetch を見る。
+test('RULE-002: Workers で動くコードの fetch は redirect: "error" を使わない', () => {
+  const violations = [];
+  for (const [file, text] of sources) {
+    if (!isWorkersFile(file)) continue;
+    for (const call of findFetchCalls(text, file)) {
+      if (redirectValue(call) === "error") violations.push(`${file}:${call.line}`);
+    }
+  }
+  assert.deepEqual(
+    violations,
+    [],
+    `Workers で動くコードが redirect: "error" を使っている。"manual" にして 3xx を失敗として扱うこと` +
       `（.agents/rules/rules.md RULE-002）:\n${violations.join("\n")}`,
   );
 });
