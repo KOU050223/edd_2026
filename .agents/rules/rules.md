@@ -59,7 +59,11 @@ loader の外で取得するとき（`useEffect` での取得、保存後の再�
 リダイレクトが自動追跡されると、転送先へ `Authorization` ヘッダごと送られ、
 トークンが意図しない相手に渡る。資格情報を送る `fetch` はリダイレクトを自動追跡しないこと。
 Cloudflare Workersでは `redirect: "error"` が未実装なので `redirect: "manual"` を指定し、
-3xxを明示的に失敗として扱う。
+3xxを明示的に失敗として扱う。**Workers で `"error"` を渡すと、`fetch` は送信前に例外を投げる。**
+テストは `fetch` を差し替えるので気付けず、本番で確認問題の生成・Managed AI・退会が失敗した（#253）。
+そのため検査は、Workers で動くコード（`apps/api/src/`・`apps/web/src/worker/`）では
+資格情報の有無にかかわらず `"error"` を拒否し、`"manual"` だけを認める。
+Node.js で動く VS Code 拡張と Desktop では `"error"` も使える。
 
 **検出の限界**: テストは AST で `fetch(...)` の第 2 引数に直接書かれたヘッダを見る。
 `Headers` オブジェクトを別の場所で組み立ててから渡す書き方（`apps/web/src/worker/index.ts` の

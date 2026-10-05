@@ -160,7 +160,9 @@ describe("POST /v1/ai/responses", () => {
     });
     expect(fetchMock).toHaveBeenCalledWith(
       "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:streamGenerateContent?alt=sse",
-      expect.objectContaining({ method: "POST" }),
+      // 資格情報を転送先へ流さない（RULE-002）。Workers は `redirect: "error"` を
+      // 実装しておらず送信前に例外を投げるので `manual`（#253）。
+      expect.objectContaining({ method: "POST", redirect: "manual" }),
     );
     vi.unstubAllGlobals();
   });
@@ -220,7 +222,7 @@ describe("POST /v1/ai/responses", () => {
   });
 
   it("fetch が拒否されても 502 を返し、AI 経路のエラーとしてログに残す", async () => {
-    // ネットワーク断や redirect: "error" の拒否は !ok の分岐に届かない。
+    // ネットワーク断は !ok の分岐に届かない。
     // この経路でも監視指標のログが出ることを固定する。
     const cause = new Error("network unreachable");
     vi.stubGlobal(

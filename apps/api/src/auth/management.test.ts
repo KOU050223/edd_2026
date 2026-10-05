@@ -65,8 +65,11 @@ describe("Auth0 のユーザー削除", () => {
     expect(deleteUrl).toBe("https://example.auth0.com/api/v2/users/auth0%7Cuser-a");
     expect(init.method).toBe("DELETE");
     expect((init.headers as Record<string, string>).authorization).toBe("Bearer management-token");
-    // 資格情報を載せるのでリダイレクトを追跡しない（RULE-002）。
-    expect(init.redirect).toBe("error");
+    // 資格情報を載せるのでリダイレクトを追跡しない（RULE-002）。Workers は
+    // `redirect: "error"` を実装しておらず送信前に例外を投げるので `manual`（#253）。
+    expect(init.redirect).toBe("manual");
+    const [, tokenInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(tokenInit.redirect).toBe("manual");
     // 応答が返らないまま待ち続けない（RULE-001）。
     expect(init.signal).toBeInstanceOf(AbortSignal);
   });
@@ -90,6 +93,28 @@ describe("Auth0 のユーザー削除", () => {
         "auth0|user-a",
       ),
     ).rejects.toBeInstanceOf(ManagementRequestError);
+  });
+
+  it("削除が転送（3xx）を返したら、成功に丸めず失敗として扱う", async () => {
+    // `redirect: "manual"` では 3xx がそのまま返る。転送先へ資格情報を送り直さない（#253）。
+    const fetchMock = fetchReturning(302);
+
+    await expect(
+      createManagementUsers({ ...CONFIG, fetch: fetchMock as unknown as typeof fetch }).delete(
+        "auth0|user-a",
+      ),
+    ).rejects.toBeInstanceOf(ManagementRequestError);
+  });
+
+  it("トークンの取得が転送（3xx）を返したら、失敗として扱う", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(new Response(null, { status: 302 }));
+
+    await expect(
+      createManagementUsers({ ...CONFIG, fetch: fetchMock as unknown as typeof fetch }).delete(
+        "auth0|user-a",
+      ),
+    ).rejects.toBeInstanceOf(ManagementRequestError);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("トークン応答が 2xx でも解析できなければ失敗として扱う", async () => {

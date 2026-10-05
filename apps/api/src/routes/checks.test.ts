@@ -306,8 +306,9 @@ describe("POST /v1/checks:generate", () => {
     );
     // 単発の外向き fetch なので壁時計で切る（RULE-001）。
     expect(init.signal).toBeInstanceOf(AbortSignal);
-    // 資格情報を載せるのでリダイレクトを追跡しない（RULE-002）。
-    expect(init.redirect).toBe("error");
+    // 資格情報を載せるのでリダイレクトを追跡しない（RULE-002）。Workers は
+    // `redirect: "error"` を実装しておらず送信前に例外を投げるので `manual`（#253）。
+    expect(init.redirect).toBe("manual");
     expect(JSON.parse(String(init.body))).toMatchObject({
       generationConfig: {
         maxOutputTokens: AI_USAGE_LIMITS.outputTokensPerRequest,
@@ -682,10 +683,14 @@ describe("POST /v1/checks:generate", () => {
     } as unknown as CloudflareBindings);
 
     expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "AI service is not configured",
+      message: expect.stringContaining("運営に連絡してください"),
+    });
     expect(error).toHaveBeenCalled();
   });
 
-  it("上流の失敗は 502 として返す", async () => {
+  it("上流の失敗は 502 とし、状態コードと理由を利用者へ伝える", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockImplementation(() => Promise.resolve(new Response("nope", { status: 500 }))),
@@ -695,20 +700,73 @@ describe("POST /v1/checks:generate", () => {
     const response = await generate(buildApp());
 
     expect(response.status).toBe(502);
+    // 上流の本文（"nope"）は載せない。状態コードだけを添える。
+    await expect(response.json()).resolves.toEqual({
+      error: "AI upstream request failed",
+      reason: "upstream-status",
+      status: 500,
+      message: "AI の呼び出しに失敗しました（状態 500）。時間をおいて、もう一度お試しください。",
+    });
     expect(error).toHaveBeenCalled();
   });
 
-  it("上流へ届かなかった場合も 502 として返す", async () => {
+  it("上流が転送（3xx）を返したら、追わずに失敗として扱う", async () => {
+    // `redirect: "manual"` では 3xx がそのまま返る。API キーを転送先へ送り直さない（#253）。
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(() =>
+        Promise.resolve(
+          new Response(null, { status: 302, headers: { location: "https://evil.example" } }),
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    silenceError();
+
+    const response = await generate(buildApp());
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toMatchObject({
+      reason: "upstream-status",
+      status: 302,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("上流へ届かなかった場合も 502 とし、届かなかったことを伝える", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockImplementation(() => Promise.reject(new Error("timed out"))),
+      vi.fn().mockImplementation(() => Promise.reject(new TypeError("network unreachable"))),
     );
     const error = silenceError();
 
     const response = await generate(buildApp());
 
     expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toMatchObject({
+      reason: "upstream-unreachable",
+      message: expect.stringContaining("AI に接続できませんでした"),
+    });
     expect(error).toHaveBeenCalled();
+  });
+
+  it("時間切れは、時間内に返らなかったことを伝える", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockImplementation(() =>
+          Promise.reject(new DOMException("The operation timed out.", "TimeoutError")),
+        ),
+    );
+    silenceError();
+
+    const response = await generate(buildApp());
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toMatchObject({
+      reason: "upstream-timeout",
+      message: expect.stringContaining("時間内に返りませんでした"),
+    });
   });
 
   it("2問揃わない応答を受理せず、理由を利用者へ伝え、保存しない", async () => {

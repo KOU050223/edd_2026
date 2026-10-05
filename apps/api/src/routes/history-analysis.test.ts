@@ -115,8 +115,8 @@ test("上流への送信に API キーを載せ、リダイレクトを追わな
 
   const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
   expect((init.headers as Record<string, string>)["x-goog-api-key"]).toBe("test-key");
-  // 資格情報を転送先へ流さない（RULE-002）。
-  expect(init.redirect).toBe("error");
+  // 資格情報を転送先へ流さない（RULE-002）。Workers では `manual`（#253）。
+  expect(init.redirect).toBe("manual");
 });
 
 test("構造の合わない観測は落とし、件数を応答へ載せる", async () => {

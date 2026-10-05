@@ -213,6 +213,47 @@ function limitReached(kind: AiUsageLimitKind, now: Date): AiUsageLimitBody {
   };
 }
 
+/** 上流（Gemini）への呼び出しが失敗した理由。応答の中身ではなく、届き方の問題。 */
+type UpstreamFailure =
+  "upstream-timeout" | "upstream-unreachable" | "upstream-status" | "upstream-unreadable";
+
+/**
+ * 上流への呼び出しの失敗を、理由つきで返す本文。
+ *
+ * どれも同じ「用意できませんでした」にすると、届かなかったのか、時間切れか、
+ * Gemini が拒否したのかを、利用者も運営も切り分けられない（#253 の調査で困った）。
+ * 上流の本文（プロバイダのエラー文）は載せない。状態コードだけを添える。
+ */
+function upstreamFailureBody(reason: UpstreamFailure, status?: number) {
+  const message = {
+    "upstream-timeout":
+      "AI の応答が時間内に返りませんでした。時間をおいて、もう一度お試しください。",
+    "upstream-unreachable": "AI に接続できませんでした。時間をおいて、もう一度お試しください。",
+    "upstream-status": `AI の呼び出しに失敗しました（状態 ${String(status)}）。時間をおいて、もう一度お試しください。`,
+    "upstream-unreadable": "AI の応答を読み取れませんでした。もう一度お試しください。",
+  }[reason];
+  return {
+    error: "AI upstream request failed" as const,
+    reason,
+    ...(status === undefined ? {} : { status }),
+    message,
+  };
+}
+
+/** AI の設定漏れ。運営側の障害なので、利用者には再試行では直らないことを伝える。 */
+function notConfiguredBody() {
+  return {
+    error: "AI service is not configured" as const,
+    message:
+      "AI の設定に問題があるため、問題を作れません。時間をおいても直らない場合は運営に連絡してください。",
+  };
+}
+
+/** `AbortSignal.timeout` による打ち切りか。 */
+function isTimeout(cause: unknown): boolean {
+  return cause instanceof Error && (cause.name === "TimeoutError" || cause.name === "AbortError");
+}
+
 function consentBody(record: ConsentRecord | null): CheckGenerationConsentBody {
   const granted = record !== null && record.version === CHECK_GENERATION_CONSENT_VERSION;
   return {
@@ -466,13 +507,13 @@ export function createChecksRoute(resolve: ChecksDepsResolver) {
     if (!deps.apiKey) {
       // 設定漏れは運営側の障害である。503 だけでは Workers のログから区別できない。
       console.error("ai service is not configured", { path: c.req.path });
-      return c.json({ error: "AI service is not configured" }, 503);
+      return c.json(notConfiguredBody(), 503);
     }
     // クライアントにモデルを選ばせない。設定値であっても allowlist は通す。
     const model = deps.model ?? ALLOWED_MODELS[0];
     if (!isAllowedModel(model)) {
       console.error("configured model is not allowed", { model, allowed: ALLOWED_MODELS });
-      return c.json({ error: "AI service is not configured" }, 503);
+      return c.json(notConfiguredBody(), 503);
     }
 
     // 材料（学習イベントと会話）を読む前の時刻。上流を待つ間に学習データが削除されたら、
@@ -554,8 +595,10 @@ export function createChecksRoute(resolve: ChecksDepsResolver) {
           method: "POST",
           headers: { "x-goog-api-key": deps.apiKey, "Content-Type": "application/json" },
           // リダイレクトを自動追跡しない。転送先へ API キーごと送られると、
-          // 資格情報が意図しない相手に渡る（RULE-002）。
-          redirect: "error",
+          // 資格情報が意図しない相手に渡る（RULE-002）。Workers は `redirect: "error"` を
+          // 実装しておらず送信前に例外を投げるので `manual` にし、3xx は下の
+          // `!upstream.ok` で失敗として扱う（#253）。
+          redirect: "manual",
           // 応答を一括で受け取る単発のリクエストなので、壁時計で必ず切る（RULE-001）。
           signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
           body: JSON.stringify({
@@ -572,10 +615,13 @@ export function createChecksRoute(resolve: ChecksDepsResolver) {
         },
       );
     } catch (cause) {
-      // fetch の拒否（ネットワーク断、タイムアウト、`redirect: "error"` の拒否）は
+      // fetch の拒否（ネットワーク断、タイムアウト）は
       // 下の !ok 分岐に届かない。失敗として数えられるよう応答の前に記録する。
       console.error("check generation upstream request failed", { conceptId, model, cause });
-      return c.json({ error: "AI upstream request failed" }, 502);
+      return c.json(
+        upstreamFailureBody(isTimeout(cause) ? "upstream-timeout" : "upstream-unreachable"),
+        502,
+      );
     }
 
     if (!upstream.ok) {
@@ -585,7 +631,7 @@ export function createChecksRoute(resolve: ChecksDepsResolver) {
         model,
         status: upstream.status,
       });
-      return c.json({ error: "AI upstream request failed" }, 502);
+      return c.json(upstreamFailureBody("upstream-status", upstream.status), 502);
     }
 
     let raw: string;
@@ -598,7 +644,7 @@ export function createChecksRoute(resolve: ChecksDepsResolver) {
         model,
         cause,
       });
-      return c.json({ error: "AI upstream request failed" }, 502);
+      return c.json(upstreamFailureBody("upstream-unreadable"), 502);
     }
 
     // 実消費を当月へ足す。本文が使えない応答（切れた・空・拒否）でも上流では課金されるので、
