@@ -44,6 +44,12 @@ export type GeneratedTextResult =
       reason: GeneratedTextFailure;
       detail?: string;
       /**
+       * 上流が報告した終了理由（`STOP`・`SAFETY` など）。英大文字と `_` だけの値のときだけ持つ。
+       * 本文ではなく列挙値なので、利用者への応答に載せて原因の切り分けに使える（ログを見られない
+       * 運用でも、画面と開発者ツールから分かるようにする）。
+       */
+      finishReason?: string;
+      /**
        * 失敗した応答でも上流が報告した消費トークン。切れた応答や空の応答でも課金は起きるため、
        * 呼び出し側が利用量へ足せるように残す。取れなければ `undefined`。
        */
@@ -89,14 +95,24 @@ export function readGeneratedText(raw: string): GeneratedTextResult {
     return { ok: false, reason: "no-text", detail: "candidates が空", ...usage };
   }
   const { content, finishReason } = candidate as { content?: unknown; finishReason?: unknown };
+  const reportedFinish = reportedFinishReason(finishReason);
+  const finish = reportedFinish === undefined ? {} : { finishReason: reportedFinish };
   // 上限に当たって切れた応答は、JSON として壊れているかどうかに関わらず拒否する。
   // 途中まで読めた JSON を受理すると、切り詰められた問題文が出題される。
   if (finishReason === "MAX_TOKENS") {
-    return { ok: false, reason: "truncated", detail: "出力上限に達した", ...usage };
+    return { ok: false, reason: "truncated", detail: "出力上限に達した", ...finish, ...usage };
+  }
+  // 候補ができた後に安全性などの理由で止められた応答。`promptFeedback` の拒否と同じく
+  // 「拒否された」と伝える。「返しませんでした」では再試行で直るように読める。
+  if (typeof finishReason === "string" && BLOCKED_FINISH_REASONS.has(finishReason)) {
+    return { ok: false, reason: "blocked", detail: finishReason, ...finish, ...usage };
   }
   const parts = (content as { parts?: unknown } | null)?.parts;
   const text = Array.isArray(parts)
     ? parts
+        // 思考するモデル（Gemini 3 系）は思考の要約を `thought: true` の part で返すことがある。
+        // 問題の本文ではないので読まない。混ぜると JSON として読めなくなる。
+        .filter((part) => (part as { thought?: unknown }).thought !== true)
         .map((part) => (part as { text?: unknown }).text)
         .filter((value): value is string => typeof value === "string")
         .join("")
@@ -106,6 +122,7 @@ export function readGeneratedText(raw: string): GeneratedTextResult {
       ok: false,
       reason: "no-text",
       detail: typeof finishReason === "string" ? `finishReason=${finishReason}` : "本文が空",
+      ...finish,
       ...usage,
     };
   }
@@ -116,6 +133,23 @@ export function readGeneratedText(raw: string): GeneratedTextResult {
     modelVersion: typeof body.modelVersion === "string" ? body.modelVersion : undefined,
     totalTokens,
   };
+}
+
+/**
+ * 生成が安全性などの判定で止められたことを表す `finishReason`。
+ * Gemini の `FinishReason` のうち、再試行しても同じ入力では直らないもの。
+ */
+const BLOCKED_FINISH_REASONS: ReadonlySet<string> = new Set([
+  "SAFETY",
+  "RECITATION",
+  "BLOCKLIST",
+  "PROHIBITED_CONTENT",
+  "SPII",
+]);
+
+/** 列挙値の形（英大文字と `_`）をしている `finishReason` だけを返す。それ以外は載せない。 */
+function reportedFinishReason(value: unknown): string | undefined {
+  return typeof value === "string" && /^[A-Z_]{1,64}$/.test(value) ? value : undefined;
 }
 
 /** 確認問題として受理できなかった理由。 */

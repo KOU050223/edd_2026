@@ -829,6 +829,23 @@ describe("POST /v1/checks:generate", () => {
     await expect(response.json()).resolves.toMatchObject({ reason: "concept-mismatch" });
   });
 
+  it("本文の無い応答は、上流の終了理由を添えて利用者へ伝える", async () => {
+    // 本番のログを見られないので、空の応答の原因は応答本文から切り分ける。
+    stubUpstream("");
+    silenceError();
+
+    const response = await generate(buildApp());
+
+    expect(response.status).toBe(502);
+    const body = (await response.json()) as {
+      reason: string;
+      finishReason: string;
+      message: string;
+    };
+    expect(body).toMatchObject({ reason: "no-text", finishReason: "STOP" });
+    expect(body.message).toContain("STOP");
+  });
+
   it("問題として読めない応答を受理しない", async () => {
     stubUpstream("ごめんなさい、問題を作れませんでした。");
     silenceInfo();

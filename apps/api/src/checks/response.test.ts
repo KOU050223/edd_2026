@@ -72,6 +72,7 @@ describe("readGeneratedText", () => {
       ok: false,
       reason: "truncated",
       detail: "出力上限に達した",
+      finishReason: "MAX_TOKENS",
       totalTokens: 1234,
     });
   });
@@ -79,6 +80,38 @@ describe("readGeneratedText", () => {
   it("安全性フィルタで拒否された応答は理由を残す", () => {
     const body = JSON.stringify({ promptFeedback: { blockReason: "SAFETY" } });
     expect(readGeneratedText(body)).toEqual({ ok: false, reason: "blocked", detail: "SAFETY" });
+  });
+
+  it("候補が安全性の判定で止められた応答は、拒否として扱う", () => {
+    const result = readGeneratedText(envelope("", { finishReason: "PROHIBITED_CONTENT" }));
+    expect(result).toMatchObject({
+      ok: false,
+      reason: "blocked",
+      finishReason: "PROHIBITED_CONTENT",
+    });
+  });
+
+  it("本文が空の応答は、上流の終了理由を残す", () => {
+    const result = readGeneratedText(envelope("", { finishReason: "OTHER" }));
+    expect(result).toMatchObject({ ok: false, reason: "no-text", finishReason: "OTHER" });
+  });
+
+  it("列挙値の形をしていない終了理由は残さない", () => {
+    const result = readGeneratedText(envelope("", { finishReason: "<script>" }));
+    expect(!result.ok && result.finishReason).toBeUndefined();
+  });
+
+  it("思考の part は本文に混ぜない", () => {
+    const body = JSON.stringify({
+      candidates: [
+        {
+          content: { parts: [{ text: "考え中…", thought: true }, { text: "{}" }] },
+          finishReason: "STOP",
+        },
+      ],
+    });
+    const result = readGeneratedText(body);
+    expect(result.ok && result.text).toBe("{}");
   });
 
   it("候補が無い応答は受理しない", () => {
