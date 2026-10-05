@@ -84,6 +84,41 @@ import type {
 const UPSTREAM_TIMEOUT_MS = 30_000;
 
 /**
+ * 上流の一時的な失敗のあとに送り直すまでの待ち時間。要素の数が再送の回数になる。
+ *
+ * Gemini は混雑すると 503（UNAVAILABLE）を返す。本番で生成が続けて失敗した（#259）。
+ * 待ちは {@link UPSTREAM_TIMEOUT_MS} の期限の内側に収める。
+ */
+const UPSTREAM_RETRY_DELAYS_MS: readonly number[] = [1_000, 3_000];
+
+/**
+ * 送り直してよい上流の状態コード。上流側の一時的な障害に限る。
+ *
+ * 429（割り当て超過）は入れない。分単位で回復しないことが多く、すぐ送り直すと
+ * 割り当てをさらに減らす。4xx は要求の誤りなので送り直しても直らない。
+ */
+const RETRYABLE_UPSTREAM_STATUSES: ReadonlySet<number> = new Set([500, 503]);
+
+/** `ms` 待つ。`signal` が先に中断されたら、その理由で拒否する。 */
+function sleep(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(signal.reason as Error);
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    function onAbort() {
+      clearTimeout(timer);
+      reject(signal.reason as Error);
+    }
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+/**
  * 生成の温度。
  *
  * 形式の逸脱を減らしたいため低めに固定し、クライアントからは指定させない。
@@ -139,6 +174,8 @@ export interface ChecksDeps {
    * トークン量は記録し、月のトークン量の安全弁とレート制限は効かせたままにする。
    */
   enforceUsageLimits?: boolean;
+  /** 上流の一時的な失敗のあとの待ち時間。省略は {@link UPSTREAM_RETRY_DELAYS_MS}。テストで縮める。 */
+  retryDelaysMs?: readonly number[];
   /** 「理解すること」の一覧。生成の口ができるまではモック（#224）。テストで差し替える。 */
   objectives?: readonly LearningObjective[];
   now: () => Date;
@@ -615,32 +652,61 @@ export function createChecksRoute(resolve: ChecksDepsResolver) {
     }
 
     let upstream: Response;
+    // 再送をまたいで1つの期限を使う。再送のたびに延ばすと、利用者を待たせる上限が決まらない（RULE-001）。
+    const deadline = AbortSignal.timeout(UPSTREAM_TIMEOUT_MS);
+    const retryDelaysMs = deps.retryDelaysMs ?? UPSTREAM_RETRY_DELAYS_MS;
     try {
-      upstream = await deps.fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
-        {
-          method: "POST",
-          headers: { "x-goog-api-key": deps.apiKey, "Content-Type": "application/json" },
-          // リダイレクトを自動追跡しない。転送先へ API キーごと送られると、
-          // 資格情報が意図しない相手に渡る（RULE-002）。Workers は `redirect: "error"` を
-          // 実装しておらず送信前に例外を投げるので `manual` にし、3xx は下の
-          // `!upstream.ok` で失敗として扱う（#253）。
-          redirect: "manual",
-          // 応答を一括で受け取る単発のリクエストなので、壁時計で必ず切る（RULE-001）。
-          signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: {
-              temperature: TEMPERATURE,
-              // 出力上限は常に送る。上流の既定値で走らせると1回あたりの単価が決まらない。
-              maxOutputTokens: AI_USAGE_LIMITS.outputTokensPerRequest,
-              // JSON を要求する。コードブロックの囲みが来ないようにするための指定で、
-              // 受理側（`response.ts`）は囲みを剥がさずに拒否する。
-              responseMimeType: "application/json",
-            },
-          }),
-        },
-      );
+      for (let attempt = 0; ; attempt += 1) {
+        upstream = await deps.fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+          {
+            method: "POST",
+            headers: { "x-goog-api-key": deps.apiKey, "Content-Type": "application/json" },
+            // リダイレクトを自動追跡しない。転送先へ API キーごと送られると、
+            // 資格情報が意図しない相手に渡る（RULE-002）。Workers は `redirect: "error"` を
+            // 実装しておらず送信前に例外を投げるので `manual` にし、3xx は下の
+            // `!upstream.ok` で失敗として扱う（#253）。
+            redirect: "manual",
+            // 応答を一括で受け取る単発のリクエストなので、壁時計で必ず切る（RULE-001）。
+            signal: deadline,
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: prompt }] }],
+              generationConfig: {
+                temperature: TEMPERATURE,
+                // 出力上限は常に送る。上流の既定値で走らせると1回あたりの単価が決まらない。
+                maxOutputTokens: AI_USAGE_LIMITS.outputTokensPerRequest,
+                // JSON を要求する。コードブロックの囲みが来ないようにするための指定で、
+                // 受理側（`response.ts`）は囲みを剥がさずに拒否する。
+                responseMimeType: "application/json",
+              },
+            }),
+          },
+        );
+        const delay = retryDelaysMs[attempt];
+        if (!RETRYABLE_UPSTREAM_STATUSES.has(upstream.status) || delay === undefined) {
+          break;
+        }
+        // 混雑（503）などの一時的な失敗は、少し待って送り直す。上流は失敗した呼び出しを
+        // 課金しないので、利用量の予約（1回）はそのままにする。本文は読まずに捨てる。
+        console.warn("check generation upstream is unavailable; retrying", {
+          conceptId,
+          model,
+          status: upstream.status,
+          attempt: attempt + 1,
+        });
+        try {
+          await upstream.body?.cancel();
+        } catch (cause) {
+          // 捨てる本文の読み込みが壊れていても、送り直しの判断（状態コード）は変わらない。
+          // 外側の catch へ流すと「接続できなかった」になり、送り直さずに終わる。
+          console.warn("check generation could not discard an upstream body", {
+            conceptId,
+            model,
+            cause,
+          });
+        }
+        await sleep(delay, deadline);
+      }
     } catch (cause) {
       // fetch の拒否（ネットワーク断、タイムアウト）は
       // 下の !ok 分岐に届かない。失敗として数えられるよう応答の前に記録する。
