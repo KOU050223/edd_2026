@@ -694,7 +694,17 @@ export function createChecksRoute(resolve: ChecksDepsResolver) {
           status: upstream.status,
           attempt: attempt + 1,
         });
-        await upstream.body?.cancel();
+        try {
+          await upstream.body?.cancel();
+        } catch (cause) {
+          // 捨てる本文の読み込みが壊れていても、送り直しの判断（状態コード）は変わらない。
+          // 外側の catch へ流すと「接続できなかった」になり、送り直さずに終わる。
+          console.warn("check generation could not discard an upstream body", {
+            conceptId,
+            model,
+            cause,
+          });
+        }
         await sleep(delay, deadline);
       }
     } catch (cause) {

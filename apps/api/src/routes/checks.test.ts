@@ -773,6 +773,31 @@ describe("POST /v1/checks:generate", () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
+  it("503 の本文が壊れていても、送り直す", async () => {
+    // 本文を捨てる処理の失敗を、接続の失敗として扱わない。
+    const broken = new ReadableStream({
+      start(controller) {
+        controller.error(new Error("connection closed"));
+      },
+    });
+    const success = JSON.stringify({
+      candidates: [{ content: { parts: [{ text: generatedCheck() }] }, finishReason: "STOP" }],
+      usageMetadata: { totalTokenCount: 900 },
+    });
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(() => Promise.resolve(new Response(broken, { status: 503 })))
+      .mockImplementationOnce(() => Promise.resolve(new Response(success, { status: 200 })));
+    vi.stubGlobal("fetch", fetchMock);
+    silenceWarn();
+    silenceInfo();
+
+    const response = await generate(buildApp());
+
+    expect(response.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("要求の誤り（4xx）は送り直さない", async () => {
     const fetchMock = vi
       .fn()
