@@ -132,6 +132,13 @@ export interface ChecksDeps {
   usage: AiUsageRepository;
   identity: IdentityRepository;
   audit: AuditLogRepository;
+  /**
+   * 回数上限（日 15・月 150）を効かせるか。省略は効かせる。
+   *
+   * テスト中だけ外す（`vars.CHECK_GENERATION_LIMITS: "off"`、#255 で戻す）。外しても回数と
+   * トークン量は記録し、月のトークン量の安全弁とレート制限は効かせたままにする。
+   */
+  enforceUsageLimits?: boolean;
   /** 「理解すること」の一覧。生成の口ができるまではモック（#224）。テストで差し替える。 */
   objectives?: readonly LearningObjective[];
   now: () => Date;
@@ -571,15 +578,19 @@ export function createChecksRoute(resolve: ChecksDepsResolver) {
       return c.json(limitReached("tokens", now), 429);
     }
     // 判定と加算を1つの操作で行う。上流へ送る前に確保する（`ai.ts` と同じ理由）。
+    // 上限を外しているとき（テスト中、#255）も加算はして、使った回数を残す。
     const { reserved, usage: after } = await deps.usage.reserve({
       userId,
       monthKey,
       dayKey,
       updatedAt: now.toISOString(),
-      limits: {
-        dailyRequests: AI_USAGE_LIMITS.dailyRequests,
-        monthlyRequests: AI_USAGE_LIMITS.monthlyRequests,
-      },
+      limits:
+        deps.enforceUsageLimits === false
+          ? { dailyRequests: Number.MAX_SAFE_INTEGER, monthlyRequests: Number.MAX_SAFE_INTEGER }
+          : {
+              dailyRequests: AI_USAGE_LIMITS.dailyRequests,
+              monthlyRequests: AI_USAGE_LIMITS.monthlyRequests,
+            },
     });
     if (!reserved) {
       const kind: AiUsageLimitKind =

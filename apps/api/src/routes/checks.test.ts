@@ -69,7 +69,10 @@ interface Harness {
  * AI ルートも同じ `AiUsageRepository` へ載せる。生成が回数を消費したことを、
  * 利用者向けの読み取り（`GET /v1/ai/usage`）から確かめられるようにするため。
  */
-function buildApp(objectives: readonly LearningObjective[] = []): Harness {
+function buildApp(
+  objectives: readonly LearningObjective[] = [],
+  options: { enforceUsageLimits?: boolean } = {},
+): Harness {
   const store = createInMemoryRepositoryStore();
   const usage = new InMemoryAiUsageRepository();
   const identity = new InMemoryIdentityRepository(store);
@@ -98,6 +101,7 @@ function buildApp(objectives: readonly LearningObjective[] = []): Harness {
       identity,
       audit: new InMemoryAuditLogRepository(store),
       objectives,
+      ...options,
       now: () => NOW,
     })),
   );
@@ -344,6 +348,20 @@ describe("POST /v1/checks:generate", () => {
       limit: "daily",
       message: expect.stringContaining("作ってある問題は、回数を使わずにそのまま解けます"),
     });
+  });
+
+  it("テスト中に上限を外したときは、日の上限を超えても作れ、回数は記録する", async () => {
+    // vars.CHECK_GENERATION_LIMITS: "off"（#255 で戻す）。
+    const fetchMock = stubUpstream(generatedCheck());
+    silenceInfo();
+    const harness = buildApp([], { enforceUsageLimits: false });
+    for (let i = 0; i < AI_USAGE_LIMITS.dailyRequests; i++) await generate(harness);
+
+    const response = await generate(harness);
+
+    expect(response.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(AI_USAGE_LIMITS.dailyRequests + 1);
+    expect(await usedToday(harness)).toBe(AI_USAGE_LIMITS.dailyRequests + 1);
   });
 
   it("同意が無ければ、送る前に止めて回数も使わない", async () => {

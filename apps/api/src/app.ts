@@ -199,6 +199,8 @@ app.route(
     usage: new D1AiUsageRepository(env.DB),
     identity: new D1IdentityRepository(env.DB),
     audit: new D1AuditLogRepository(env.DB),
+    // テスト中は回数上限を外す。値がちょうど "off" のときだけ外し、無い・別の値なら効かせる（#255）。
+    enforceUsageLimits: env.CHECK_GENERATION_LIMITS !== "off",
     now: () => new Date(),
   })),
 );
