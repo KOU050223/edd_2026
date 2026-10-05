@@ -16,6 +16,7 @@ import {
 } from "@gakushu-sochi/domain";
 import { ApiError, createSubmitGuard, requestJson } from "../../api.js";
 import {
+  allObjectivesUnderstood,
   CheckConsentRequiredError,
   changeGenerationConsent,
   checkErrorText,
@@ -30,6 +31,7 @@ import {
   upsertCheck,
   type CheckAnswers,
   type CheckGenerationConsent,
+  type CheckTarget,
 } from "../../check.js";
 import { checkResultEvent, recordCheckResult, type CheckCorrectness } from "../../check-result.js";
 import { ErrorPanel } from "../../errors.js";
@@ -52,8 +54,7 @@ const KIND_LABEL: Record<CheckQuestionKind, string> = {
 
 const percent = (value: number | null) => (value === null ? "—" : `${Math.round(value * 100)}%`);
 
-/** 生成する狙い1つ。範囲が項目なら項目 ID を持つ。 */
-type Target = { scope: CheckScope; objectiveId?: string };
+type Target = CheckTarget;
 
 /**
  * 正誤の記録の状態。採点の表示とは独立させる。
@@ -358,9 +359,7 @@ function CheckPage() {
   const [checks, setChecks] = useState(loaded.checks);
   const [consent, setConsent] = useState<CheckGenerationConsent>(loaded.consent);
   const [level, setLevel] = useState<CheckLevel>(loaded.recommended.level);
-  const [scope, setScope] = useState<CheckScope>(
-    loaded.objectives.length > 0 ? "objective" : "summary",
-  );
+  const [scope, setScope] = useState<CheckScope>("concept");
   const [selected, setSelected] = useState<readonly string[]>(() =>
     defaultObjectiveSelection(loaded.objectives, savedTargetsOf(loaded.checks)),
   );
@@ -370,13 +369,16 @@ function CheckPage() {
   const [progress, setProgress] = useState<{ done: number; total: number }>();
   const [failures, setFailures] = useState<GenerateFailure[]>([]);
   const submitGuard = useRef(createSubmitGuard());
+  // 「復習する」で増やす。組の key に入れて、採点済みの組も未回答から解き直せるようにする。
+  const [round, setRound] = useState(0);
+  const sets = useRef<HTMLElement>(null);
 
   const objectiveLabel = new Map(
     loaded.objectives.map((objective) => [objective.id, objective.label]),
   );
   const titleOf = (target: Target) =>
     target.objectiveId === undefined
-      ? CHECK_SCOPE_LABELS[target.scope]
+      ? label
       : (objectiveLabel.get(target.objectiveId) ?? target.objectiveId);
   const savedTargets = savedTargetsOf(checks);
   const generating = progress !== undefined;
@@ -463,7 +465,14 @@ function CheckPage() {
       .finally(() => setConsentSaving(false));
   };
 
-  const targets = generationTargets(scope, selected);
+  const targets = generationTargets(scope, loaded.objectives, selected, savedTargets);
+  const understood = allObjectivesUnderstood(loaded.objectives);
+  // 保存済みの問題を解き直す。生成しないので AI の利用回数を使わない（#236）。
+  const review = () => {
+    setRound((current) => current + 1);
+    sets.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+  const reviewable = scope === "concept" && targets.length === 0 && checks.length > 0;
   const toggle = (objectiveId: string) =>
     setSelected((current) =>
       current.includes(objectiveId)
@@ -524,9 +533,15 @@ function CheckPage() {
               </label>
             ))}
           </div>
-          {loaded.objectives.length === 0 && (
-            <p className="muted">この Concept にはまだ「理解すること」の一覧がありません。</p>
-          )}
+          {loaded.objectives.length === 0 ? (
+            <p className="muted">
+              この Concept にはまだ「理解すること」の一覧がないため、Concept 全体から1組作ります。
+            </p>
+          ) : scope === "concept" ? (
+            <p className="muted">
+              まだ理解済み（100%）でない項目を自動ですべて選び、1項目につき1組作ります。作成済みの項目は、下の「作った問題」から作り直せます。
+            </p>
+          ) : null}
         </div>
 
         {scope === "objective" && (
@@ -567,15 +582,31 @@ function CheckPage() {
           />
         ) : (
           <div className="actions">
-            <button
-              type="button"
-              disabled={targets.length === 0 || generating}
-              onClick={() => request(targets)}
-            >
-              {targets.length === 0
-                ? "項目を選んでください"
-                : `${targets.length} 組作る（AI 利用 ${targets.length} 回）`}
-            </button>
+            {reviewable ? (
+              <button type="button" disabled={generating} onClick={review}>
+                {understood ? "復習する" : "作った問題を解く"}
+              </button>
+            ) : (
+              <button
+                type="button"
+                disabled={targets.length === 0 || generating}
+                onClick={() => request(targets)}
+              >
+                {targets.length > 0
+                  ? `${targets.length} 組作る（AI 利用 ${targets.length} 回）`
+                  : scope === "objective"
+                    ? "項目を選んでください"
+                    : "作る問題がありません"}
+              </button>
+            )}
+            {reviewable && (
+              <span className="muted">保存済みの問題を出します（AI は使いません）。</span>
+            )}
+            {scope === "concept" && targets.length === 0 && checks.length === 0 && understood && (
+              <span className="muted">
+                すべての項目を理解済みです。「理解すること」で項目を選ぶと問題を作れます。
+              </span>
+            )}
             {progress && (
               <span className="muted" role="status">
                 作成中… {progress.done} / {progress.total} 組（1組に 30 秒ほどかかることがあります）
@@ -594,14 +625,14 @@ function CheckPage() {
         )}
       </section>
 
-      <section className="check-sets" aria-label="作った問題">
+      <section className="check-sets" aria-label="作った問題" ref={sets}>
         <h2>作った問題</h2>
         {checks.length === 0 ? (
           <p className="muted">まだ問題がありません。上で範囲を選んで作ってください。</p>
         ) : (
           checks.map((check) => (
             <CheckSet
-              key={`${checkTargetOf(check)}:${check.generatedAt}`}
+              key={`${checkTargetOf(check)}:${check.generatedAt}:${String(round)}`}
               check={check}
               title={titleOf(check)}
               regenerateLabel={`作り直す（${CHECK_LEVEL_LABELS[level]}）`}
@@ -677,5 +708,9 @@ export const Route = createFileRoute("/_framed/check/$conceptId")({
     return { checks, consent, objectives, recommended };
   },
   errorComponent: CheckError,
-  component: CheckPage,
+  // 同じルートのまま Concept だけ変わっても、前の Concept の問題や選択を持ち越さない。
+  component: function CheckPageForConcept() {
+    const { conceptId } = Route.useParams();
+    return <CheckPage key={conceptId} />;
+  },
 });

@@ -1508,15 +1508,25 @@ export class D1PersonalCheckRepository implements PersonalCheckRepository {
     return results.map(toPersonalCheck);
   }
 
-  async put(userId: string, check: PersonalConceptCheck): Promise<void> {
+  async put(
+    userId: string,
+    check: PersonalConceptCheck,
+    startedAtMs: number,
+  ): Promise<{ saved: boolean }> {
     const { conceptId, overview, practice } = check;
     // 本文は生成時の JSON と同じ形で持つ。読み出しで `parseConceptCheck` をそのまま通せる。
     const body = JSON.stringify({ conceptId, overview, practice });
-    await this.db
+    const result = await this.db
       .prepare(
         `INSERT INTO user_concept_checks (
            user_id, concept_id, target, scope, objective_id, level, body, model, generated_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         )
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
+         -- 生成を始めたあとに学習データが削除されていたら書かない。同じ文の中で判定する。
+         WHERE NOT EXISTS (
+           SELECT 1 FROM learning_history_resets
+           WHERE user_id = ? AND reset_at_ms >= ?
+         )
          ON CONFLICT (user_id, concept_id, target) DO UPDATE SET
            scope = excluded.scope,
            objective_id = excluded.objective_id,
@@ -1535,8 +1545,15 @@ export class D1PersonalCheckRepository implements PersonalCheckRepository {
         body,
         check.model,
         check.generatedAt,
+        userId,
+        startedAtMs,
       )
       .run();
+    const changes = result.meta.changes;
+    if (typeof changes !== "number") {
+      throw new Error("D1 insert result has no meta.changes");
+    }
+    return { saved: changes > 0 };
   }
 
   async listAllByUser(userId: string): Promise<PersonalConceptCheck[]> {

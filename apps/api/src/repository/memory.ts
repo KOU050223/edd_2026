@@ -606,14 +606,23 @@ export class InMemoryPersonalCheckRepository implements PersonalCheckRepository 
     return Promise.resolve(structuredClone(checks));
   }
 
-  put(userId: string, check: PersonalConceptCheck): Promise<void> {
+  put(
+    userId: string,
+    check: PersonalConceptCheck,
+    startedAtMs: number,
+  ): Promise<{ saved: boolean }> {
+    // D1 実装と同じく、生成を始めたあとに学習データが削除されていたら書かない。
+    const resetAtMs = this.store.historyResets.get(userId);
+    if (resetAtMs !== undefined && resetAtMs >= startedAtMs) {
+      return Promise.resolve({ saved: false });
+    }
     let checks = this.store.personalChecksByUser.get(userId);
     if (checks === undefined) {
       checks = new Map();
       this.store.personalChecksByUser.set(userId, checks);
     }
     checks.set(JSON.stringify([check.conceptId, checkTargetOf(check)]), structuredClone(check));
-    return Promise.resolve();
+    return Promise.resolve({ saved: true });
   }
 
   listAllByUser(userId: string): Promise<PersonalConceptCheck[]> {

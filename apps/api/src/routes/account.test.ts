@@ -169,11 +169,15 @@ describe("DELETE /v1/me", () => {
     await deps.identity.ensureUser({ userId: "auth0|user-a", nowMs: 0 });
     const checks = new InMemoryPersonalCheckRepository(deps.store);
     const consents = new InMemoryCheckGenerationConsentRepository(deps.store);
-    await checks.put("auth0|user-a", {
-      ...storedCheck("go.defer").check,
-      scope: "summary",
-      level: "basic",
-    });
+    await checks.put(
+      "auth0|user-a",
+      {
+        ...storedCheck("go.defer").check,
+        scope: "concept",
+        level: "basic",
+      },
+      0,
+    );
     await consents.put("auth0|user-a", { version: 1, grantedAt: "2026-10-01T00:00:00.000Z" });
 
     const response = await request(buildApp(deps));

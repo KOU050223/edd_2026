@@ -137,10 +137,8 @@ function scopeGuide(request: CheckRequest): string[] {
   switch (request.scope) {
     case "concept":
       return [
-        "この概念全体を出題の範囲にする。概要に書かれていない使い方も、この概念に属するものなら出題してよい。",
+        "上の「概要」に書かれた範囲を中心に、この概念全体から出題する。概念の外側にある知識を前提にしない。",
       ];
-    case "summary":
-      return ["上の「概要」に書かれた範囲を出題の的にする。概念の外側にある知識を前提にしない。"];
     case "objective":
       if (request.objective === undefined) {
         throw new Error("「理解すること」を狙う生成に項目がありません");

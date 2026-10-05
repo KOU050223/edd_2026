@@ -271,6 +271,52 @@ async function solvedQuestionsFor(
   return questions;
 }
 
+/**
+ * 自力解決した質問を、プロンプト全体が1回あたりの入力上限に収まる長さまで削る。
+ *
+ * 質問は新しい順に並んでいる。新しいものから残りの予算の分だけ載せ、入らなくなったら
+ * 古いものを落とす。上限で 500 にすると、同じ履歴からは何度試しても作れなくなる。
+ * 見積もりは UTF-8 のバイト数（`estimateInputTokens`）なので、削るのもバイト数で行う。
+ */
+function fitQuestionsToInputLimit(
+  input: Parameters<typeof buildCheckPrompt>[0],
+  base: CheckRequest,
+  questions: readonly string[],
+): string[] {
+  const limit = AI_USAGE_LIMITS.inputTokensPerRequest;
+  const fits = (candidate: readonly string[]) =>
+    estimateInputTokens(buildCheckPrompt(input, { ...base, solvedQuestions: candidate })) <= limit;
+  if (fits(questions)) return [...questions];
+
+  const kept: string[] = [];
+  for (const question of questions) {
+    // 区切りと見出しの分は、空の質問を載せたプロンプトで測る。
+    const overhead = estimateInputTokens(
+      buildCheckPrompt(input, { ...base, solvedQuestions: [...kept, ""] }),
+    );
+    const room = limit - overhead;
+    if (room <= 0) break;
+    const trimmed = truncateToBytes(question, room);
+    if (trimmed.length === 0) break;
+    kept.push(trimmed);
+  }
+  return kept;
+}
+
+/** 文字の途中で切らずに、UTF-8 で `maxBytes` バイト以内へ収める。 */
+function truncateToBytes(text: string, maxBytes: number): string {
+  const encoder = new TextEncoder();
+  let bytes = 0;
+  let end = 0;
+  for (const char of text) {
+    const size = encoder.encode(char).length;
+    if (bytes + size > maxBytes) break;
+    bytes += size;
+    end += char.length;
+  }
+  return text.slice(0, end);
+}
+
 export function createChecksRoute(resolve: ChecksDepsResolver) {
   const route = new Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>();
 
@@ -390,6 +436,17 @@ export function createChecksRoute(resolve: ChecksDepsResolver) {
         400,
       );
     }
+    // 項目を持つ Concept では、項目を狙わない組を作らない。正誤が項目の理解度に効かない
+    // （#223 決定 6）。画面の「Concept 単位」は、まだ 1.0 でない項目ごとに1組を作る（#236）。
+    if (scope === "concept" && objectives.length > 0) {
+      return c.json(
+        {
+          error: "invalid objective",
+          message: "この概念は「理解すること」の項目ごとに問題を作ります。項目を選んでください。",
+        },
+        400,
+      );
+    }
 
     // 送る前に同意を確かめる。その場の同意か、「今後表示しない」の記録のどちらか。
     if (consentVersion !== CHECK_GENERATION_CONSENT_VERSION) {
@@ -418,27 +475,42 @@ export function createChecksRoute(resolve: ChecksDepsResolver) {
       return c.json({ error: "AI service is not configured" }, 503);
     }
 
-    const request: CheckRequest = {
+    // 材料（学習イベントと会話）を読む前の時刻。上流を待つ間に学習データが削除されたら、
+    // 削除前の履歴から作った問題を保存しない（`PersonalCheckRepository.put`）。
+    const startedAtMs = deps.now().getTime();
+    const base: CheckRequest = {
       scope,
       level,
       ...(objective === undefined
         ? {}
         : { objective: { id: objective.id, label: objective.label } }),
-      solvedQuestions:
-        objective === undefined ? [] : await solvedQuestionsFor(deps, userId, objective.id),
+      solvedQuestions: [],
     };
-    const prompt = buildCheckPrompt(resolved.input, request);
-    const estimatedInputTokens = estimateInputTokens(prompt);
-    if (estimatedInputTokens > AI_USAGE_LIMITS.inputTokensPerRequest) {
-      // 質問の件数と長さは上限で切っているので、ここに来るのは上限の見積もり違いである。
-      // 利用者には縮めようがないため、こちらの不備として 500 を返す。
-      console.error("check prompt exceeds the per-request input limit", {
+    // 材料の無いプロンプトが上限を超えるのは、定義と方針の文面の見積もり違いである。
+    // 利用者には縮めようがないため、こちらの不備として 500 を返す。
+    if (
+      estimateInputTokens(buildCheckPrompt(resolved.input, base)) >
+      AI_USAGE_LIMITS.inputTokensPerRequest
+    ) {
+      console.error("check prompt exceeds the per-request input limit without material", {
         conceptId,
-        estimatedInputTokens,
         limit: AI_USAGE_LIMITS.inputTokensPerRequest,
       });
       return c.json({ error: "check prompt is too large" }, 500);
     }
+    const request: CheckRequest = {
+      ...base,
+      solvedQuestions:
+        objective === undefined
+          ? []
+          : fitQuestionsToInputLimit(
+              resolved.input,
+              base,
+              await solvedQuestionsFor(deps, userId, objective.id),
+            ),
+    };
+    const prompt = buildCheckPrompt(resolved.input, request);
+    const estimatedInputTokens = estimateInputTokens(prompt);
 
     const now = deps.now();
     const monthKey = utcMonthKey(now);
@@ -529,18 +601,9 @@ export function createChecksRoute(resolve: ChecksDepsResolver) {
       return c.json({ error: "AI upstream request failed" }, 502);
     }
 
+    // 実消費を当月へ足す。本文が使えない応答（切れた・空・拒否）でも上流では課金されるので、
+    // 判定より先に足す。取れなければ 0 で済ませず、上界の見積もりを足して残す（RULE-004）。
     const generated = readGeneratedText(raw);
-    if (!generated.ok) {
-      console.error("check generation response was not usable", {
-        conceptId,
-        model,
-        reason: generated.reason,
-        detail: generated.detail,
-      });
-      return c.json(failureBody(generated.reason), 502);
-    }
-
-    // 実消費を当月へ足す。取れなければ 0 で済ませず、上界の見積もりを足して残す（RULE-004）。
     const tokens =
       generated.totalTokens ?? estimatedInputTokens + AI_USAGE_LIMITS.outputTokensPerRequest;
     if (generated.totalTokens === undefined) {
@@ -557,6 +620,16 @@ export function createChecksRoute(resolve: ChecksDepsResolver) {
       tokens,
       updatedAt: now.toISOString(),
     });
+
+    if (!generated.ok) {
+      console.error("check generation response was not usable", {
+        conceptId,
+        model,
+        reason: generated.reason,
+        detail: generated.detail,
+      });
+      return c.json(failureBody(generated.reason), 502);
+    }
 
     const parsed = parseConceptCheck(generated.text, resolved.input.id);
     if (!parsed.ok) {
@@ -579,7 +652,18 @@ export function createChecksRoute(resolve: ChecksDepsResolver) {
     };
     // 保存に失敗したら例外のまま 500 にする。問題だけ返して保存の失敗を飲み込むと、
     // 次に開いたときに問題が無く、回数だけが減っている（RULE-004）。
-    await deps.checks.put(userId, check);
+    const { saved } = await deps.checks.put(userId, check, startedAtMs);
+    if (!saved) {
+      // 生成中に学習データが削除された。削除を優先し、作った問題は返さない。
+      console.info("generated check was discarded by a learning data reset", { conceptId });
+      return c.json(
+        {
+          error: "check discarded by reset",
+          message: "生成中に学習データが削除されたため、作った問題は保存しませんでした。",
+        },
+        409,
+      );
+    }
 
     // その場の同意は、生成のたびに記録しない。「今後表示しない」は PUT で別に記録する。
     console.info("check generation completed", {

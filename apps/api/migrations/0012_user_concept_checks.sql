@@ -9,8 +9,8 @@
 -- 学習データの削除（DELETE /v1/learning-events）とエクスポートの対象にも含める。
 --
 -- 1人・1 Concept・1つの狙い（target）につき1組を持つ。target は
--- `concept` / `summary` / 「理解すること」の項目 ID（`<Concept ID>:<識別子>`）のどれかで、
--- 項目 ID はコロンを含むので前の2つと衝突しない（packages/domain の checkTargetOf）。
+-- `concept` か「理解すること」の項目 ID（`<Concept ID>:<識別子>`）で、
+-- 項目 ID はコロンを含むので `concept` と衝突しない（packages/domain の checkTargetOf）。
 -- 「作り直す」はこの1行を上書きする。
 --
 -- 利用者の回答内容はここにも、他のどこにも保存しない（#43）。
@@ -18,7 +18,8 @@ CREATE TABLE user_concept_checks (
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   concept_id TEXT NOT NULL,
   target TEXT NOT NULL,
-  scope TEXT NOT NULL CHECK (scope IN ('concept', 'summary', 'objective')),
+  -- objective は「理解すること」の1項目を狙った組、concept は項目を持たない Concept の1組（#236）。
+  scope TEXT NOT NULL CHECK (scope IN ('concept', 'objective')),
   -- scope が objective のときだけ持つ。target と同じ値になる。
   objective_id TEXT,
   level TEXT NOT NULL CHECK (level IN ('intro', 'basic', 'advanced')),

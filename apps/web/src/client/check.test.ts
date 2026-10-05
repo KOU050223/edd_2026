@@ -2,6 +2,7 @@ import type { PersonalConceptCheck } from "@gakushu-sochi/domain";
 import { afterEach, expect, test, vi } from "vitest";
 import { ApiError } from "./api.js";
 import {
+  allObjectivesUnderstood,
   CHECKS_GENERATE_PATH,
   CheckConsentRequiredError,
   CheckGenerationError,
@@ -88,6 +89,7 @@ test("利用者ごとの2問1組だけを問題として受け入れる", () => 
   expect(isPersonalConceptCheck({ ...CHECK, level: "expert" }, "go.defer")).toBe(false);
   // 項目を狙う組は項目 ID を、それ以外は持たない。
   expect(isPersonalConceptCheck({ ...CHECK, objectiveId: undefined }, "go.defer")).toBe(false);
+  expect(isPersonalConceptCheck({ ...CHECK, scope: "concept" }, "go.defer")).toBe(false);
   expect(isPersonalConceptCheck({ ...CHECK, scope: "summary" }, "go.defer")).toBe(false);
 });
 
@@ -215,18 +217,46 @@ test("最初から選ぶのは、満点でなく作成済みでもない項目",
   expect(defaultObjectiveSelection(objectives, new Set(["d"]))).toEqual(["b", "c"]);
 });
 
-test("項目単位なら選んだ項目ごとに1組、それ以外は1組作る", () => {
-  expect(generationTargets("objective", ["a", "b"])).toEqual([
+const OBJECTIVES = [
+  { id: "a", label: "A", value: 1 },
+  { id: "b", label: "B", value: 0.5 },
+  { id: "c", label: "C", value: null },
+];
+
+test("理解すること単位では、選んだ項目ごとに1組作る", () => {
+  expect(generationTargets("objective", OBJECTIVES, ["a", "b"], new Set())).toEqual([
     { scope: "objective", objectiveId: "a" },
     { scope: "objective", objectiveId: "b" },
   ]);
-  expect(generationTargets("objective", [])).toEqual([]);
-  expect(generationTargets("summary", ["a"])).toEqual([{ scope: "summary" }]);
+  expect(generationTargets("objective", OBJECTIVES, [], new Set())).toEqual([]);
+});
+
+test("Concept 単位では、まだ 1.0 でなく作成済みでもない項目を自動ですべて1組ずつ作る", () => {
+  expect(generationTargets("concept", OBJECTIVES, [], new Set(["c"]))).toEqual([
+    { scope: "objective", objectiveId: "b" },
+  ]);
+  // 選択の状態に引きずられない。
+  expect(generationTargets("concept", OBJECTIVES, ["a"], new Set())).toEqual([
+    { scope: "objective", objectiveId: "b" },
+    { scope: "objective", objectiveId: "c" },
+  ]);
+});
+
+test("項目を持たない Concept の Concept 単位は、まだ作っていなければ1組", () => {
+  expect(generationTargets("concept", [], [], new Set())).toEqual([{ scope: "concept" }]);
+  expect(generationTargets("concept", [], [], new Set(["concept"]))).toEqual([]);
+});
+
+test("すべての項目が 1.0 のときだけ理解済みとして扱う", () => {
+  expect(allObjectivesUnderstood(OBJECTIVES)).toBe(false);
+  expect(allObjectivesUnderstood([{ id: "a", label: "A", value: 1 }])).toBe(true);
+  // 項目が無い Concept は「理解済み」と言わない（復習ボタンにしない）。
+  expect(allObjectivesUnderstood([])).toBe(false);
 });
 
 test("作り直した組は同じ狙いの古い組と置き換えて先頭に置く", () => {
-  const summary = { ...CHECK, scope: "summary" as const, objectiveId: undefined };
+  const other = { ...CHECK, objectiveId: "go.defer:lifo" };
   const regenerated = { ...CHECK, level: "advanced" as const, generatedAt: "2026-10-05T00:00:00Z" };
 
-  expect(upsertCheck([summary, CHECK], regenerated)).toEqual([regenerated, summary]);
+  expect(upsertCheck([other, CHECK], regenerated)).toEqual([regenerated, other]);
 });

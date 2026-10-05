@@ -39,7 +39,16 @@ export type GeneratedTextResult =
        */
       totalTokens?: number;
     }
-  | { ok: false; reason: GeneratedTextFailure; detail?: string };
+  | {
+      ok: false;
+      reason: GeneratedTextFailure;
+      detail?: string;
+      /**
+       * 失敗した応答でも上流が報告した消費トークン。切れた応答や空の応答でも課金は起きるため、
+       * 呼び出し側が利用量へ足せるように残す。取れなければ `undefined`。
+       */
+      totalTokens?: number;
+    };
 
 /**
  * Gemini の `generateContent` の応答（非ストリーミング）から本文を取り出す。
@@ -65,20 +74,25 @@ export function readGeneratedText(raw: string): GeneratedTextResult {
     modelVersion?: unknown;
   };
 
+  const reported = body.usageMetadata?.totalTokenCount;
+  const totalTokens =
+    typeof reported === "number" && Number.isFinite(reported) ? reported : undefined;
+  const usage = totalTokens === undefined ? {} : { totalTokens };
+
   const blockReason = body.promptFeedback?.blockReason;
   if (typeof blockReason === "string" && blockReason !== "") {
-    return { ok: false, reason: "blocked", detail: blockReason };
+    return { ok: false, reason: "blocked", detail: blockReason, ...usage };
   }
 
   const candidate = Array.isArray(body.candidates) ? (body.candidates[0] as unknown) : undefined;
   if (typeof candidate !== "object" || candidate === null) {
-    return { ok: false, reason: "no-text", detail: "candidates が空" };
+    return { ok: false, reason: "no-text", detail: "candidates が空", ...usage };
   }
   const { content, finishReason } = candidate as { content?: unknown; finishReason?: unknown };
   // 上限に当たって切れた応答は、JSON として壊れているかどうかに関わらず拒否する。
   // 途中まで読めた JSON を受理すると、切り詰められた問題文が出題される。
   if (finishReason === "MAX_TOKENS") {
-    return { ok: false, reason: "truncated", detail: "出力上限に達した" };
+    return { ok: false, reason: "truncated", detail: "出力上限に達した", ...usage };
   }
   const parts = (content as { parts?: unknown } | null)?.parts;
   const text = Array.isArray(parts)
@@ -92,16 +106,15 @@ export function readGeneratedText(raw: string): GeneratedTextResult {
       ok: false,
       reason: "no-text",
       detail: typeof finishReason === "string" ? `finishReason=${finishReason}` : "本文が空",
+      ...usage,
     };
   }
 
-  const totalTokens = body.usageMetadata?.totalTokenCount;
   return {
     ok: true,
     text,
     modelVersion: typeof body.modelVersion === "string" ? body.modelVersion : undefined,
-    totalTokens:
-      typeof totalTokens === "number" && Number.isFinite(totalTokens) ? totalTokens : undefined,
+    totalTokens,
   };
 }
 

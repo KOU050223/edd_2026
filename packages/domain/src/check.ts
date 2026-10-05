@@ -110,19 +110,22 @@ export const CHECK_LEVEL_LABELS: Readonly<Record<CheckLevel, string>> = {
 };
 
 /**
- * 生成のときに利用者が選ぶ出題の範囲（#236）。
+ * 保存した1組の狙い（#236）。
  *
- * - `concept`: Concept 全体
- * - `summary`: Concept の概要（`summary`）に書かれた範囲
  * - `objective`: 「理解すること」の1項目。1項目につき1組を作る（#226）
+ * - `concept`: Concept の定義から作った1組。**「理解すること」を持たない Concept だけ**に使う
+ *
+ * 画面の「Concept 単位」は、項目を持つ Concept では「まだ 1.0 でない項目を自動ですべて選ぶ」
+ * ことを意味し、作る組はどれも `objective` になる。項目を持つ Concept で `concept` の組を作ると、
+ * 正誤が項目の理解度に効かない（#223 決定 6）ため、API が受け付けない
+ * （#236 のコメント 5987364522）。概要単位は同じ理由で廃止した。
  */
-export type CheckScope = "concept" | "summary" | "objective";
+export type CheckScope = "concept" | "objective";
 
-export const CHECK_SCOPES: readonly CheckScope[] = ["concept", "summary", "objective"];
+export const CHECK_SCOPES: readonly CheckScope[] = ["concept", "objective"];
 
 export const CHECK_SCOPE_LABELS: Readonly<Record<CheckScope, string>> = {
-  concept: "Concept 全体",
-  summary: "概要",
+  concept: "Concept 単位",
   objective: "理解すること",
 };
 
@@ -142,9 +145,9 @@ export interface PersonalConceptCheck extends ConceptCheck {
 }
 
 /**
- * 保存の単位（狙い）を表す文字列。`concept` / `summary` / 項目 ID のどれか。
+ * 保存の単位（狙い）を表す文字列。`concept` か項目 ID。
  *
- * 項目 ID は `<Concept ID>:<識別子>` の形でコロンを含むので、`concept` / `summary` と衝突しない。
+ * 項目 ID は `<Concept ID>:<識別子>` の形でコロンを含むので、`concept` と衝突しない。
  */
 export function checkTargetOf(check: Pick<PersonalConceptCheck, "scope" | "objectiveId">): string {
   if (check.scope !== "objective") return check.scope;

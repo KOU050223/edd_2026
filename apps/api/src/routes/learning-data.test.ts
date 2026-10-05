@@ -544,11 +544,11 @@ test("利用者ごとの確認問題は学習データの削除で一緒に消�
   // 本人の質問履歴を材料に作った個人データなので、履歴と一緒に消す（#236）。
   const personal = {
     ...storedCheck("go.defer").check,
-    scope: "summary" as const,
+    scope: "concept" as const,
     level: "basic" as const,
   };
-  await personalChecks.put("user-a", personal);
-  await personalChecks.put("user-b", personal);
+  await personalChecks.put("user-a", personal, 0);
+  await personalChecks.put("user-b", personal, 0);
   await seed("user-a", [event({ id: "e1" })]);
 
   const deleted = await request("/v1/learning-events", "token-a", "DELETE");

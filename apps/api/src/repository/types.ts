@@ -510,7 +510,19 @@ export interface ConceptCheckRepository {
 export interface PersonalCheckRepository {
   /** その Concept で保存済みの組。生成時刻の新しい順。無ければ空配列。 */
   listByConcept(userId: string, conceptId: string): Promise<PersonalConceptCheck[]>;
-  put(userId: string, check: PersonalConceptCheck): Promise<void>;
+  /**
+   * 1組を保存する（同じ狙いは上書き）。
+   *
+   * **生成を始めた時刻（`startedAtMs`）が学習データの削除時刻（`learning_history_resets`）
+   * 以前なら書かず、`saved: false` を返す。** 生成は上流を待つ間に削除が終わりうる。
+   * 削除前の履歴から作った問題を後から書くと、消したはずのデータが戻る。
+   * 判定と書き込みは同じ文で行う（`LearningEventRepository.append` と同じ）。
+   */
+  put(
+    userId: string,
+    check: PersonalConceptCheck,
+    startedAtMs: number,
+  ): Promise<{ saved: boolean }>;
   /** エクスポート用。全件を Concept ID・狙いの順で返す。 */
   listAllByUser(userId: string): Promise<PersonalConceptCheck[]>;
   /**

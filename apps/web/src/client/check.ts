@@ -351,13 +351,35 @@ export function upsertCheck(
   return [generated, ...checks.filter((check) => checkTargetOf(check) !== target)];
 }
 
-/** 生成する狙いの一覧。範囲が項目なら選んだ項目ごとに1組、それ以外は1組。 */
+/** 生成する狙い1つ。範囲が項目なら項目 ID を持つ。 */
+export type CheckTarget = { scope: CheckScope; objectiveId?: string };
+
+/**
+ * 生成する狙いの一覧（#236 のコメント 5987364522）。
+ *
+ * - Concept 単位: 項目を持つ Concept では、**まだ 1.0 でない項目を自動ですべて選び、1項目1組**。
+ *   作成済みの項目は外す（作り直しは組ごとのボタンで行い、回数を黙って使わない）。
+ *   項目を持たない Concept では、まだ作っていなければ Concept の定義から1組。
+ * - 理解すること単位: 利用者が選んだ項目ごとに1組。
+ *
+ * 項目を持つ Concept で項目を狙わない組は作らない。正誤が項目の理解度に効かないため。
+ */
 export function generationTargets(
   scope: CheckScope,
+  objectives: readonly ObjectiveProgress[],
   selectedObjectiveIds: readonly string[],
-): { scope: CheckScope; objectiveId?: string }[] {
-  if (scope !== "objective") return [{ scope }];
-  return selectedObjectiveIds.map((objectiveId) => ({ scope, objectiveId }));
+  savedTargets: ReadonlySet<string>,
+): CheckTarget[] {
+  const objectiveTargets = (ids: readonly string[]) =>
+    ids.map((objectiveId): CheckTarget => ({ scope: "objective", objectiveId }));
+  if (scope === "objective") return objectiveTargets(selectedObjectiveIds);
+  if (objectives.length === 0) return savedTargets.has("concept") ? [] : [{ scope: "concept" }];
+  return objectiveTargets(defaultObjectiveSelection(objectives, savedTargets));
+}
+
+/** すべての項目が 1.0 に達しているか。達していれば作るボタンを「復習する」に変える。 */
+export function allObjectivesUnderstood(objectives: readonly ObjectiveProgress[]): boolean {
+  return objectives.length > 0 && objectives.every((objective) => (objective.value ?? 0) >= 1);
 }
 
 /** `GET /v1/checks:export` の応答。 */
