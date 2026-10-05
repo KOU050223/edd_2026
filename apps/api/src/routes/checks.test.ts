@@ -92,6 +92,7 @@ function buildApp(
       apiKey: env.GEMINI_API_KEY,
       model: env.GEMINI_MODEL,
       fetch: (input, init) => globalThis.fetch(input, init),
+      retryDelaysMs: [0, 0],
       checks,
       consents,
       events,
@@ -263,6 +264,10 @@ function sentPrompt(fetchMock: ReturnType<typeof stubUpstream>): string {
 /** 生成の記録は運用で追う材料なので、テスト中は黙らせた上で内容を確かめる。 */
 function silenceInfo() {
   return vi.spyOn(console, "info").mockImplementation(() => undefined);
+}
+
+function silenceWarn() {
+  return vi.spyOn(console, "warn").mockImplementation(() => undefined);
 }
 
 function silenceError() {
@@ -726,6 +731,59 @@ describe("POST /v1/checks:generate", () => {
       message: "AI の呼び出しに失敗しました（状態 500）。時間をおいて、もう一度お試しください。",
     });
     expect(error).toHaveBeenCalled();
+  });
+
+  it("上流が混雑（503）を返したら、送り直して生成する", async () => {
+    const success = JSON.stringify({
+      candidates: [{ content: { parts: [{ text: generatedCheck() }] }, finishReason: "STOP" }],
+      usageMetadata: { totalTokenCount: 900 },
+    });
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(() => Promise.resolve(new Response("busy", { status: 503 })))
+      .mockImplementationOnce(() => Promise.resolve(new Response(success, { status: 200 })));
+    vi.stubGlobal("fetch", fetchMock);
+    silenceWarn();
+    silenceInfo();
+    const harness = buildApp();
+
+    const response = await generate(harness);
+
+    expect(response.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    // 送り直しても、回数は1回だけ数える。
+    expect(await usedToday(harness)).toBe(1);
+  });
+
+  it("混雑が続けば、決めた回数だけ送り直してから失敗を伝える", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(() => Promise.resolve(new Response("busy", { status: 503 })));
+    vi.stubGlobal("fetch", fetchMock);
+    silenceWarn();
+    silenceError();
+
+    const response = await generate(buildApp());
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toMatchObject({
+      reason: "upstream-status",
+      status: 503,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("要求の誤り（4xx）は送り直さない", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(() => Promise.resolve(new Response("bad", { status: 400 })));
+    vi.stubGlobal("fetch", fetchMock);
+    silenceError();
+
+    const response = await generate(buildApp());
+
+    expect(response.status).toBe(502);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("上流が転送（3xx）を返したら、追わずに失敗として扱う", async () => {
