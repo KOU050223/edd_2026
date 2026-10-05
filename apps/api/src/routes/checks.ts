@@ -153,6 +153,11 @@ interface CheckGenerationErrorBody {
   reason: GeneratedTextFailure | CheckParseFailure;
   /** 画面へそのまま出せる説明。上流の応答の断片は載せない。 */
   message: string;
+  /**
+   * 上流が報告した終了理由（`STOP`・`OTHER` など）。上流の応答が届いたときだけ持つ。
+   * 列挙値なので載せてよい。本番のログを見られなくても、空の応答の原因を切り分けられる。
+   */
+  finishReason?: string;
 }
 
 /** `GET /v1/check-generation-consent` の応答。 */
@@ -178,7 +183,10 @@ export interface CheckExportBody {
  * ただし**何が起きたかは伝える**。「失敗しました」だけでは、再試行すれば直るのか、
  * 別の Concept を選ぶべきなのかが分からない。
  */
-function failureBody(reason: GeneratedTextFailure | CheckParseFailure): CheckGenerationErrorBody {
+function failureBody(
+  reason: GeneratedTextFailure | CheckParseFailure,
+  finishReason?: string,
+): CheckGenerationErrorBody {
   const message = {
     "not-json": "AI の応答を問題として読めませんでした。もう一度お試しください。",
     blocked: "AI が生成を拒否しました。時間をおいて、もう一度お試しください。",
@@ -193,7 +201,15 @@ function failureBody(reason: GeneratedTextFailure | CheckParseFailure): CheckGen
       "AI が作った問題に同じ選択肢が複数あり、正解が1つに定まりませんでした。もう一度お試しください。",
     "concept-mismatch": "AI が別の概念の問題を返しました。もう一度お試しください。",
   }[reason];
-  return { error: "check generation failed", reason, message };
+  if (finishReason === undefined) {
+    return { error: "check generation failed", reason, message };
+  }
+  return {
+    error: "check generation failed",
+    reason,
+    message: `${message}（AI の終了理由: ${finishReason}）`,
+    finishReason,
+  };
 }
 
 /**
@@ -685,7 +701,7 @@ export function createChecksRoute(resolve: ChecksDepsResolver) {
         reason: generated.reason,
         detail: generated.detail,
       });
-      return c.json(failureBody(generated.reason), 502);
+      return c.json(failureBody(generated.reason, generated.finishReason), 502);
     }
 
     const parsed = parseConceptCheck(generated.text, resolved.input.id);
