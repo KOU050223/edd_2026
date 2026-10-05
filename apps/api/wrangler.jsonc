@@ -16,6 +16,9 @@
     // 認証付きの API なので "*" にしない。空なら誰も許可しない。
     "CORS_ALLOWED_ORIGINS": "",
     "GEMINI_MODEL": "gemini-3.6-flash",
+    // テスト中だけ、確認問題の生成の回数上限（日 15・月 150）を外す。
+    // 確認問題の実装が終わったらこの行を消して上限を戻す（#255）。"off" 以外・未設定なら上限が効く。
+    "CHECK_GENERATION_LIMITS": "off",
     // Auth0 の issuer。OIDC Discovery が返す値をそのまま置く（末尾スラッシュ必須）。
     // docs/auth.md §4 はこの値と Discovery 文書の `issuer` の一致を要求するため、
     // 手で書き換えず .well-known/openid-configuration の値を使う。
