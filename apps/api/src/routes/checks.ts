@@ -71,6 +71,7 @@ import type {
   IdentityRepository,
   LearningEventRepository,
   PersonalCheckRepository,
+  UserSettingsRepository,
 } from "../repository/types.js";
 
 /**
@@ -125,6 +126,8 @@ export interface ChecksDeps {
   events: LearningEventRepository;
   /** 自力解決した会話の本文。「質問履歴の保存」を有効にした人の分だけがある。 */
   conversations: ConversationRepository;
+  /** 「質問履歴の保存」が今も有効かを見る。無効なら保存済みの会話も材料にしない。 */
+  settings: UserSettingsRepository;
   /** `ai_usage.user_id` は `users(id)` を参照するので、数える前に行を用意する。 */
   usage: AiUsageRepository;
   identity: IdentityRepository;
@@ -222,8 +225,12 @@ function consentBody(record: ConsentRecord | null): CheckGenerationConsentBody {
 /**
  * 狙う項目で本人が自力解決した質問を、新しい順に上限まで集める。
  *
- * 学習イベントの `sessionId` が会話 ID である（#233）。会話が無い（質問履歴の保存が無効、
+ * 学習イベントの `sessionId` が会話 ID である（#233）。会話が無い（保存していない、
  * または消した）なら材料は無い。それは失敗ではなく、通常の1組を作る（#236 の決定 3）。
+ *
+ * **「質問履歴の保存」を今無効にしている人の会話は、保存済みでも使わない。** 無効にしても
+ * 保存済みの履歴は残る（`CONSENT_NOTICE_DETAIL`）が、無効にした人は自分の履歴を使ってほしくない
+ * と読むのが自然で、生成の同意の文面（`CHECK_GENERATION_NOTICE`）もそう約束している。
  * 渡すのは**質問文（`user`）だけ**で、選択テキスト（`context`）と回答（`assistant`）は渡さない。
  */
 async function solvedQuestionsFor(
@@ -231,6 +238,9 @@ async function solvedQuestionsFor(
   userId: string,
   objectiveId: string,
 ): Promise<string[]> {
+  const settings = await deps.settings.get(userId);
+  if (settings?.saveConversationHistory !== true) return [];
+
   const events = await deps.events.listByUser(userId);
   const sessionIds: string[] = [];
   // listByUser は発生時刻の昇順なので、後ろから見ると新しい順になる。

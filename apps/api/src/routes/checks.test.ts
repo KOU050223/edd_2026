@@ -9,6 +9,7 @@ import { createAuth, type AuthVariables } from "../auth/middleware.js";
 import type { AuthVerifier } from "../auth/verifier.js";
 import { AI_USAGE_LIMITS } from "../contract/ai-usage.js";
 import { InMemoryAiUsageRepository } from "../repository/ai-usage.js";
+import { InMemoryUserSettingsRepository } from "../repository/user-settings.js";
 import {
   createInMemoryRepositoryStore,
   InMemoryAuditLogRepository,
@@ -59,6 +60,7 @@ interface Harness {
   consents: InMemoryCheckGenerationConsentRepository;
   events: InMemoryLearningEventRepository;
   conversations: InMemoryConversationRepository;
+  settings: InMemoryUserSettingsRepository;
 }
 
 /**
@@ -75,6 +77,7 @@ function buildApp(): Harness {
   const consents = new InMemoryCheckGenerationConsentRepository(store);
   const events = new InMemoryLearningEventRepository(store);
   const conversations = new InMemoryConversationRepository(store);
+  const settings = new InMemoryUserSettingsRepository();
   const app = new Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>();
   app.use(
     "/v1/*",
@@ -90,6 +93,7 @@ function buildApp(): Harness {
       consents,
       events,
       conversations,
+      settings,
       usage,
       identity,
       audit: new InMemoryAuditLogRepository(store),
@@ -108,7 +112,7 @@ function buildApp(): Harness {
       now: () => NOW,
     })),
   );
-  return { app, store, checks, consents, events, conversations };
+  return { app, store, checks, consents, events, conversations, settings };
 }
 
 const ENV = {
@@ -204,13 +208,17 @@ async function usedToday(harness: Harness): Promise<number> {
   return body.managedAi.daily.used;
 }
 
-/** 本人が項目を自力解決した会話を、学習イベントと会話の両方に置く。 */
+/**
+ * 本人が項目を自力解決した会話を、学習イベントと会話の両方に置く。
+ * 「質問履歴の保存」も有効にする（会話が保存されるのは有効なときだけなので、実際の状態に揃える）。
+ */
 async function seedSolvedConversation(
   harness: Harness,
   conversationId: string,
   occurredAt: string,
   questionText: string,
 ) {
+  await harness.settings.put(USER_A, { saveConversationHistory: true }, occurredAt);
   const event: LearningEvent = {
     id: `event-${conversationId}`,
     occurredAt,
@@ -479,6 +487,28 @@ describe("POST /v1/checks:generate", () => {
 
     expect(response.status).toBe(200);
     expect(sentPrompt(fetchMock)).not.toContain("自力で解決した質問");
+  });
+
+  it("「質問履歴の保存」を後から無効にした人の会話は、保存済みでも渡さない", async () => {
+    // 無効にしても保存済みの履歴は残る。同意の文面は「有効にしているときだけ」と約束している。
+    const fetchMock = stubUpstream(generatedCheck());
+    const info = silenceInfo();
+    const harness = buildApp();
+    await seedSolvedConversation(harness, "conv-1", "2026-09-01T00:00:00.000Z", "保存済みの質問");
+    await harness.settings.put(
+      USER_A,
+      { saveConversationHistory: false },
+      "2026-09-02T00:00:00.000Z",
+    );
+
+    const response = await generate(harness, OBJECTIVE_BASIC);
+
+    expect(response.status).toBe(200);
+    expect(sentPrompt(fetchMock)).not.toContain("保存済みの質問");
+    expect(info).toHaveBeenCalledWith(
+      "check generation completed",
+      expect.objectContaining({ materialCount: 0 }),
+    );
   });
 
   it("概要単位の生成には質問を渡さない", async () => {

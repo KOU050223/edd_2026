@@ -195,6 +195,7 @@ app.route(
     consents: new D1CheckGenerationConsentRepository(env.DB),
     events: new D1LearningEventRepository(env.DB),
     conversations: new D1ConversationRepository(env.DB),
+    settings: new D1UserSettingsRepository(env.DB),
     usage: new D1AiUsageRepository(env.DB),
     identity: new D1IdentityRepository(env.DB),
     audit: new D1AuditLogRepository(env.DB),
