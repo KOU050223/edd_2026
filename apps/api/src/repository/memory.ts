@@ -34,11 +34,16 @@ import type {
   ImportSessionRepository,
   LearningEventRepository,
   LearningEvidenceRepository,
+  LearningMapRepository,
   PersonalCheckRepository,
   StoredConceptCheck,
   StoredEventInput,
   StoredImportSessionInput,
+  StoredLearningMap,
+  StoredMapContent,
+  StoredOwnMapNode,
 } from "./types.js";
+import type { LearningMapSummary, LearningObjectiveSource } from "../contract/learning-maps.js";
 
 export interface InMemoryRepositoryStore {
   readonly users: Map<string, { createdAtMs: number }>;
@@ -73,6 +78,14 @@ export interface InMemoryRepositoryStore {
   readonly personalChecksByUser: Map<string, Map<string, PersonalConceptCheck>>;
   /** userId -> 生成への同意。D1 の check_generation_consents に対応する。 */
   readonly checkGenerationConsents: Map<string, ConsentRecord>;
+  /** mapId -> マップ（ノード・線・項目込み）。D1 の learning_maps とその下の表に対応する。 */
+  readonly learningMaps: Map<string, InMemoryLearningMap>;
+}
+
+/** インメモリのマップ1件。 */
+export interface InMemoryLearningMap extends StoredLearningMap {
+  ownerUserId: string;
+  updatedAtMs: number;
 }
 
 export function createInMemoryRepositoryStore(): InMemoryRepositoryStore {
@@ -89,6 +102,7 @@ export function createInMemoryRepositoryStore(): InMemoryRepositoryStore {
     conceptChecks: new Map(),
     personalChecksByUser: new Map(),
     checkGenerationConsents: new Map(),
+    learningMaps: new Map(),
   };
 }
 
@@ -250,6 +264,10 @@ export class InMemoryIdentityRepository implements IdentityRepository {
     // user_concept_checks / check_generation_consents も CASCADE で参照する（#236）。
     this.store.personalChecksByUser.delete(userId);
     this.store.checkGenerationConsents.delete(userId);
+    // learning_maps も CASCADE で参照し、ノード・線・項目はマップから CASCADE で消える（#242）。
+    for (const [mapId, map] of this.store.learningMaps) {
+      if (map.ownerUserId === userId) this.store.learningMaps.delete(mapId);
+    }
     // D1 の audit_log は users(id) を ON DELETE CASCADE で参照している。
     // 退会で監査ログも消えるという実際の振る舞いに合わせる。
     for (let i = this.store.auditLog.length - 1; i >= 0; i--) {
@@ -657,5 +675,172 @@ export class InMemoryCheckGenerationConsentRepository implements CheckGeneration
   delete(userId: string): Promise<void> {
     this.store.checkGenerationConsents.delete(userId);
     return Promise.resolve();
+  }
+}
+
+/**
+ * `LearningMapRepository` のインメモリ実装。テスト用。
+ *
+ * 並び（一覧は更新の新しい順・同時刻は ID の昇順、ノードは保存した順）と、
+ * 置き換えで残したノードの項目を消さないことを D1 実装と揃えてある。
+ * 返す値は複製し、呼び出し側が書き換えてもストアに響かないようにする。
+ */
+export class InMemoryLearningMapRepository implements LearningMapRepository {
+  constructor(private readonly store: InMemoryRepositoryStore = createInMemoryRepositoryStore()) {}
+
+  create(
+    ownerUserId: string,
+    params: {
+      id: string;
+      content: StoredMapContent;
+      nowIso: string;
+      nowMs: number;
+      maxMaps: number;
+    },
+  ): Promise<{ created: boolean }> {
+    if (this.ownedMaps(ownerUserId).length >= params.maxMaps) {
+      return Promise.resolve({ created: false });
+    }
+    this.store.learningMaps.set(params.id, {
+      ...structuredClone(params.content),
+      id: params.id,
+      ownerUserId,
+      visibility: "private",
+      createdAt: params.nowIso,
+      updatedAt: params.nowIso,
+      updatedAtMs: params.nowMs,
+      objectives: new Map(),
+    });
+    return Promise.resolve({ created: true });
+  }
+
+  listByOwner(ownerUserId: string): Promise<LearningMapSummary[]> {
+    return Promise.resolve(
+      this.ownedMaps(ownerUserId).map((map) => ({
+        id: map.id,
+        title: map.title,
+        description: map.description,
+        visibility: map.visibility,
+        nodeCount: map.nodes.length,
+        createdAt: map.createdAt,
+        updatedAt: map.updatedAt,
+      })),
+    );
+  }
+
+  get(ownerUserId: string, mapId: string): Promise<StoredLearningMap | null> {
+    const map = this.owned(ownerUserId, mapId);
+    if (map === undefined) return Promise.resolve(null);
+    const copy = structuredClone(map);
+    return Promise.resolve({
+      id: copy.id,
+      title: copy.title,
+      description: copy.description,
+      visibility: copy.visibility,
+      createdAt: copy.createdAt,
+      updatedAt: copy.updatedAt,
+      nodes: copy.nodes,
+      edges: copy.edges,
+      objectives: copy.objectives,
+    });
+  }
+
+  replace(
+    ownerUserId: string,
+    mapId: string,
+    content: StoredMapContent,
+    now: { nowIso: string; nowMs: number },
+  ): Promise<boolean> {
+    const map = this.owned(ownerUserId, mapId);
+    if (map === undefined) return Promise.resolve(false);
+    const { title, description, nodes, edges } = structuredClone(content);
+    // 残したノード（参照ではないもの）の項目は残し、消えたノードの項目は消す（D1 の CASCADE）。
+    const kept = new Set(nodes.filter((node) => node.kind === "own").map((node) => node.conceptId));
+    for (const conceptId of map.objectives.keys()) {
+      if (!kept.has(conceptId)) map.objectives.delete(conceptId);
+    }
+    Object.assign(map, {
+      title,
+      description,
+      nodes,
+      edges,
+      updatedAt: now.nowIso,
+      updatedAtMs: now.nowMs,
+    });
+    return Promise.resolve(true);
+  }
+
+  delete(ownerUserId: string, mapId: string): Promise<boolean> {
+    if (this.owned(ownerUserId, mapId) === undefined) return Promise.resolve(false);
+    this.store.learningMaps.delete(mapId);
+    return Promise.resolve(true);
+  }
+
+  replaceObjectives(
+    ownerUserId: string,
+    params: {
+      mapId: string;
+      conceptId: string;
+      objectives: readonly { id: string; label: string; source: LearningObjectiveSource }[];
+      nowIso: string;
+      nowMs: number;
+    },
+  ): Promise<void> {
+    const map = this.owned(ownerUserId, params.mapId);
+    if (map === undefined) return Promise.resolve();
+    if (params.objectives.length === 0) map.objectives.delete(params.conceptId);
+    else
+      map.objectives.set(
+        params.conceptId,
+        params.objectives.map((objective) => ({ ...objective, conceptId: params.conceptId })),
+      );
+    map.updatedAt = params.nowIso;
+    map.updatedAtMs = params.nowMs;
+    return Promise.resolve();
+  }
+
+  findOwnNodes(ownerUserId: string, conceptIds: readonly string[]): Promise<StoredOwnMapNode[]> {
+    const wanted = new Set(conceptIds);
+    return Promise.resolve(
+      this.allOwnNodes(ownerUserId).filter((node) => wanted.has(node.conceptId)),
+    );
+  }
+
+  listOwnNodes(ownerUserId: string, limit: number): Promise<StoredOwnMapNode[]> {
+    return Promise.resolve(this.allOwnNodes(ownerUserId).slice(0, limit));
+  }
+
+  private owned(ownerUserId: string, mapId: string): InMemoryLearningMap | undefined {
+    const map = this.store.learningMaps.get(mapId);
+    return map?.ownerUserId === ownerUserId ? map : undefined;
+  }
+
+  /** D1 の ORDER BY updated_at_ms DESC, id ASC と一致させる。 */
+  private ownedMaps(ownerUserId: string): InMemoryLearningMap[] {
+    return [...this.store.learningMaps.values()]
+      .filter((map) => map.ownerUserId === ownerUserId)
+      .sort((a, b) => b.updatedAtMs - a.updatedAtMs || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  }
+
+  private allOwnNodes(ownerUserId: string): StoredOwnMapNode[] {
+    return this.ownedMaps(ownerUserId).flatMap((map) =>
+      map.nodes.flatMap((node) =>
+        node.kind === "own"
+          ? [
+              {
+                conceptId: node.conceptId,
+                label: node.label,
+                summary: node.summary,
+                mapId: map.id,
+                mapTitle: map.title,
+                prerequisites: map.edges
+                  .filter((edge) => edge.to === node.conceptId)
+                  .map((edge) => edge.from),
+                objectives: structuredClone(map.objectives.get(node.conceptId) ?? []),
+              },
+            ]
+          : [],
+      ),
+    );
   }
 }
