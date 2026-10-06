@@ -609,7 +609,8 @@ function CheckPage() {
             )}
             {progress && (
               <span className="muted" role="status">
-                作成中… {progress.done} / {progress.total} 組（1組に 30 秒ほどかかることがあります）
+                作成中… {progress.done} / {progress.total}{" "}
+                組（混み合っていると、1組に数分かかることがあります）
               </span>
             )}
           </div>
