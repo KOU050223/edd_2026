@@ -352,6 +352,41 @@ export function upsertCheck(
   return [generated, ...checks.filter((check) => checkTargetOf(check) !== target)];
 }
 
+/**
+ * 組を出す順番（#270 の決定）。作った（作り直した）日時の新しい順で、Q1 が一番新しい。
+ * 狙い1つにつき組は1つ（作り直しは上書き）なので、同じ項目が2つ並ぶことはない。
+ */
+export function orderedChecks(checks: readonly PersonalConceptCheck[]): PersonalConceptCheck[] {
+  return [...checks].sort(
+    (left, right) => Date.parse(right.generatedAt) - Date.parse(left.generatedAt),
+  );
+}
+
+/**
+ * 解いている1組を指す鍵。作り直すと日時が、解き直すと回（`round`）が変わり、
+ * 前の採点の結果を引き継がない。
+ */
+export function checkSetKey(check: PersonalConceptCheck, round: number): string {
+  return `${checkTargetOf(check)}:${check.generatedAt}:${String(round)}`;
+}
+
+/**
+ * 全部の組を終えたときのまとめ（#270 の決定）。例「3 組中 2 組正解」。
+ * スキップした組は採点していないので、正解に数えない。スキップの数は出さない。
+ *
+ * @param results 採点した組の鍵（`checkSetKey`）と、2問とも正解だったか。
+ */
+export function checkTally(
+  checks: readonly PersonalConceptCheck[],
+  round: number,
+  results: ReadonlyMap<string, boolean>,
+): { total: number; passed: number } {
+  return {
+    total: checks.length,
+    passed: checks.filter((check) => results.get(checkSetKey(check, round)) === true).length,
+  };
+}
+
 /** 生成する狙い1つ。範囲が項目なら項目 ID を持つ。 */
 export type CheckTarget = { scope: CheckScope; objectiveId?: string };
 
