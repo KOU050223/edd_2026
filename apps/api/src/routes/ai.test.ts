@@ -3,7 +3,7 @@ import { Hono } from "hono";
 import { createAuth, type AuthVariables } from "../auth/middleware.js";
 import type { AuthVerifier } from "../auth/verifier.js";
 import { rateLimit } from "../auth/rate-limit.js";
-import { AI_USAGE_LIMITS } from "../contract/ai-usage.js";
+import { AI_USAGE_LIMITS, estimateInputTokens } from "../contract/ai-usage.js";
 import { PERSONA_MAX_LENGTH, type LearningEvent } from "@gakushu-sochi/domain";
 import { InMemoryAiUsageRepository } from "../repository/ai-usage.js";
 import {
@@ -523,6 +523,101 @@ describe("POST /v1/ai/responses", () => {
       expect(sent.system).toContain("defer");
       // 「過去に触れた」と「現在理解している」は別の情報である（Issue #157）。
       expect(sent.system).not.toContain("確認済み");
+      vi.unstubAllGlobals();
+    });
+
+    it("入力枠の残りが狭いときは要約を絞って載せ、質問は拒否しない", async () => {
+      // レビュー指摘: 要約が入力枠を食い潰して、従来通った質問が 400 になる
+      // のを防ぐ。全件表示が入らなければグループの件数を絞って載せる。
+      const fetchMock = stubUpstream(SSE_WITH_USAGE);
+      const events = new InMemoryLearningEventRepository();
+      const conceptIds = Array.from(
+        { length: 30 },
+        (_, i) => `unknown.c${String(i).padStart(2, "0")}`,
+      );
+      // solved_independently 2件で confirmed（docs/concepts.md の確認済み条件）。
+      await events.append("auth0|user-a", [
+        {
+          event: learningEvent("e1", "solved_independently", conceptIds),
+          clientId: "device-1",
+          receivedAtMs: 0,
+        },
+        {
+          event: learningEvent("e2", "solved_independently", conceptIds),
+          clientId: "device-1",
+          receivedAtMs: 0,
+        },
+      ]);
+      const harness = buildApp({ events });
+      const { ctx, settled } = createExecutionContext();
+
+      // 全件表示（15件/グループ）が入らないが、絞った要約なら入る残り枠にする。
+      const overhead = estimateInputTokens("選択テキスト:\n\n\n質問:\nexplain");
+      const selection = "x".repeat(AI_USAGE_LIMITS.inputTokensPerRequest - overhead - 700);
+
+      const response = await ask(harness, { selection, question: "explain" }, ctx);
+      await response.text();
+      await settled();
+
+      expect(response.status).toBe(200);
+      expect(fetchMock).toHaveBeenCalled();
+      const [, init] = fetchMock.mock.calls[0] ?? [];
+      const sent = JSON.parse(String((init as RequestInit | undefined)?.body)) as {
+        systemInstruction?: { parts: { text: string }[] };
+        contents: { parts: { text: string }[] }[];
+      };
+      const system = sent.systemInstruction?.parts[0]?.text ?? "";
+      expect(system).toContain("--- 利用者の学習の現在地 ---");
+      // 全件は入らないので丸められている。
+      expect(system).toContain("他 ");
+      // 見積もりの上界でも上限を超えない。
+      const prompt = sent.contents[0]?.parts[0]?.text ?? "";
+      expect(estimateInputTokens(system + prompt)).toBeLessThanOrEqual(
+        AI_USAGE_LIMITS.inputTokensPerRequest,
+      );
+      vi.unstubAllGlobals();
+    });
+
+    it("要約が残り枠に収まらなくても質問を拒否せず、外したことを記録する", async () => {
+      const fetchMock = stubUpstream(SSE_WITH_USAGE);
+      const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+      const events = new InMemoryLearningEventRepository();
+      await events.append("auth0|user-a", [
+        {
+          event: learningEvent("e1", "solved_independently", ["ts.variable_declaration"]),
+          clientId: "device-1",
+          receivedAtMs: 0,
+        },
+        {
+          event: learningEvent("e2", "solved_independently", ["ts.variable_declaration"]),
+          clientId: "device-1",
+          receivedAtMs: 0,
+        },
+      ]);
+      const harness = buildApp({ events });
+      const { ctx, settled } = createExecutionContext();
+
+      // ヘッダ行だけでも入らない残り枠にする。
+      const overhead = estimateInputTokens("選択テキスト:\n\n\n質問:\nexplain");
+      const selection = "x".repeat(AI_USAGE_LIMITS.inputTokensPerRequest - overhead - 50);
+
+      const response = await ask(harness, { selection, question: "explain" }, ctx);
+      await response.text();
+      await settled();
+
+      // 要約を載せるためだけに質問を拒否しない。
+      expect(response.status).toBe(200);
+      expect(fetchMock).toHaveBeenCalled();
+      const [, init] = fetchMock.mock.calls[0] ?? [];
+      const sent = JSON.parse(String((init as RequestInit | undefined)?.body)) as {
+        systemInstruction?: { parts: { text: string }[] };
+      };
+      expect(sent.systemInstruction).toBeUndefined();
+      // 落としたことを運用側から追える。
+      expect(info).toHaveBeenCalledWith(
+        "learner position omitted to fit input limit",
+        expect.objectContaining({ path: "/v1/ai/responses" }),
+      );
       vi.unstubAllGlobals();
     });
   });

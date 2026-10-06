@@ -19,7 +19,11 @@ import {
   type LearningEvent,
 } from "./profile.js";
 
-/** 1つのグループへ載せる Concept の上限。超えた分は「ほか N 件」で丸める。 */
+/**
+ * 1つのグループへ載せる Concept の既定の上限。超えた分は「ほか N 件」で
+ * 丸める。呼び出し側は入力枠が残り少ないときに `groupLimit` を小さくして
+ * さらに絞れる。
+ */
 export const LEARNER_POSITION_GROUP_LIMIT = 15;
 
 /**
@@ -52,13 +56,6 @@ export function recentlyRecurredConceptIds(
   return [...ids].sort();
 }
 
-/** 表示名の並びを、`、他 N 件` で切り詰めて1行にする。 */
-function joinLabels(labels: readonly string[]): string {
-  const shown = labels.slice(0, LEARNER_POSITION_GROUP_LIMIT);
-  const rest = labels.length - shown.length;
-  return rest > 0 ? `${shown.join(" / ")}、他 ${String(rest)} 件` : shown.join(" / ");
-}
-
 function byScoreDesc(a: ConceptMastery, b: ConceptMastery): number {
   if (a.score !== b.score) {
     return b.score - a.score;
@@ -72,14 +69,25 @@ function byScoreDesc(a: ConceptMastery, b: ConceptMastery): number {
  *
  * `unobserved` の Concept はどの行にも載らない。「習熟度が低い」ではなく
  * 「判断材料がない」であり、AI へ伝えると勝手に初級者扱いされるため、
- * 末尾の一文で「載っていない = 未観測」として扱わせる。
+ * 末尾の一文で「載っていない = 未観測」として扱わせる。ただし件数の上限で
+ * 観測済みの Concept を省いたときは、その旨も併記する（断定できないため）。
  */
 export function buildLearnerPositionLines(
   position: ProfileSummary,
   concepts: readonly Concept[] = CONCEPTS,
+  groupLimit = LEARNER_POSITION_GROUP_LIMIT,
 ): string[] {
   const labelById = new Map(concepts.map((concept) => [concept.id, concept.label]));
   const labelOf = (conceptId: ConceptId): string => labelById.get(conceptId) ?? conceptId;
+
+  // 上限を超えて省いた Concept があるか。フッタの文面を分けるために追う。
+  let truncated = false;
+  const joinLabels = (labels: readonly string[]): string => {
+    const shown = labels.slice(0, groupLimit);
+    const rest = labels.length - shown.length;
+    if (rest > 0) truncated = true;
+    return rest > 0 ? `${shown.join(" / ")}、他 ${String(rest)} 件` : shown.join(" / ");
+  };
 
   const confirmed: string[] = [];
   const learning: string[] = [];
@@ -131,8 +139,12 @@ export function buildLearnerPositionLines(
       `過去に他の手段で触れた形跡がある（学習の記録では確認していない）: ${joinLabels(familiar)}`,
     );
   }
+  // 丸めで省いた Concept は観測済みかもしれない。「挙がっていない = 未観測」と
+  // 断定できるのは、どのグループも丸めていないときだけ。
   lines.push(
-    "ここに挙がっていない概念は「未観測」です。知っている前提で説明を省略せず、確認しながら説明してください。",
+    truncated
+      ? "ここに挙がっていない概念は、未観測か要約の上限で省略されています。知っている前提で説明を省略せず、確認しながら説明してください。"
+      : "ここに挙がっていない概念は「未観測」です。知っている前提で説明を省略せず、確認しながら説明してください。",
   );
   return lines;
 }

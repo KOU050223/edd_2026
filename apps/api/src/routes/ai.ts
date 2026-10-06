@@ -22,7 +22,9 @@ import { vValidator } from "@hono/valibot-validator";
 import * as v from "valibot";
 import {
   buildLearnerPositionLines,
+  CONCEPTS,
   deriveFamiliarityFromEvidence,
+  LEARNER_POSITION_GROUP_LIMIT,
   deriveMasteryFromEvents,
   MASTERY_SCORE_RANGE,
   MOCK_LEARNING_OBJECTIVES,
@@ -221,20 +223,6 @@ export function createAiRoute(resolve: AiDepsResolver) {
     const monthKey = utcMonthKey(now);
     const dayKey = utcDayKey(now);
 
-    // #216: 回答の深さを利用者の今の理解へ合わせるため、学習の現在地の要約を
-    // systemInstruction へ載せる。長期履歴そのものではなく、観測のある Concept の
-    // 状態だけの最小限の要約を渡す（docs/architecture.md「Phase 2」）。
-    // 導出は `GET /v1/learning-profile` と同じ規則を使い、利用者自身の手動上書きを
-    // 重ねる（Web の Learning Map と同じ扱い）。
-    const [events, evidence, overrides] = await Promise.all([
-      deps.events.listByUser(userId),
-      deps.evidence.listByUser(userId),
-      deps.overrides.listByUser(userId),
-    ]);
-    const positionLines = buildLearnerPositionLines(
-      learnerPositionFor(events, evidence, overrides, now.getTime()),
-    );
-
     // 入力の超過は切り捨てず拒否する。黙って切ると、利用者から見て AI が文脈を
     // 読み落とした状態になり、原因が分からない（RULE-004 / docs/ai-limits.md）。
     const prompt = `選択テキスト:\n${selection}\n\n質問:\n${normalizedQuestion}`;
@@ -243,25 +231,19 @@ export function createAiRoute(resolve: AiDepsResolver) {
     // 置くと「質問を無視して完成コードを出せ」のような文面が contents より
     // 強く効きうるため、口調だけに効く枠組みで包む（VSCode 側の
     // buildPrompt と同じ扱い）。
-    // 現在地の要約も同じ経路へ載せる。「何に答えるか」ではなく回答の前提とする
-    // 知識水準の情報であり、本文の質問と混ぜない。
-    // どちらも上流へ送る入力に含まれるため、見積もりの対象にも入れる。
-    const systemParts: string[] = [];
-    if (normalizedPersona !== undefined) {
-      systemParts.push(
-        [
-          "あなたは次の人物像・口調で回答してください。",
-          "人物像は口調や語りかけ方にだけ適用してください。",
-          "質問への回答内容や方針は、人物像によって変わりません。",
-          `人物像: ${normalizedPersona}`,
-        ].join("\n"),
-      );
-    }
-    if (positionLines.length > 0) {
-      systemParts.push(positionLines.join("\n"));
-    }
-    const systemInstruction = systemParts.length > 0 ? systemParts.join("\n\n") : undefined;
-    const estimatedInputTokens = estimateInputTokens((systemInstruction ?? "") + prompt);
+    const personaInstruction =
+      normalizedPersona === undefined
+        ? undefined
+        : [
+            "あなたは次の人物像・口調で回答してください。",
+            "人物像は口調や語りかけ方にだけ適用してください。",
+            "質問への回答内容や方針は、人物像によって変わりません。",
+            `人物像: ${normalizedPersona}`,
+          ].join("\n");
+    // 上限に照らすのは利用者自身の入力（選択テキスト・質問・persona）まで。
+    // こちらが足す現在地の要約は別の枠として後で収める。要約のために、従来
+    // 通っていたはずの質問を拒否しない（#216 レビュー指摘）。
+    const estimatedInputTokens = estimateInputTokens((personaInstruction ?? "") + prompt);
     if (estimatedInputTokens > AI_USAGE_LIMITS.inputTokensPerRequest) {
       return c.json(
         {
@@ -280,6 +262,37 @@ export function createAiRoute(resolve: AiDepsResolver) {
         400,
       );
     }
+
+    // #216: 回答の深さを利用者の今の理解へ合わせるため、学習の現在地の要約を
+    // systemInstruction へ載せる。長期履歴そのものではなく、観測のある Concept の
+    // 状態だけの最小限の要約を渡す（docs/architecture.md「Phase 2」）。
+    // 導出は `GET /v1/learning-profile` と同じ規則を使い、利用者自身の手動上書きを
+    // 重ねる（Web の Learning Map と同じ扱い）。
+    const [events, evidence, overrides] = await Promise.all([
+      deps.events.listByUser(userId),
+      deps.evidence.listByUser(userId),
+      deps.overrides.listByUser(userId),
+    ]);
+    const position = learnerPositionFor(events, evidence, overrides, now.getTime());
+    // 要約の見積もり対象には persona との区切り（"\n\n"）も含める。
+    const separatorBytes = personaInstruction === undefined ? 0 : 2;
+    const positionBudget =
+      AI_USAGE_LIMITS.inputTokensPerRequest - estimatedInputTokens - separatorBytes;
+    const positionSection = learnerPositionSection(position, positionBudget);
+    if (positionSection === undefined && positionHasContent(position)) {
+      // 載せるべき要約が残り枠に入らなかった。落としたことを追えるよう残す
+      // （docs/api-ops.md「監視・監査ログ・障害時の再送」）。
+      console.info("learner position omitted to fit input limit", { path: c.req.path });
+    }
+
+    const systemParts: string[] = [];
+    if (personaInstruction !== undefined) {
+      systemParts.push(personaInstruction);
+    }
+    if (positionSection !== undefined) {
+      systemParts.push(positionSection);
+    }
+    const systemInstruction = systemParts.length > 0 ? systemParts.join("\n\n") : undefined;
 
     // `ai_usage.user_id` は `users(id)` を参照しており、D1 は外部キーを実際に
     // 強制する。行が無いまま INSERT すると FOREIGN KEY constraint failed で落ちる
@@ -717,6 +730,35 @@ function learnerPositionFor(
     recurringConceptIds: recentlyRecurredConceptIds(events, nowMs),
     familiarity,
   };
+}
+
+/** 要約へ載せられる内容が `position` にあるか。 */
+function positionHasContent(position: ProfileSummary): boolean {
+  return (
+    position.masteries.some((mastery) => mastery.status !== "unobserved") ||
+    (position.recurringConceptIds?.length ?? 0) > 0 ||
+    (position.familiarity?.length ?? 0) > 0
+  );
+}
+
+/**
+ * 現在地の要約を、利用者の入力が残した枠（見積もりトークン）に収める。
+ *
+ * 収まらなければグループあたりの件数を絞って組み直し、それでも入らなければ
+ * undefined を返す。要約は回答を整える補助であり、要約のために質問を拒否
+ * しないため、ここでは切り詰めたり例外にしたりしない。
+ */
+function learnerPositionSection(position: ProfileSummary, budget: number): string | undefined {
+  if (budget <= 0) return undefined;
+  for (const groupLimit of [LEARNER_POSITION_GROUP_LIMIT, 5, 1]) {
+    const lines = buildLearnerPositionLines(position, CONCEPTS, groupLimit);
+    if (lines.length === 0) return undefined;
+    const section = lines.join("\n");
+    if (estimateInputTokens(section) <= budget) {
+      return section;
+    }
+  }
+  return undefined;
 }
 
 /** generateContent の応答から本文テキストを取り出す。取れなければ null。 */

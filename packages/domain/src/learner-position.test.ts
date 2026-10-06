@@ -7,6 +7,7 @@
  */
 
 import { describe, expect, test } from "vitest";
+import { CONCEPTS } from "./concepts.generated.js";
 import {
   buildLearnerPositionLines,
   LEARNER_POSITION_GROUP_LIMIT,
@@ -154,5 +155,36 @@ describe("buildLearnerPositionLines", () => {
     const learning = lines.find((line) => line.startsWith("学習中"));
     expect(learning).toContain("他 3 件");
     expect(learning?.split(" / ")).toHaveLength(LEARNER_POSITION_GROUP_LIMIT);
+  });
+
+  test("groupLimit を小さくすると、同じ position でも行が短くなる", () => {
+    // API 側で残った入力枠へ収めるために使う絞り込み。
+    const masteries = Array.from({ length: 6 }, (_, i) =>
+      mastery(`unknown.c${String(i)}`, "learning", 0.5),
+    );
+    const lines = buildLearnerPositionLines({ masteries }, CONCEPTS, 2);
+
+    const learning = lines.find((line) => line.startsWith("学習中"));
+    expect(learning).toContain("他 4 件");
+    expect(learning?.split(" / ")).toHaveLength(2);
+  });
+
+  test("上限で省いた Concept がある間は、フッタで「未観測」と断定しない", () => {
+    // 丸めた Concept は観測済みかもしれない。「挙がっていない = 未観測」と
+    // 教えると、実は知っている概念まで初級扱いさせてしまう。
+    const masteries = Array.from({ length: LEARNER_POSITION_GROUP_LIMIT + 1 }, (_, i) =>
+      mastery(`unknown.c${String(i)}`, "confirmed", 0.9),
+    );
+    const text = buildLearnerPositionLines({ masteries }).join("\n");
+
+    expect(text).toContain("未観測か要約の上限で省略されています");
+  });
+
+  test("どのグループも丸めていなければ、フッタは「未観測」と断定する", () => {
+    const text = buildLearnerPositionLines({
+      masteries: [mastery("go.defer", "learning", 0.4)],
+    }).join("\n");
+
+    expect(text).toContain("ここに挙がっていない概念は「未観測」です");
   });
 });
