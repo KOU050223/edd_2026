@@ -411,7 +411,10 @@ function CheckPage() {
   const savedTargets = savedTargetsOf(checks);
   const generating = progress !== undefined;
 
-  const ordered = orderedChecks(checks);
+  const ordered = orderedChecks(
+    checks,
+    loaded.objectives.map((objective) => objective.id),
+  );
   const open = ordered.map((check) => {
     const key = checkSetKey(check, round);
     return !left.has(key) && !results.has(key);

@@ -353,13 +353,21 @@ export function upsertCheck(
 }
 
 /**
- * 組を出す順番（#270 の決定）。作った（作り直した）日時の新しい順で、Q1 が一番新しい。
- * 狙い1つにつき組は1つ（作り直しは上書き）なので、同じ項目が2つ並ぶことはない。
+ * 組を出す順番（#270 の決定）。「理解すること」の一覧の上から順（AI へ渡す順と同じ）で、
+ * Concept 全体の組は先頭。作った日時では並べ替えず、作り直しても位置は変わらない。
+ * 狙い1つにつき組は1つ（作り直しは上書き）なので、出すのはいつも最新の組になる。
+ * 一覧に無い項目の組は末尾に、元の並びのまま置く。
  */
-export function orderedChecks(checks: readonly PersonalConceptCheck[]): PersonalConceptCheck[] {
-  return [...checks].sort(
-    (left, right) => Date.parse(right.generatedAt) - Date.parse(left.generatedAt),
-  );
+export function orderedChecks(
+  checks: readonly PersonalConceptCheck[],
+  objectiveIds: readonly string[],
+): PersonalConceptCheck[] {
+  const rank = (check: PersonalConceptCheck) => {
+    if (check.objectiveId === undefined) return -1;
+    const index = objectiveIds.indexOf(check.objectiveId);
+    return index === -1 ? objectiveIds.length : index;
+  };
+  return [...checks].sort((left, right) => rank(left) - rank(right));
 }
 
 /**
@@ -372,8 +380,8 @@ export function checkSetKey(check: PersonalConceptCheck, round: number): string 
 
 /**
  * 「次の組へ」「スキップ」で移る先（#270）。今の組より後ろで、まだ終えていない最初の組。
- * 後ろに無ければ前から探す。作っている間に新しい組が前（Q1 側）に増えても、
- * 出さないまままとめへ進まないようにする。終えていない組が無ければ `undefined`（まとめへ）。
+ * 後ろに無ければ前から探す。解いている組より上の項目の組があとからできても
+ * （項目を一覧と違う順に選んだときや、上の項目を作り直したとき）、出さないまままとめへ進まない。終えていない組が無ければ `undefined`（まとめへ）。
  *
  * @param open 並びの順に、まだ終えていない（採点も「次へ」もしていない）か。
  */

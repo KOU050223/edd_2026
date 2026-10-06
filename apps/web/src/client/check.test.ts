@@ -265,14 +265,18 @@ test("作り直した組は同じ狙いの古い組と置き換えて先頭に�
   expect(upsertCheck([other, CHECK], regenerated)).toEqual([regenerated, other]);
 });
 
-test("組は作った日時の新しい順に出す", () => {
-  const older = { ...CHECK, objectiveId: "go.defer:lifo", generatedAt: "2026-10-03T00:00:00Z" };
-  const newer = { ...CHECK, objectiveId: "go.defer:args", generatedAt: "2026-10-05T00:00:00.000Z" };
-  const checks = [older, CHECK, newer];
+test("組は「理解すること」の一覧の上から順に出し、Concept 全体の組は先頭", () => {
+  const first = { ...CHECK, objectiveId: "go.defer:lifo", generatedAt: "2026-10-03T00:00:00Z" };
+  const second = { ...CHECK, objectiveId: "go.defer:args", generatedAt: "2026-10-05T00:00:00Z" };
+  const whole = { ...CHECK, scope: "concept" as const, objectiveId: undefined };
+  const unknown = { ...CHECK, objectiveId: "go.defer:removed" };
+  const checks = [unknown, second, CHECK, whole, first];
 
-  expect(orderedChecks(checks)).toEqual([newer, CHECK, older]);
+  expect(
+    orderedChecks(checks, ["go.defer:lifo", "go.defer:execution_timing", "go.defer:args"]),
+  ).toEqual([whole, first, CHECK, second, unknown]);
   // 元の一覧は並べ替えない。
-  expect(checks).toEqual([older, CHECK, newer]);
+  expect(checks).toEqual([unknown, second, CHECK, whole, first]);
 });
 
 test("組の鍵は作り直し・解き直しで変わる", () => {
