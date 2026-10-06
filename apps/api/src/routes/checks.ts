@@ -55,6 +55,7 @@ import {
   utcMonthKey,
   type AiUsageLimitBody,
   type AiUsageLimitKind,
+  type AllowedModel,
 } from "../contract/ai-usage.js";
 import { buildCheckPrompt, checkPromptInputFor, type CheckRequest } from "../checks/prompt.js";
 import {
@@ -158,6 +159,11 @@ const consentSchema = v.object({ version: v.pipe(v.number(), v.integer()) });
 export interface ChecksDeps {
   apiKey?: string;
   model?: string;
+  /**
+   * 順に試すモデル（`vars.CHECK_MODELS`、#268）。先頭が一時的な失敗なら、待たずに次へ送る。
+   * 省略・空なら {@link model} だけを使う。
+   */
+  models?: readonly string[];
   fetch: typeof fetch;
   /** 生成した問題の保存先。利用者ごと（migrations/0012_user_concept_checks.sql）。 */
   checks: PersonalCheckRepository;
@@ -187,6 +193,14 @@ export interface ChecksDeps {
 }
 
 export type ChecksDepsResolver = (env: CloudflareBindings) => ChecksDeps;
+
+/** カンマ区切りのモデル名（`vars.CHECK_MODELS`）を並びにする。空の要素は捨てる。 */
+export function parseModelList(value: string | undefined): string[] {
+  return (value ?? "")
+    .split(",")
+    .map((name) => name.trim())
+    .filter((name) => name.length > 0);
+}
 
 /** 生成に失敗したことを利用者へ伝える本文。**黙って空の問題を返さない。** */
 interface CheckGenerationErrorBody {
@@ -291,6 +305,8 @@ type UpstreamFailure =
 type UpstreamTrace = {
   /** 送った回数（送り直しを含む）。 */
   attempts: number;
+  /** 送った順のモデル（#268）。 */
+  models: string[];
   /** 送った順の状態コード。届かなかった回は含まない。 */
   statuses: number[];
   /** 最初の送信から失敗が決まるまでの時間。 */
@@ -375,7 +391,12 @@ function describeTrace(trace: UpstreamTrace): string {
   if (trace.upstreamMessage !== undefined) parts.push(`「${trace.upstreamMessage}」`);
   if (trace.retryDelay !== undefined) parts.push(`再試行の目安 ${trace.retryDelay}`);
   if (trace.cause !== undefined) parts.push(trace.cause);
-  const statuses = trace.statuses.length > 0 ? `（${trace.statuses.join(", ")}）` : "";
+  // モデルを切り替えたときだけ、どのモデルが何を返したかを並べる。
+  const switched = new Set(trace.models).size > 1;
+  const sent = trace.statuses.map((status, index) =>
+    switched ? `${trace.models[index] ?? "?"} ${String(status)}` : String(status),
+  );
+  const statuses = sent.length > 0 ? `（${sent.join(", ")}）` : "";
   parts.push(`${String(trace.attempts)} 回送信${statuses}`);
   parts.push(`${(trace.elapsedMs / 1000).toFixed(1)} 秒`);
   return `［詳細: ${parts.join("・")}］`;
@@ -676,9 +697,17 @@ export function createChecksRoute(resolve: ChecksDepsResolver) {
       return c.json(notConfiguredBody(), 503);
     }
     // クライアントにモデルを選ばせない。設定値であっても allowlist は通す。
-    const model = deps.model ?? ALLOWED_MODELS[0];
-    if (!isAllowedModel(model)) {
-      console.error("configured model is not allowed", { model, allowed: ALLOWED_MODELS });
+    // 1つでも許可外があれば、単価を確かめていないモデルへ送らないよう全体を止める。
+    const configured =
+      deps.models !== undefined && deps.models.length > 0
+        ? deps.models
+        : [deps.model ?? ALLOWED_MODELS[0]];
+    const models = configured.filter(isAllowedModel);
+    if (models.length !== configured.length) {
+      console.error("configured model is not allowed", {
+        models: configured,
+        allowed: ALLOWED_MODELS,
+      });
       return c.json(notConfiguredBody(), 503);
     }
 
@@ -758,72 +787,81 @@ export function createChecksRoute(resolve: ChecksDepsResolver) {
     }
 
     let upstream: Response;
+    // 最後に送ったモデル。成功したらこれが問題を作ったモデルになる。
+    let model: AllowedModel = models[0];
     // 再送をまたいで1つの期限を使う。再送のたびに延ばすと、利用者を待たせる上限が決まらない（RULE-001）。
     const deadline = AbortSignal.timeout(UPSTREAM_TIMEOUT_MS);
     const retryDelaysMs = deps.retryDelaysMs ?? UPSTREAM_RETRY_DELAYS_MS;
-    // 失敗したときに原因を切り分けられるよう、送った回数・状態コード・時間を残す（#253）。
+    // 失敗したときに原因を切り分けられるよう、送った回数・モデル・状態コード・時間を残す（#253）。
     const startedAt = Date.now();
     const statuses: number[] = [];
+    const sentModels: string[] = [];
     let attempts = 0;
     const trace = (detail: Partial<UpstreamTrace> = {}): UpstreamTrace => ({
       attempts,
+      models: [...sentModels],
       statuses: [...statuses],
       elapsedMs: Date.now() - startedAt,
       ...detail,
     });
     try {
-      for (let attempt = 0; ; attempt += 1) {
-        attempts = attempt + 1;
-        upstream = await deps.fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
-          {
-            method: "POST",
-            headers: { "x-goog-api-key": deps.apiKey, "Content-Type": "application/json" },
-            // リダイレクトを自動追跡しない。転送先へ API キーごと送られると、
-            // 資格情報が意図しない相手に渡る（RULE-002）。Workers は `redirect: "error"` を
-            // 実装しておらず送信前に例外を投げるので `manual` にし、3xx は下の
-            // `!upstream.ok` で失敗として扱う（#253）。
-            redirect: "manual",
-            // 応答を一括で受け取る単発のリクエストなので、壁時計で必ず切る（RULE-001）。
-            signal: deadline,
-            body: JSON.stringify({
-              contents: [{ parts: [{ text: prompt }] }],
-              generationConfig: {
-                temperature: TEMPERATURE,
-                // 出力上限は常に送る。上流の既定値で走らせると1回あたりの単価が決まらない。
-                maxOutputTokens: AI_USAGE_LIMITS.outputTokensPerRequest,
-                // JSON を要求する。コードブロックの囲みが来ないようにするための指定で、
-                // 受理側（`response.ts`）は囲みを剥がさずに拒否する。
-                responseMimeType: "application/json",
-              },
-            }),
-          },
-        );
-        statuses.push(upstream.status);
-        const delay = retryDelaysMs[attempt];
-        if (!RETRYABLE_UPSTREAM_STATUSES.has(upstream.status) || delay === undefined) {
-          break;
-        }
-        // 混雑（503）などの一時的な失敗は、少し待って送り直す。上流は失敗した呼び出しを
-        // 課金しないので、利用量の予約（1回）はそのままにする。本文は読まずに捨てる。
-        console.warn("check generation upstream is unavailable; retrying", {
-          conceptId,
-          model,
-          status: upstream.status,
-          attempt: attempt + 1,
-        });
-        try {
-          await upstream.body?.cancel();
-        } catch (cause) {
-          // 捨てる本文の読み込みが壊れていても、送り直しの判断（状態コード）は変わらない。
-          // 外側の catch へ流すと「接続できなかった」になり、送り直さずに終わる。
-          console.warn("check generation could not discard an upstream body", {
+      // 1巡でモデルを順に試す（混雑はモデルごとなので、待たずに次へ送る）。全部が一時的な
+      // 失敗なら少し待って次の巡へ。巡の数は待ち時間の要素の数 + 1（#259・#268）。
+      rounds: for (let round = 0; ; round += 1) {
+        for (const [index, candidate] of models.entries()) {
+          model = candidate;
+          attempts += 1;
+          sentModels.push(model);
+          upstream = await deps.fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+            {
+              method: "POST",
+              headers: { "x-goog-api-key": deps.apiKey, "Content-Type": "application/json" },
+              // リダイレクトを自動追跡しない。転送先へ API キーごと送られると、
+              // 資格情報が意図しない相手に渡る（RULE-002）。Workers は `redirect: "error"` を
+              // 実装しておらず送信前に例外を投げるので `manual` にし、3xx は下の
+              // `!upstream.ok` で失敗として扱う（#253）。
+              redirect: "manual",
+              // 応答を一括で受け取る単発のリクエストなので、壁時計で必ず切る（RULE-001）。
+              signal: deadline,
+              body: JSON.stringify({
+                contents: [{ parts: [{ text: prompt }] }],
+                generationConfig: {
+                  temperature: TEMPERATURE,
+                  // 出力上限は常に送る。上流の既定値で走らせると1回あたりの単価が決まらない。
+                  maxOutputTokens: AI_USAGE_LIMITS.outputTokensPerRequest,
+                  // JSON を要求する。コードブロックの囲みが来ないようにするための指定で、
+                  // 受理側（`response.ts`）は囲みを剥がさずに拒否する。
+                  responseMimeType: "application/json",
+                },
+              }),
+            },
+          );
+          statuses.push(upstream.status);
+          if (!RETRYABLE_UPSTREAM_STATUSES.has(upstream.status)) break rounds;
+          const lastInRound = index === models.length - 1;
+          if (lastInRound && retryDelaysMs[round] === undefined) break rounds;
+          // 混雑（503）などの一時的な失敗は、次のモデルか次の巡で送り直す。上流は失敗した
+          // 呼び出しを課金しないので、利用量の予約（1回）はそのままにする。本文は読まずに捨てる。
+          console.warn("check generation upstream is unavailable; retrying", {
             conceptId,
             model,
-            cause,
+            status: upstream.status,
+            attempt: attempts,
           });
+          try {
+            await upstream.body?.cancel();
+          } catch (cause) {
+            // 捨てる本文の読み込みが壊れていても、送り直しの判断（状態コード）は変わらない。
+            // 外側の catch へ流すと「接続できなかった」になり、送り直さずに終わる。
+            console.warn("check generation could not discard an upstream body", {
+              conceptId,
+              model,
+              cause,
+            });
+          }
         }
-        await sleep(delay, deadline);
+        await sleep(retryDelaysMs[round] ?? 0, deadline);
       }
     } catch (cause) {
       // fetch の拒否（ネットワーク断、タイムアウト）は
