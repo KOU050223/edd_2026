@@ -160,6 +160,12 @@ const renderConversation = (conversation) => {
 };
 
 const openConversation = async (id) => {
+  // 回答のストリーム中は開かない。保存済みの回答へ生の delta が
+  // 追記されて2つの会話が混ざるため（answerMarkdown は共有している）。
+  if (isAsking) {
+    showNotice("回答を生成している間は履歴を開けません。");
+    return;
+  }
   const generation = ++conversationDetailGeneration;
   try {
     const conversation = await window.desktop.getConversation(id);
@@ -190,18 +196,25 @@ $("history-delete").onclick = async () => {
   }
   window.clearTimeout(deleteArmTimer);
   deleteArmTimer = undefined;
+  // 応答を待つ間に別の履歴を開きうる。完了時に画面を消すのは
+  // 表示が変わっていないときだけにするため、対象 ID を捕獲しておく。
+  const deletingId = viewingConversationId;
   deletingConversation = true;
   button.disabled = true;
   try {
-    await window.desktop.deleteConversation(viewingConversationId);
-    viewingConversationId = null;
-    button.hidden = true;
-    card.hidden = true;
-    resetHistoryDelete();
+    await window.desktop.deleteConversation(deletingId);
     showNotice("履歴を削除しました。");
     void loadConversations();
+    if (viewingConversationId === deletingId) {
+      viewingConversationId = null;
+      card.hidden = true;
+      resetHistoryDelete();
+      button.hidden = true;
+    }
   } catch (e) {
-    resetHistoryDelete();
+    // 失敗の通知は共有チャネルへ出すが、別の履歴を開いているなら
+    // その削除ボタンの状態までは触らない。
+    if (viewingConversationId === deletingId) resetHistoryDelete();
     showError(`履歴を削除できませんでした: ${e instanceof Error ? e.message : String(e)}`);
   } finally {
     deletingConversation = false;
@@ -248,6 +261,9 @@ accessibility.onclick = async () => {
 $("settings-cancel").before(accessibility);
 
 const resetCard = () => {
+  // 新しい選択・質問・履歴の描画・ログアウトでここを通る。飛行中の
+  // 詳細取得があとから届いて古い履歴で上書きしないよう、先に無効化する。
+  conversationDetailGeneration += 1;
   cardTitle.textContent = "回答";
   answerMarkdown = "";
   answer.replaceChildren();
@@ -283,6 +299,8 @@ login.onclick = async () => {
     await window.desktop.login();
     authView = { ...authView, loggingIn: false, hasRefreshToken: true };
     renderAuthStatus();
+    // ログイン成功は auth:state で通知されないため、ここで履歴を読み直す。
+    void loadConversations();
   } catch (e) {
     authView = { ...authView, loggingIn: false };
     $("auth-status").textContent = AUTH_LABELS.failed;
@@ -319,6 +337,14 @@ window.desktop.onAuthState(({ hasRefreshToken }) => {
   // ログイン中に届いた通知は取り込まない。走っているログインについて画面が嘘をつく。
   if (!shouldApplyAuthState({ ...authView, hasRefreshToken })) return;
   setAuthState(hasRefreshToken);
+  if (!hasRefreshToken) {
+    // ログアウト後に前のアカウントの履歴が画面へ残らないよう、表示中の
+    // 詳細と選択テキストも消す。飛行中の詳細取得は resetCard の
+    // 世代更新で無効になる。
+    renderCode("");
+    resetCard();
+    card.hidden = true;
+  }
   // ログイン・ログアウトで履歴の見え方が変わるので読み直す。
   void loadConversations();
 });
