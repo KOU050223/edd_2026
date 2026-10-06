@@ -21,7 +21,18 @@ import {
   type InMemoryRepositoryStore,
 } from "../repository/memory.js";
 import { createAiRoute } from "./ai.js";
-import { createChecksRoute } from "./checks.js";
+import { createChecksRoute, parseModelList } from "./checks.js";
+
+describe("parseModelList", () => {
+  it("カンマ区切りを並びにし、空白と空の要素を捨てる", () => {
+    expect(parseModelList(" gemini-3.8-flash, ,gemini-3.5-flash-lite ")).toEqual([
+      "gemini-3.8-flash",
+      "gemini-3.5-flash-lite",
+    ]);
+    expect(parseModelList("")).toEqual([]);
+    expect(parseModelList(undefined)).toEqual([]);
+  });
+});
 
 const CONCEPT_ID = "go.pointer_receiver";
 const NOW = new Date("2026-09-26T09:00:00.000Z");
@@ -71,7 +82,7 @@ interface Harness {
  */
 function buildApp(
   objectives: readonly LearningObjective[] = [],
-  options: { enforceUsageLimits?: boolean } = {},
+  options: { enforceUsageLimits?: boolean; models?: readonly string[] } = {},
 ): Harness {
   const store = createInMemoryRepositoryStore();
   const usage = new InMemoryAiUsageRepository();
@@ -797,6 +808,97 @@ describe("POST /v1/checks:generate", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     // 送り直しても、回数は1回だけ数える。
     expect(await usedToday(harness)).toBe(1);
+  });
+
+  it("先頭のモデルが混雑（503）なら、待たずに次のモデルで生成し、そのモデルを記録する", async () => {
+    // 混雑はモデルごとなので、同じモデルを待つより別のモデルへ回す（#268）。
+    const success = JSON.stringify({
+      candidates: [{ content: { parts: [{ text: generatedCheck() }] }, finishReason: "STOP" }],
+      usageMetadata: { totalTokenCount: 900 },
+    });
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(() => Promise.resolve(new Response("busy", { status: 503 })))
+      .mockImplementationOnce(() => Promise.resolve(new Response(success, { status: 200 })));
+    vi.stubGlobal("fetch", fetchMock);
+    silenceWarn();
+    silenceInfo();
+    const harness = buildApp([], { models: ["gemini-3.8-flash", "gemini-3.5-flash-lite"] });
+
+    const response = await generate(harness);
+
+    expect(response.status).toBe(200);
+    const urls = fetchMock.mock.calls.map(([url]) => String(url));
+    expect(urls[0]).toContain("/models/gemini-3.8-flash:generateContent");
+    expect(urls[1]).toContain("/models/gemini-3.5-flash-lite:generateContent");
+    await expect(response.json()).resolves.toMatchObject({ model: "gemini-3.5-flash-lite" });
+    expect(await usedToday(harness)).toBe(1);
+  });
+
+  it("どのモデルも混雑なら、巡ごとに全部を試してから、モデルごとの結果を伝える", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(() => Promise.resolve(new Response("busy", { status: 503 })));
+    vi.stubGlobal("fetch", fetchMock);
+    silenceWarn();
+    silenceError();
+
+    const response = await generate(
+      buildApp([], { models: ["gemini-3.8-flash", "gemini-3.5-flash-lite"] }),
+    );
+
+    expect(response.status).toBe(502);
+    // 待ち時間 2 つ → 3 巡 × 2 モデル。
+    expect(fetchMock).toHaveBeenCalledTimes(6);
+    await expect(response.json()).resolves.toMatchObject({
+      reason: "upstream-status",
+      status: 503,
+      upstream: {
+        attempts: 6,
+        models: [
+          "gemini-3.8-flash",
+          "gemini-3.5-flash-lite",
+          "gemini-3.8-flash",
+          "gemini-3.5-flash-lite",
+          "gemini-3.8-flash",
+          "gemini-3.5-flash-lite",
+        ],
+      },
+      message: expect.stringContaining(
+        "6 回送信（gemini-3.8-flash 503, gemini-3.5-flash-lite 503, gemini-3.8-flash 503,",
+      ),
+    });
+  });
+
+  it("要求の誤り（4xx）なら、次のモデルへ回さない", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(() => Promise.resolve(new Response("bad", { status: 400 })));
+    vi.stubGlobal("fetch", fetchMock);
+    silenceError();
+
+    const response = await generate(
+      buildApp([], { models: ["gemini-3.8-flash", "gemini-3.5-flash-lite"] }),
+    );
+
+    expect(response.status).toBe(502);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("順に試すモデルに許可外が1つでもあれば、どこへも送らずに設定の誤りとする", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    silenceError();
+
+    const response = await generate(
+      buildApp([], { models: ["gemini-3.8-flash", "gemini-3.5-pro-expensive"] }),
+    );
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "AI service is not configured",
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("混雑が続けば、決めた回数だけ送り直してから失敗を伝える", async () => {

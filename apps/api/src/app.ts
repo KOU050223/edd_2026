@@ -24,7 +24,7 @@ import { createLearningDataRoute } from "./routes/learning-data.js";
 import { createLearningActivityRoute } from "./routes/learning-activity.js";
 import { createImportSessionsRoute } from "./routes/import-sessions.js";
 import { createAiRoute } from "./routes/ai.js";
-import { createChecksRoute } from "./routes/checks.js";
+import { createChecksRoute, parseModelList } from "./routes/checks.js";
 import { createAccountRoute } from "./routes/account.js";
 import { createManagementUsers } from "./auth/management.js";
 import { createAreaCompletionsRoute } from "./routes/area-completions.js";
@@ -188,6 +188,7 @@ app.route(
   createChecksRoute((env) => ({
     apiKey: env.GEMINI_API_KEY,
     model: env.GEMINI_MODEL,
+    models: parseModelList(env.CHECK_MODELS),
     fetch: (input, init) => globalThis.fetch(input, init),
     // 個人の学習データなので users(id) を CASCADE で参照する表に置く
     // （migrations/0012_user_concept_checks.sql）。
