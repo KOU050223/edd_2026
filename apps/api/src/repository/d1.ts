@@ -1730,6 +1730,15 @@ function nodesJson(nodes: readonly StoredMapNode[]): string {
 /** 自分のマップであることの条件。`?` は map_id, owner_user_id の順に2つ。 */
 const OWNED_MAP = "EXISTS (SELECT 1 FROM learning_maps WHERE id = ? AND owner_user_id = ?)";
 
+/**
+ * 自分のマップに、参照ではないそのノードがあることの条件。
+ * `?` は map_id, concept_id, owner_user_id の順に3つ。
+ */
+const OWNED_MAP_NODE = `EXISTS (
+  SELECT 1 FROM learning_map_nodes n JOIN learning_maps m ON m.id = n.map_id
+  WHERE n.map_id = ? AND n.concept_id = ? AND n.is_reference = 0 AND m.owner_user_id = ?
+)`;
+
 /** `?` は map_id, ノードの JSON, map_id, owner_user_id。 */
 const INSERT_MAP_NODES = `INSERT INTO learning_map_nodes (map_id, concept_id, is_reference, label, summary, position)
   SELECT ?, json_extract(value, '$.conceptId'), json_extract(value, '$.isReference'),
@@ -1916,17 +1925,26 @@ export class D1LearningMapRepository implements LearningMapRepository {
       nowIso: string;
       nowMs: number;
     },
-  ): Promise<void> {
+  ): Promise<boolean> {
     const { mapId, conceptId } = params;
     const objectives = JSON.stringify(params.objectives);
-    await this.db.batch([
+    const ownedNode = [mapId, conceptId, ownerUserId];
+    // どの文も「自分のマップの、参照ではないそのノード」があるときだけ書く。batch は1つの
+    // トランザクションなので、最初の UPDATE が1行変えたなら、残りの文も同じノードを見ている。
+    const [touched] = await this.db.batch([
+      this.db
+        .prepare(
+          `UPDATE learning_maps SET updated_at = ?, updated_at_ms = ?
+           WHERE id = ? AND ${OWNED_MAP_NODE}`,
+        )
+        .bind(params.nowIso, params.nowMs, mapId, ...ownedNode),
       this.db
         .prepare(
           `DELETE FROM learning_objectives
-           WHERE map_id = ? AND concept_id = ? AND ${OWNED_MAP}
+           WHERE map_id = ? AND concept_id = ? AND ${OWNED_MAP_NODE}
              AND id NOT IN (SELECT json_extract(value, '$.id') FROM json_each(?))`,
         )
-        .bind(mapId, conceptId, mapId, ownerUserId, objectives),
+        .bind(mapId, conceptId, ...ownedNode, objectives),
       // 作った時刻は最初に入れたときのまま残す。
       this.db
         .prepare(
@@ -1935,7 +1953,7 @@ export class D1LearningMapRepository implements LearningMapRepository {
            SELECT json_extract(value, '$.id'), ?, ?, json_extract(value, '$.label'),
                   json_extract(value, '$.source'), CAST(key AS INTEGER), ?, ?
            FROM json_each(?)
-           WHERE ${OWNED_MAP}
+           WHERE ${OWNED_MAP_NODE}
            ON CONFLICT (id) DO UPDATE SET
              label = excluded.label,
              source = excluded.source,
@@ -1944,13 +1962,9 @@ export class D1LearningMapRepository implements LearningMapRepository {
            WHERE learning_objectives.map_id = excluded.map_id
              AND learning_objectives.concept_id = excluded.concept_id`,
         )
-        .bind(conceptId, mapId, params.nowIso, params.nowIso, objectives, mapId, ownerUserId),
-      this.db
-        .prepare(
-          "UPDATE learning_maps SET updated_at = ?, updated_at_ms = ? WHERE id = ? AND owner_user_id = ?",
-        )
-        .bind(params.nowIso, params.nowMs, mapId, ownerUserId),
+        .bind(conceptId, mapId, params.nowIso, params.nowIso, objectives, ...ownedNode),
     ]);
+    return changesOf(touched) === 1;
   }
 
   async findOwnNodes(

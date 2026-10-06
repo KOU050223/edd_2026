@@ -785,9 +785,10 @@ export class InMemoryLearningMapRepository implements LearningMapRepository {
       nowIso: string;
       nowMs: number;
     },
-  ): Promise<void> {
+  ): Promise<boolean> {
     const map = this.owned(ownerUserId, params.mapId);
-    if (map === undefined) return Promise.resolve();
+    const node = map?.nodes.find((candidate) => candidate.conceptId === params.conceptId);
+    if (map === undefined || node?.kind !== "own") return Promise.resolve(false);
     if (params.objectives.length === 0) map.objectives.delete(params.conceptId);
     else
       map.objectives.set(
@@ -796,7 +797,7 @@ export class InMemoryLearningMapRepository implements LearningMapRepository {
       );
     map.updatedAt = params.nowIso;
     map.updatedAtMs = params.nowMs;
-    return Promise.resolve();
+    return Promise.resolve(true);
   }
 
   findOwnNodes(ownerUserId: string, conceptIds: readonly string[]): Promise<StoredOwnMapNode[]> {

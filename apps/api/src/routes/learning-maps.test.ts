@@ -22,6 +22,7 @@ import { createLearningMapsRoute } from "./learning-maps.js";
 // 応答の JSON 化は本番 app の onError が担う。エラーは本文の種別（平文）で確かめる。
 let store: InMemoryRepositoryStore;
 let identity: InMemoryIdentityRepository;
+let maps: InMemoryLearningMapRepository;
 let app: Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>;
 let keys: number;
 let nowMs: number;
@@ -46,6 +47,7 @@ const FIXED_OBJECTIVES: LearningObjective[] = [
 beforeEach(() => {
   store = createInMemoryRepositoryStore();
   identity = new InMemoryIdentityRepository(store);
+  maps = new InMemoryLearningMapRepository(store);
   keys = 0;
   nowMs = 1_000;
   app = new Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>();
@@ -54,7 +56,8 @@ beforeEach(() => {
     "/v1",
     createLearningMapsRoute(() => ({
       identity,
-      maps: new InMemoryLearningMapRepository(store),
+      // テストが途中で差し替えられるよう、リクエストのたびに今の値を読む。
+      maps,
       fixedConcepts: FIXED_CONCEPTS,
       fixedObjectives: FIXED_OBJECTIVES,
       // 呼ばれた順に k0000001, k0000002 … を返す。採番の結果をテストで言い当てられるようにする。
@@ -273,6 +276,37 @@ test("既存の Concept を参照で置くと、元の表示名・概要・項�
   expect(shown.nodes[1]).toEqual({ kind: "reference", conceptId: otherNodeId, origin: null });
 });
 
+test("元が消えた参照を残したままでも、マップを置き換えられる", async () => {
+  const other = await create();
+  const otherNodeId = other.map.nodes[0]!.conceptId;
+  const { map } = await create({
+    title: "参照あり",
+    nodes: [{ kind: "reference", conceptId: otherNodeId }],
+  });
+  await send("DELETE", `/v1/learning-maps/${other.map.id}`, "token-a");
+
+  // 画面は読んだノードをそのまま送り返す。題名だけを変えても 400 にしない。
+  const response = await send("PUT", `/v1/learning-maps/${map.id}`, "token-a", {
+    title: "参照あり（改）",
+    nodes: [{ kind: "reference", conceptId: otherNodeId }],
+  });
+  expect(response.status).toBe(200);
+  const saved = (await response.json()) as SaveLearningMapResponse;
+  expect(saved.map.title).toBe("参照あり（改）");
+  expect(saved.map.nodes).toEqual([{ kind: "reference", conceptId: otherNodeId, origin: null }]);
+
+  // 新しく足す参照は、これまでどおり元が無ければ拒否する。
+  const added = await send("PUT", `/v1/learning-maps/${map.id}`, "token-a", {
+    title: "t",
+    nodes: [
+      { kind: "reference", conceptId: otherNodeId },
+      { kind: "reference", conceptId: "go.nothing" },
+    ],
+  });
+  expect(added.status).toBe(400);
+  expect(await added.text()).toBe("unknown concept: go.nothing");
+});
+
 test("存在しない Concept・他人のノード・同じマップのノードは参照で置けない", async () => {
   const others = await create(TWO_NODES, "token-b");
   for (const conceptId of ["go.nothing", others.map.nodes[0]!.conceptId]) {
@@ -408,6 +442,30 @@ test("「理解すること」の置き換えは、知らない ID・上限超�
       })
     ).status,
   ).toBe(404);
+});
+
+test("「理解すること」を読んでから書くまでの間にマップが消されたら、保存したと返さず 404 にする", async () => {
+  const { map } = await create();
+  const node = map.nodes[0]!.conceptId;
+  // 別の端末の削除が、ルートの読み取りと書き込みの間に割り込んだ状態を作る。
+  class DeletedBeforeWrite extends InMemoryLearningMapRepository {
+    override async replaceObjectives(
+      ...args: Parameters<InMemoryLearningMapRepository["replaceObjectives"]>
+    ) {
+      await this.delete("user-a", map.id);
+      return super.replaceObjectives(...args);
+    }
+  }
+  maps = new DeletedBeforeWrite(store);
+
+  const response = await send(
+    "PUT",
+    `/v1/learning-maps/${map.id}/nodes/${node}/objectives`,
+    "token-a",
+    { objectives: [{ label: "x" }] },
+  );
+  expect(response.status).toBe(404);
+  expect(await response.text()).toBe("node not found");
 });
 
 test("マップを消すとノード・線・項目が残らず、退会でも消える", async () => {

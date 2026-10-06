@@ -157,18 +157,30 @@ export function createLearningMapsRoute(resolve: LearningMapsDepsResolver) {
     };
   }
 
-  /** 入力を保存する形へ変える。参照の行き先が無ければ 400。 */
+  /**
+   * 入力を保存する形へ変える。新しく足した参照の行き先が無ければ 400。
+   *
+   * @param current 置き換える前のマップ。新しく作るなら `null`。
+   *   このマップにすでにある参照は、元が消えていても（`origin: null`）そのまま通す。
+   *   通さないと、元のマップを消しただけで、題名の変更すら保存できなくなる。
+   */
   async function resolveContent(
     deps: LearningMapsDeps,
     userId: string,
     mapId: string,
     input: v.InferOutput<typeof learningMapContentSchema>,
-    existingOwnIds: ReadonlySet<string>,
+    current: StoredLearningMap | null,
   ) {
+    const existingOwnIds = new Set<string>();
+    const existingReferenceIds = new Set<string>();
+    for (const node of current?.nodes ?? []) {
+      (node.kind === "own" ? existingOwnIds : existingReferenceIds).add(node.conceptId);
+    }
     const resolved = resolveMapContent(mapId, input, existingOwnIds, deps.newKey);
     if (!resolved.ok) throw new HTTPException(400, { message: resolved.error });
-    const found = await resolveReferences(deps, userId, resolved.referenceIds);
-    const missing = resolved.referenceIds.find((conceptId) => !found.has(conceptId));
+    const added = resolved.referenceIds.filter((conceptId) => !existingReferenceIds.has(conceptId));
+    const found = await resolveReferences(deps, userId, added);
+    const missing = added.find((conceptId) => !found.has(conceptId));
     if (missing !== undefined) {
       throw new HTTPException(400, { message: `unknown concept: ${missing}` });
     }
@@ -210,7 +222,7 @@ export function createLearningMapsRoute(resolve: LearningMapsDepsResolver) {
     const input = await parseBody(c, learningMapContentSchema);
     const deps = resolve(c.env);
     const mapId = newMapId(deps.newKey);
-    const { content, assigned } = await resolveContent(deps, userId, mapId, input, new Set());
+    const { content, assigned } = await resolveContent(deps, userId, mapId, input, null);
 
     // learning_maps.owner_user_id は users(id) を参照する。
     await deps.identity.ensureUser({ userId, nowMs: deps.nowMs() });
@@ -247,10 +259,7 @@ export function createLearningMapsRoute(resolve: LearningMapsDepsResolver) {
     const current = await deps.maps.get(userId, mapId);
     if (current === null) notFound();
 
-    const existingOwnIds = new Set(
-      current.nodes.filter((node) => node.kind === "own").map((node) => node.conceptId),
-    );
-    const { content, assigned } = await resolveContent(deps, userId, mapId, input, existingOwnIds);
+    const { content, assigned } = await resolveContent(deps, userId, mapId, input, current);
     const replaced = await deps.maps.replace(userId, mapId, content, {
       nowIso: deps.nowIso(),
       nowMs: deps.nowMs(),
@@ -317,13 +326,18 @@ export function createLearningMapsRoute(resolve: LearningMapsDepsResolver) {
       });
     }
 
-    await deps.maps.replaceObjectives(userId, {
+    const saved = await deps.maps.replaceObjectives(userId, {
       mapId,
       conceptId,
       objectives,
       nowIso: deps.nowIso(),
       nowMs: deps.nowMs(),
     });
+    // 読んでから書くまでの間に、別の端末でマップかノードが消された。
+    // 書けていない項目を「保存した」と返さない。
+    if (!saved) {
+      throw new HTTPException(404, { message: "node not found" });
+    }
     const body: PutLearningObjectivesResponse = {
       objectives: objectives.map(({ id, label, source }) => ({ id, label, source })),
     };

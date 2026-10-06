@@ -641,7 +641,10 @@ export interface LearningMapRepository {
 
   /**
    * 1つのノードの「理解すること」をまとめて置き換える。並びは渡した順。
-   * 呼び出し側は、ノードが自分のマップの参照ではないノードであることを確かめてから呼ぶ。
+   *
+   * ノードが自分のマップの参照ではないノードであることを、書き込みと同じ操作の中で確かめる。
+   * 呼び出し側が読んでから書くまでの間に、別の端末でマップやノードが消されうるため。
+   * @returns そのノードが無ければ何も書かず `false`。
    */
   replaceObjectives(
     ownerUserId: string,
@@ -652,7 +655,7 @@ export interface LearningMapRepository {
       nowIso: string;
       nowMs: number;
     },
-  ): Promise<void>;
+  ): Promise<boolean>;
 
   /** 自分のマップのノード（参照ではないもの）のうち、指定した Concept ID のもの。 */
   findOwnNodes(ownerUserId: string, conceptIds: readonly string[]): Promise<StoredOwnMapNode[]>;
