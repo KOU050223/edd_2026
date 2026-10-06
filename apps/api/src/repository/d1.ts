@@ -2000,21 +2000,31 @@ export class D1LearningMapRepository implements LearningMapRepository {
   }
 
   /**
-   * ノードに前提と項目を付ける。参照ではないノードの ID はマップの ID で始まり、
-   * マップをまたいで一意なので、ID だけで線と項目を引ける。
+   * ノードに前提と項目を付ける。
+   *
+   * 線は (map_id, concept_id) の組で引く。参照のノードは元のノードと同じ concept_id で
+   * 別のマップに置かれるので、ID だけで引くと、別のマップで参照に引いた線が
+   * 元のノードの前提に混ざる。項目は参照ではないノードにしか無いので、ID だけで引ける。
    */
   private async withEdgesAndObjectives(
     rows: readonly OwnMapNodeRow[],
   ): Promise<StoredOwnMapNode[]> {
     if (rows.length === 0) return [];
     const ids = JSON.stringify(rows.map((row) => row.concept_id));
+    const nodes = JSON.stringify(
+      rows.map((row) => ({ mapId: row.map_id, conceptId: row.concept_id })),
+    );
     const [edges, objectives] = await this.db.batch([
       this.db
         .prepare(
-          `SELECT from_concept_id, to_concept_id FROM learning_map_edges
-           WHERE to_concept_id IN (SELECT value FROM json_each(?)) ORDER BY rowid`,
+          `SELECT e.from_concept_id, e.to_concept_id
+           FROM learning_map_edges e
+           JOIN json_each(?) j
+             ON e.map_id = json_extract(j.value, '$.mapId')
+            AND e.to_concept_id = json_extract(j.value, '$.conceptId')
+           ORDER BY e.rowid`,
         )
-        .bind(ids),
+        .bind(nodes),
       this.db
         .prepare(
           `SELECT id, concept_id, label, source FROM learning_objectives
