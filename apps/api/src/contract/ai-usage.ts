@@ -24,7 +24,6 @@ export const ALLOWED_MODELS = [
   "gemini-3.6-flash",
   "gemini-3.8-flash",
   "gemini-3.5-flash-lite",
-  "gemini-3.1-flash-lite",
 ] as const;
 
 export type AllowedModel = (typeof ALLOWED_MODELS)[number];
@@ -47,7 +46,6 @@ export const MODEL_PRICING: Record<
   "gemini-3.8-flash": { inputPerMillion: 0.75, outputPerMillion: 3.75 },
   // 確認問題の生成で、混雑（503）したときの予備に使う（#268）。確認日: 2026-10-06。
   "gemini-3.5-flash-lite": { inputPerMillion: 0.3, outputPerMillion: 2.5 },
-  "gemini-3.1-flash-lite": { inputPerMillion: 0.25, outputPerMillion: 1.5 },
 };
 
 /** 許可したモデルかどうか。 */
