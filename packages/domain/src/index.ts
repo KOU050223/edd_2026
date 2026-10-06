@@ -6,6 +6,7 @@ export * from "./context.js";
 export * from "./conversation.js";
 export * from "./evidence.js";
 export * from "./history-import.js";
+export * from "./learner-position.js";
 export * from "./learning-objective.js";
 export * from "./learning-objectives.mock.js";
 export * from "./mastery.js";

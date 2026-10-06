@@ -6,15 +6,11 @@
  * なったら再発とみなす。VS Code に依存しないため、保存は `store.ts` が担う。
  */
 
-import type { ConceptId } from "@gakushu-sochi/domain";
+import { RECURRENCE_WINDOW_MS, type ConceptId } from "@gakushu-sochi/domain";
 
-/**
- * 再発とみなす時間窓。docs/concepts.md の「再発とみなす時間窓」を参照。
- *
- * 無期限にすると、数ヶ月前に一度出したエラーが再発扱いになり、直近の理解を
- * 不当に下げる。
- */
-export const RECURRENCE_WINDOW_MS = 14 * 24 * 60 * 60 * 1_000;
+// 時間窓の正本は domain（`RECURRENCE_WINDOW_MS`）。プロンプトへ載せる
+// 「繰り返しつまずいている概念」の抽出と同じ窓を共有する（Issue #216）。
+export { RECURRENCE_WINDOW_MS };
 
 /** 1件の解説済みエラー。globalState へそのまま保存するため JSON serializable に保つ。 */
 export interface ExplainedError {

@@ -4,6 +4,7 @@ import {
   CONVERSATION_HISTORY_OPT_IN_NOTICE,
   createEmptyProfile,
   PERSONA_MAX_LENGTH,
+  recentlyRecurredConceptIds,
   type CodeContext,
   type ConceptMastery,
   type ConversationTurn,
@@ -600,6 +601,9 @@ export function activate(context: vscode.ExtensionContext): void {
       );
       const aiRequest = createChatAIRequest(codeContext, question, history, diagnostics, persona, {
         masteries,
+        // #216: 最近つまずき直した Concept を渡し、回答が「もう知っている前提」に
+        // ならないようにする。
+        recurringConceptIds: recentlyRecurredConceptIds(profile.events, Date.now()),
       });
       const aiResponse = await provider.ask(aiRequest);
 

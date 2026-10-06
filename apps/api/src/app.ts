@@ -177,6 +177,10 @@ app.route(
     // という前提を崩さないため（migrations/0004_ai_usage.sql）。
     usage: new D1AiUsageRepository(env.DB),
     identity: new D1IdentityRepository(env.DB),
+    // #216: 回答へ載せる学習の現在地は、Profile と同じくイベントから導出する。
+    events: new D1LearningEventRepository(env.DB),
+    evidence: new D1LearningEvidenceRepository(env.DB),
+    overrides: new D1MasteryOverrideRepository(env.DB),
     now: () => new Date(),
   })),
 );

@@ -1,4 +1,5 @@
 import {
+  buildLearnerPositionLines,
   CONCEPTS,
   MOCK_LEARNING_OBJECTIVES,
   type AIRequest,
@@ -187,6 +188,23 @@ export function buildPrompt(request: AIRequest): string {
   }
 
   const knownConcepts = knownConceptsFor(request);
+
+  // #216: 利用者の学習の現在地を渡し、回答の深さを今の理解へ合わせさせる。
+  // 長期履歴そのものではなく、この質問に関係しうる Concept の状態だけの
+  // 最小限の要約を載せる（docs/architecture.md「Phase 2」）。
+  const knownIds = new Set(knownConcepts.map((concept) => concept.id));
+  const positionLines = buildLearnerPositionLines({
+    masteries: (request.profile?.masteries ?? []).filter((mastery) =>
+      knownIds.has(mastery.conceptId),
+    ),
+    recurringConceptIds: (request.profile?.recurringConceptIds ?? []).filter((id) =>
+      knownIds.has(id),
+    ),
+  });
+  if (positionLines.length > 0) {
+    lines.push("", ...positionLines);
+  }
+
   if (knownConcepts.length > 0) {
     lines.push(
       "",

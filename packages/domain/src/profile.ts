@@ -100,6 +100,15 @@ export type LearningEventType =
   | "check_failed";
 
 /**
+ * 同じエラーの再発とみなす時間窓。docs/concepts.md「再発とみなす時間窓」が正本。
+ *
+ * VS Code 拡張の検知（`apps/vscode-extension/src/learning/recurrence.ts`）と、
+ * プロンプトへ載せる「繰り返しつまずいている概念」の抽出
+ * （`learner-position.ts` の `recentlyRecurredConceptIds`）が同じ窓を共有する。
+ */
+export const RECURRENCE_WINDOW_MS = 14 * 24 * 60 * 60 * 1_000;
+
+/**
  * イベントの観測元。
  *
  * Concept の出所（{@link ConceptSource}）とは別の軸。

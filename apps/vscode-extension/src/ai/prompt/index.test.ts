@@ -144,6 +144,75 @@ describe("既知の項目一覧（設計/04 #223）", () => {
   });
 });
 
+describe("利用者の学習の現在地（Issue #216）", () => {
+  function mastery(
+    conceptId: string,
+    status: "learning" | "confirmed",
+    score: number,
+  ): import("@gakushu-sochi/domain").ConceptMastery {
+    return {
+      conceptId,
+      status,
+      score,
+      evidence: {
+        questionCount: 0,
+        answerViewCount: 0,
+        solvedIndependentlyCount: 0,
+        errorRecurrenceCount: 0,
+        checkPassedCount: 0,
+        checkFailedCount: 0,
+        recentTypes: [],
+      },
+    };
+  }
+
+  test("profile の習熟度があれば現在地セクションを差し込む", () => {
+    const prompt = buildPrompt({
+      ...baseRequest,
+      profile: { masteries: [mastery("ts.variable_declaration", "confirmed", 0.9)] },
+    });
+
+    expect(prompt).toContain("--- 利用者の学習の現在地 ---");
+    expect(prompt).toContain("変数宣言と const / let（90%）");
+  });
+
+  test("質問の言語と無関係な Concept は現在地へ載せない", () => {
+    // architecture.md「現在の質問に関係する Concept と再発状況などの最小限の
+    // ProfileSummary」。別言語の習熟度はこの質問の文脈ではない。
+    const prompt = buildPrompt({
+      ...baseRequest,
+      profile: {
+        masteries: [
+          mastery("ts.variable_declaration", "confirmed", 0.9),
+          mastery("go.defer", "learning", 0.4),
+        ],
+      },
+    });
+
+    expect(prompt).toContain("変数宣言と const / let");
+    expect(prompt).not.toContain("defer の実行順序（40%）");
+  });
+
+  test("再発した Concept は既知の概念一覧にあれば載せる", () => {
+    const prompt = buildPrompt({
+      ...baseRequest,
+      profile: { masteries: [], recurringConceptIds: ["git.commit", "go.defer"] },
+    });
+
+    expect(prompt).toContain("繰り返しつまずいている");
+    expect(prompt).toContain("コミットとメッセージ");
+    // go.defer は typescript の質問では既知の概念一覧に載らない。
+    expect(prompt).not.toContain("defer の実行順序");
+  });
+
+  test("profile が無ければ現在地セクションを出さない", () => {
+    expect(buildPrompt(baseRequest)).not.toContain("利用者の学習の現在地");
+    expect(buildPrompt({ ...baseRequest, profile: { masteries: [] } })).not.toContain(
+      "利用者の学習の現在地",
+    );
+  });
+});
+
 describe("応答の人物像（persona）", () => {
   test("persona があれば人物像セクションを差し込む", () => {
     const prompt = buildPrompt({ ...baseRequest, persona: "幼馴染" });

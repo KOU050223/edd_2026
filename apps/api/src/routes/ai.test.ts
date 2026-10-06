@@ -4,9 +4,16 @@ import { createAuth, type AuthVariables } from "../auth/middleware.js";
 import type { AuthVerifier } from "../auth/verifier.js";
 import { rateLimit } from "../auth/rate-limit.js";
 import { AI_USAGE_LIMITS } from "../contract/ai-usage.js";
-import { PERSONA_MAX_LENGTH } from "@gakushu-sochi/domain";
+import { PERSONA_MAX_LENGTH, type LearningEvent } from "@gakushu-sochi/domain";
 import { InMemoryAiUsageRepository } from "../repository/ai-usage.js";
-import { InMemoryIdentityRepository } from "../repository/memory.js";
+import {
+  createInMemoryRepositoryStore,
+  InMemoryIdentityRepository,
+  InMemoryImportSessionRepository,
+  InMemoryLearningEventRepository,
+  InMemoryLearningEvidenceRepository,
+} from "../repository/memory.js";
+import { InMemoryMasteryOverrideRepository } from "../repository/mastery-overrides.js";
 import type { AiUsageRepository } from "../repository/types.js";
 import { createAiRoute } from "./ai.js";
 
@@ -50,6 +57,9 @@ function createExecutionContext() {
 interface Harness {
   app: Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>;
   usage: AiUsageRepository;
+  events: InMemoryLearningEventRepository;
+  evidence: InMemoryLearningEvidenceRepository;
+  overrides: InMemoryMasteryOverrideRepository;
 }
 
 /** `app.ts` と同じ順序で、AI ルートに必要な分だけを組み立てる。 */
@@ -57,11 +67,18 @@ function buildApp(
   options: {
     sub?: string;
     usage?: AiUsageRepository;
+    events?: InMemoryLearningEventRepository;
+    evidence?: InMemoryLearningEvidenceRepository;
+    overrides?: InMemoryMasteryOverrideRepository;
     now?: () => Date;
   } = {},
 ): Harness {
   const usage = options.usage ?? new InMemoryAiUsageRepository();
   const identity = new InMemoryIdentityRepository();
+  const store = createInMemoryRepositoryStore();
+  const events = options.events ?? new InMemoryLearningEventRepository(store);
+  const evidence = options.evidence ?? new InMemoryLearningEvidenceRepository(store);
+  const overrides = options.overrides ?? new InMemoryMasteryOverrideRepository();
   const app = new Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>();
   app.use(
     "/v1/*",
@@ -83,10 +100,13 @@ function buildApp(
       fetch: (input, init) => globalThis.fetch(input, init),
       usage,
       identity,
+      events,
+      evidence,
+      overrides,
       now: options.now ?? (() => new Date("2026-09-22T10:00:00.000Z")),
     })),
   );
-  return { app, usage };
+  return { app, usage, events, evidence, overrides };
 }
 
 const ENV = {
@@ -358,6 +378,151 @@ describe("POST /v1/ai/responses", () => {
 
       expect(response.status).toBe(400);
       expect(fetchMock).not.toHaveBeenCalled();
+      vi.unstubAllGlobals();
+    });
+  });
+
+  describe("学習の現在地（Issue #216）", () => {
+    function learningEvent(
+      id: string,
+      type: LearningEvent["type"],
+      conceptIds: string[],
+      occurredAt = "2026-09-20T00:00:00.000Z",
+    ): LearningEvent {
+      return { id, occurredAt, type, origin: "vscode", conceptIds };
+    }
+
+    async function systemInstructionOf(
+      harness: Harness,
+      ctx: ExecutionContext,
+    ): Promise<{ system?: string; prompt?: string }> {
+      const response = await ask(harness, { selection: "code", question: "explain" }, ctx);
+      await response.text();
+      const fetchMock = vi.mocked(fetch);
+      const [, init] = fetchMock.mock.calls[0] ?? [];
+      const sent = JSON.parse(String((init as RequestInit | undefined)?.body)) as {
+        systemInstruction?: { parts: { text: string }[] };
+        contents: { parts: { text: string }[] }[];
+      };
+      return {
+        system: sent.systemInstruction?.parts[0]?.text,
+        prompt: sent.contents[0]?.parts[0]?.text,
+      };
+    }
+
+    it("観測済み Concept の理解状況を systemInstruction へ載せる", async () => {
+      const fetchMock = stubUpstream(SSE_WITH_USAGE);
+      const events = new InMemoryLearningEventRepository();
+      // solved_independently 2件で confirmed（docs/concepts.md の確認済み条件）。
+      await events.append("auth0|user-a", [
+        {
+          event: learningEvent("e1", "solved_independently", ["ts.variable_declaration"]),
+          clientId: "device-1",
+          receivedAtMs: 0,
+        },
+        {
+          event: learningEvent("e2", "solved_independently", ["ts.variable_declaration"]),
+          clientId: "device-1",
+          receivedAtMs: 0,
+        },
+      ]);
+      const harness = buildApp({ events });
+      const { ctx, settled } = createExecutionContext();
+
+      const sent = await systemInstructionOf(harness, ctx);
+      await settled();
+
+      expect(fetchMock).toHaveBeenCalled();
+      expect(sent.system).toContain("--- 利用者の学習の現在地 ---");
+      expect(sent.system).toContain("確認済み");
+      expect(sent.system).toContain("変数宣言と const / let");
+      // 現在地は「何に答えるか」ではなく回答の前提なので、本文の質問とは分ける。
+      expect(sent.prompt).not.toContain("利用者の学習の現在地");
+      vi.unstubAllGlobals();
+    });
+
+    it("最近再発したエラーの Concept を「繰り返しつまずいている」として載せる", async () => {
+      const fetchMock = stubUpstream(SSE_WITH_USAGE);
+      const events = new InMemoryLearningEventRepository();
+      // 既定の now（2026-09-22）から見て時間窓の内側の再発。
+      await events.append("auth0|user-a", [
+        {
+          event: learningEvent("e1", "error_recurred", ["git.commit"], "2026-09-15T00:00:00.000Z"),
+          clientId: "device-1",
+          receivedAtMs: 0,
+        },
+      ]);
+      const harness = buildApp({ events });
+      const { ctx, settled } = createExecutionContext();
+
+      const sent = await systemInstructionOf(harness, ctx);
+      await settled();
+
+      expect(fetchMock).toHaveBeenCalled();
+      expect(sent.system).toContain("繰り返しつまずいている");
+      expect(sent.system).toContain("コミットとメッセージ");
+      vi.unstubAllGlobals();
+    });
+
+    it("手動の習熟度上書きは利用者の宣言として導出値へ重ねる", async () => {
+      const fetchMock = stubUpstream(SSE_WITH_USAGE);
+      const overrides = new InMemoryMasteryOverrideRepository();
+      // イベントの無い Concept を利用者が「確認済み」と申告した場合も現在地に載る。
+      await overrides.put("auth0|user-a", "go.defer", "confirmed", "2026-09-22T00:00:00.000Z");
+      const harness = buildApp({ overrides });
+      const { ctx, settled } = createExecutionContext();
+
+      const sent = await systemInstructionOf(harness, ctx);
+      await settled();
+
+      expect(fetchMock).toHaveBeenCalled();
+      expect(sent.system).toContain("確認済み");
+      expect(sent.system).toContain("defer");
+      vi.unstubAllGlobals();
+    });
+
+    it("外部履歴の Evidence は「触れた形跡」として載せ、Mastery と混ぜない", async () => {
+      const fetchMock = stubUpstream(SSE_WITH_USAGE);
+      const store = createInMemoryRepositoryStore();
+      const evidence = new InMemoryLearningEvidenceRepository(store);
+      const sessions = new InMemoryImportSessionRepository(store);
+      await sessions.createWithEvidence(
+        "auth0|user-a",
+        {
+          id: "import-1",
+          importedBy: "desktop",
+          providers: ["codex"],
+          conversationCount: 3,
+          ignoredCount: 0,
+          unmappedCandidates: [],
+          evidenceCount: 1,
+          conceptCount: 1,
+          createdAt: "2026-09-01T00:00:00.000Z",
+          updatedAt: "2026-09-01T00:00:00.000Z",
+        },
+        [
+          {
+            id: "import-1:codex:s1",
+            conceptIds: ["go.defer"],
+            source: { provider: "codex", importedBy: "desktop" },
+            kind: "question",
+            observedAt: "2025-01-01T00:00:00.000Z",
+            confidence: 0.8,
+            importSessionId: "import-1",
+          },
+        ],
+      );
+      const harness = buildApp({ evidence });
+      const { ctx, settled } = createExecutionContext();
+
+      const sent = await systemInstructionOf(harness, ctx);
+      await settled();
+
+      expect(fetchMock).toHaveBeenCalled();
+      expect(sent.system).toContain("過去に他の手段で触れた形跡がある");
+      expect(sent.system).toContain("defer");
+      // 「過去に触れた」と「現在理解している」は別の情報である（Issue #157）。
+      expect(sent.system).not.toContain("確認済み");
       vi.unstubAllGlobals();
     });
   });
