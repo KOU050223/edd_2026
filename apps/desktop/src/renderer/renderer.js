@@ -18,32 +18,194 @@ const backdrop = [$("titlebar"), $("workspace")];
 let isAsking = false;
 let answerMarkdown = "";
 
-// Concept 一覧は packages/domain が正典（main の concepts:list 経由）。
-// 習熟度はまだ API から取れないため、全件 "unobserved" で描く。
-// 習熟度が取れるようになったら status をそこから埋める。
-const renderConcepts = (concepts) => {
-  const list = $("concepts");
-  list.replaceChildren(
-    ...concepts.map((concept) => {
-      const item = document.createElement("li");
-      item.className = "concept";
-      item.dataset.status = concept.status ?? "unobserved";
-      const dot = document.createElement("span");
-      dot.className = "dot";
-      const label = document.createElement("span");
-      label.textContent = concept.label;
-      item.append(dot, label);
-      return item;
-    }),
-  );
+// ---------------------------------------------------------------------------
+// 質問履歴（Issue #199）。左サイドバーは Learning Map ではなく履歴を出す。
+// 一覧は GET /v1/conversations の要約（本文なし）で、クリックした行だけ
+// 詳細を取り、選択テキストと回答カードへ写す。本文は端末へ永続化しない。
+// ---------------------------------------------------------------------------
+const conversationsList = $("conversations");
+const conversationsNote = $("conversations-note");
+const conversationsMore = $("conversations-more");
+let conversationsNextCursor = null;
+let loadingMoreConversations = false;
+// 再読み込みが重なったとき、古い応答で新しい表示を上書きしない（RULE-005）。
+let conversationsLoadGeneration = 0;
+let conversationDetailGeneration = 0;
+// 詳細表示中の会話 ID。「履歴を削除」ボタンの対象になる。
+let viewingConversationId = null;
+let deletingConversation = false;
+let deleteArmed = false;
+let deleteArmTimer;
+
+const ORIGIN_LABELS = {
+  desktop: "デスクトップ",
+  vscode: "VS Code",
+  web: "Web",
+  cli: "CLI",
 };
 
-const loadConcepts = async () => {
+const conversationMetaLine = (summary) =>
+  [
+    new Date(summary.occurredAt).toLocaleString("ja-JP"),
+    ORIGIN_LABELS[summary.origin] ?? summary.origin,
+    summary.fileName,
+  ]
+    .filter(Boolean)
+    .join("・");
+
+const conversationItem = (summary) => {
+  const item = document.createElement("li");
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "conversation";
+  button.dataset.id = summary.id;
+  button.dataset.current = String(summary.id === viewingConversationId);
+  const title = document.createElement("span");
+  title.className = "conversation-title";
+  title.textContent = summary.title ?? "（タイトルなし）";
+  if (summary.complete === false) {
+    const badge = document.createElement("span");
+    badge.className = "conversation-incomplete";
+    badge.textContent = "中断";
+    title.append(badge);
+  }
+  const meta = document.createElement("span");
+  meta.className = "conversation-meta";
+  meta.textContent = conversationMetaLine(summary);
+  button.append(title, meta);
+  button.onclick = () => void openConversation(summary.id);
+  item.append(button);
+  return item;
+};
+
+const renderConversations = (summaries) => {
+  conversationsList.replaceChildren(...summaries.map(conversationItem));
+};
+
+const loadConversations = async () => {
+  const generation = ++conversationsLoadGeneration;
   try {
-    renderConcepts(await window.desktop.getConcepts());
+    const page = await window.desktop.listConversations();
+    if (generation !== conversationsLoadGeneration) return;
+    conversationsNextCursor = page.nextCursor;
+    renderConversations(page.conversations);
+    conversationsNote.hidden = page.conversations.length !== 0;
+    conversationsNote.textContent = "まだ質問履歴がありません。";
+    conversationsMore.hidden = conversationsNextCursor === null;
   } catch (e) {
+    if (generation !== conversationsLoadGeneration) return;
     // 一覧が出せなくても質問はできるので、致命傷にはしない。
-    showError(`Learning Map を読み込めませんでした: ${e instanceof Error ? e.message : String(e)}`);
+    // 未ログインの場合も getAccessToken の文言がそのまま案内になる。
+    conversationsList.replaceChildren();
+    conversationsMore.hidden = true;
+    conversationsNote.hidden = false;
+    conversationsNote.textContent = `質問履歴を読み込めませんでした: ${
+      e instanceof Error ? e.message : String(e)
+    }`;
+  }
+};
+
+conversationsMore.onclick = async () => {
+  // 入口で弾く（RULE-007）。disabled は見た目でしかない。
+  if (loadingMoreConversations || conversationsNextCursor === null) return;
+  loadingMoreConversations = true;
+  conversationsMore.disabled = true;
+  const generation = conversationsLoadGeneration;
+  try {
+    const page = await window.desktop.listConversations(conversationsNextCursor);
+    // 読み込み中に一覧が読み直されたら、続きは新しい一覧に対して取り直す。
+    if (generation !== conversationsLoadGeneration) return;
+    conversationsNextCursor = page.nextCursor;
+    conversationsList.append(...page.conversations.map(conversationItem));
+    conversationsMore.hidden = conversationsNextCursor === null;
+  } catch (e) {
+    showError(
+      `質問履歴の続きを読み込めませんでした: ${e instanceof Error ? e.message : String(e)}`,
+    );
+  } finally {
+    loadingMoreConversations = false;
+    conversationsMore.disabled = false;
+  }
+};
+
+const resetHistoryDelete = () => {
+  if (deleteArmTimer !== undefined) window.clearTimeout(deleteArmTimer);
+  deleteArmTimer = undefined;
+  deleteArmed = false;
+  const button = $("history-delete");
+  button.textContent = "履歴を削除";
+  button.dataset.armed = "false";
+};
+
+const renderConversation = (conversation) => {
+  const context = conversation.messages.find((message) => message.role === "context");
+  const user = conversation.messages.find((message) => message.role === "user");
+  const assistant = [...conversation.messages]
+    .reverse()
+    .find((message) => message.role === "assistant");
+  if (context !== undefined) renderCode(context.text);
+  resetCard();
+  cardTitle.textContent = conversation.title ?? user?.text ?? "回答";
+  answerMarkdown = assistant?.text ?? "";
+  answer.innerHTML = renderMarkdown(answerMarkdown);
+  if (!conversation.complete) {
+    const chip = document.createElement("span");
+    chip.className = "chip";
+    chip.textContent = "回答は途中で中断されました";
+    chips.append(chip);
+    chips.hidden = false;
+  }
+  card.hidden = false;
+  thread.scrollTop = 0;
+};
+
+const openConversation = async (id) => {
+  const generation = ++conversationDetailGeneration;
+  try {
+    const conversation = await window.desktop.getConversation(id);
+    if (generation !== conversationDetailGeneration) return;
+    // resetCard が viewingConversationId を null に戻すため、詳細を描いてから立てる。
+    renderConversation(conversation);
+    viewingConversationId = id;
+    $("history-delete").hidden = false;
+    for (const button of conversationsList.querySelectorAll(".conversation")) {
+      button.dataset.current = String(button.dataset.id === id);
+    }
+  } catch (e) {
+    if (generation !== conversationDetailGeneration) return;
+    showError(`履歴を開けませんでした: ${e instanceof Error ? e.message : String(e)}`);
+  }
+};
+
+$("history-delete").onclick = async () => {
+  if (viewingConversationId === null || deletingConversation) return;
+  const button = $("history-delete");
+  // 不可逆操作なので二段階にする。一定時間で自動解除する。
+  if (!deleteArmed) {
+    deleteArmed = true;
+    button.textContent = "もう一度押すと削除";
+    button.dataset.armed = "true";
+    deleteArmTimer = window.setTimeout(resetHistoryDelete, 5000);
+    return;
+  }
+  window.clearTimeout(deleteArmTimer);
+  deleteArmTimer = undefined;
+  deletingConversation = true;
+  button.disabled = true;
+  try {
+    await window.desktop.deleteConversation(viewingConversationId);
+    viewingConversationId = null;
+    button.hidden = true;
+    card.hidden = true;
+    resetHistoryDelete();
+    showNotice("履歴を削除しました。");
+    void loadConversations();
+  } catch (e) {
+    resetHistoryDelete();
+    showError(`履歴を削除できませんでした: ${e instanceof Error ? e.message : String(e)}`);
+  } finally {
+    deletingConversation = false;
+    button.disabled = false;
   }
 };
 
@@ -68,7 +230,7 @@ const showNotice = (message = "") => {
   error.dataset.tone = "notice";
 };
 
-void loadConcepts();
+void loadConversations();
 
 const accessibility = document.createElement("button");
 // type を明示しないと submit 扱いになり、primary のスタイルも拾ってしまう。
@@ -91,6 +253,10 @@ const resetCard = () => {
   answer.replaceChildren();
   chips.hidden = true;
   chips.replaceChildren();
+  // 履歴の詳細表示は新しい選択・質問で切り替わるため、削除ボタンと対象を閉じる。
+  viewingConversationId = null;
+  resetHistoryDelete();
+  $("history-delete").hidden = true;
 };
 
 const login = $("auth-login");
@@ -153,6 +319,8 @@ window.desktop.onAuthState(({ hasRefreshToken }) => {
   // ログイン中に届いた通知は取り込まない。走っているログインについて画面が嘘をつく。
   if (!shouldApplyAuthState({ ...authView, hasRefreshToken })) return;
   setAuthState(hasRefreshToken);
+  // ログイン・ログアウトで履歴の見え方が変わるので読み直す。
+  void loadConversations();
 });
 
 window.desktop.onSelection(({ selection: text, error: message }) => {
@@ -162,6 +330,8 @@ window.desktop.onSelection(({ selection: text, error: message }) => {
   resetCard();
   card.hidden = true;
   question.focus();
+  // ショートカットで開くたびに履歴を最新にする。
+  void loadConversations();
 });
 const thread = $("thread");
 window.desktop.onDelta((delta) => {
@@ -198,13 +368,13 @@ const ask = async () => {
   send.disabled = true;
   try {
     showNotice();
-    answerMarkdown = "";
-    answer.replaceChildren();
-    chips.hidden = true;
+    resetCard();
     const asked = question.value.trim();
     cardTitle.textContent = asked || "回答";
     card.hidden = false;
     await window.desktop.ask(selection.value, question.value);
+    // 履歴保存が有効なら新しい会話が保存されている。一覧を読み直す。
+    void loadConversations();
   } catch (e) {
     showError(e.message);
   } finally {

@@ -184,7 +184,7 @@ h1 {
   color: var(--color-neutral-700);
 }
 
-.concepts {
+.conversations {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -197,6 +197,84 @@ h1 {
   overflow-y: auto;
 }
 
+.sidebar-note {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--color-neutral-600);
+  white-space: pre-wrap;
+}
+
+/* 履歴の各行はボタン。新しい質問の導線は下の入力欄が担う。 */
+.conversation {
+  display: block;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--color-text);
+  font-family: var(--font-body);
+  font-size: 12.5px;
+  text-align: left;
+}
+.conversation:hover {
+  background: color-mix(in srgb, var(--color-text) 7%, transparent);
+}
+.conversation[data-current="true"] {
+  background: var(--color-bg);
+}
+
+.conversation-title {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: break-word;
+}
+
+.conversation-meta {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--color-neutral-600);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 中断した回答の印。 */
+.conversation-incomplete {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--color-danger-bg);
+  color: var(--color-danger);
+  font-size: 10px;
+  vertical-align: 1px;
+}
+
+#conversations-more {
+  align-self: flex-start;
+  padding: 5px 13px;
+  font-size: 11.5px;
+}
+
+/* 詳細表示中だけ出る削除ボタン。武装中は色で危険操作であることを示す。 */
+#history-delete {
+  flex: none;
+  padding: 5px 13px;
+  font-size: 11.5px;
+}
+#history-delete[data-armed="true"] {
+  border-color: var(--color-danger);
+  color: var(--color-danger);
+}
+#history-delete[data-armed="true"]:hover {
+  background: var(--color-danger-bg);
+}
+
 /* 左下のひと枠。設定はここに常駐させる。 */
 .sidebar-foot {
   flex: none;
@@ -205,32 +283,6 @@ h1 {
 }
 .sidebar-foot button {
   width: 100%;
-}
-
-.concept {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: 8px 10px;
-  border-radius: 8px;
-  font-size: 12.5px;
-}
-.concept[data-current="true"] {
-  background: var(--color-bg);
-}
-
-.dot {
-  width: 8px;
-  height: 8px;
-  flex: none;
-  border-radius: 50%;
-  background: var(--color-neutral-400);
-}
-.concept[data-status="confirmed"] .dot {
-  background: var(--color-accent);
-}
-.concept[data-status="learning"] .dot {
-  background: var(--color-learning);
 }
 
 /* — 右ペイン — */
@@ -603,13 +655,15 @@ button:disabled {
   .workspace {
     grid-template-columns: 1fr;
   }
-  /* 概念リストは畳むが、設定への導線は残す。 */
+  /* 履歴リストは畳むが、設定への導線は残す。 */
   .sidebar {
     grid-row: 2;
     padding: var(--space-2) var(--space-4);
   }
   .sidebar .kicker,
-  .concepts {
+  .conversations,
+  .sidebar-note,
+  #conversations-more {
     display: none;
   }
   .sidebar-foot {

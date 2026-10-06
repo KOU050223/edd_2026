@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 
 import { ApiRequestError } from "./api-request.js";
 import {
+  deleteConversation,
+  getConversation,
   getUserSettings,
+  listConversations,
   putConversation,
   setSaveConversationHistory,
 } from "./conversations-api.js";
@@ -101,5 +104,116 @@ describe("putConversation", () => {
     const error = await putConversation(deps(fetchMock), conversation).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(ApiRequestError);
     expect((error as ApiRequestError).status).toBe(403);
+  });
+});
+
+const summary = {
+  id: "conv-1",
+  origin: "desktop",
+  title: "エラーの意味は？",
+  occurredAt: "2026-01-01T00:00:00.000Z",
+  updatedAt: "2026-01-01T00:00:01.000Z",
+  messageCount: 3,
+  complete: true,
+};
+
+describe("listConversations", () => {
+  it("requests the first page without a cursor and returns the page", async () => {
+    const fetchMock = vi.fn<typeof fetch>(
+      async () =>
+        new Response(JSON.stringify({ conversations: [summary], nextCursor: "100_conv-1" }), {
+          status: 200,
+        }),
+    );
+
+    const page = await listConversations(deps(fetchMock));
+
+    expect(page.conversations).toHaveLength(1);
+    expect(page.nextCursor).toBe("100_conv-1");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.example.com/v1/conversations",
+      expect.objectContaining({ method: "GET" }),
+    );
+  });
+
+  it("passes the server-issued cursor back verbatim", async () => {
+    // カーソルの符号は API 側の実装詳細。デスクトップは解釈も自作もしない。
+    const fetchMock = vi.fn<typeof fetch>(
+      async () =>
+        new Response(JSON.stringify({ conversations: [], nextCursor: null }), { status: 200 }),
+    );
+
+    await listConversations(deps(fetchMock), "999_id/with+chars");
+
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toBe(
+      `https://api.example.com/v1/conversations?cursor=${encodeURIComponent("999_id/with+chars")}`,
+    );
+  });
+
+  it("rejects a malformed 200 instead of showing an empty history", async () => {
+    // 形が違う応答を空一覧へ黙って落とすと、保存済みの履歴が
+    // 「まだ質問履歴がありません」と誤表示される（RULE-004）。
+    const fetchMock = vi.fn<typeof fetch>(
+      async () =>
+        new Response(JSON.stringify({ conversations: [{ id: 1 }], nextCursor: null }), {
+          status: 200,
+        }),
+    );
+
+    await expect(listConversations(deps(fetchMock))).rejects.toBeInstanceOf(ApiRequestError);
+  });
+});
+
+describe("getConversation", () => {
+  it("returns the conversation detail for the id", async () => {
+    const conversation = buildConversation({
+      id: "conv-1",
+      userQuestion: "q?",
+      question: "q?",
+      selection: "const x = 1;",
+      answer: "a",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      answeredAt: "2026-01-01T00:00:01.000Z",
+      complete: true,
+    });
+    const fetchMock = vi.fn<typeof fetch>(
+      async () => new Response(JSON.stringify(conversation), { status: 200 }),
+    );
+
+    const result = await getConversation(deps(fetchMock), "conv-1");
+
+    expect(result.id).toBe("conv-1");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.example.com/v1/conversations/conv-1",
+      expect.objectContaining({ method: "GET" }),
+    );
+  });
+
+  it("surfaces a 404 so the renderer can report the deleted conversation", async () => {
+    const fetchMock = vi.fn<typeof fetch>(
+      async () =>
+        new Response(JSON.stringify({ error: "conversation not found" }), { status: 404 }),
+    );
+
+    const error = await getConversation(deps(fetchMock), "gone").catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ApiRequestError);
+    expect((error as ApiRequestError).status).toBe(404);
+  });
+});
+
+describe("deleteConversation", () => {
+  it("DELETEs the conversation and returns the deleted count", async () => {
+    const fetchMock = vi.fn<typeof fetch>(
+      async () => new Response(JSON.stringify({ deletedCount: 1 }), { status: 200 }),
+    );
+
+    const result = await deleteConversation(deps(fetchMock), "conv-1");
+
+    expect(result.deletedCount).toBe(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.example.com/v1/conversations/conv-1",
+      expect.objectContaining({ method: "DELETE" }),
+    );
   });
 });
