@@ -20,8 +20,10 @@
 
       <div class="workspace" id="workspace">
         <aside class="sidebar">
-          <div class="kicker" id="map-title">Learning Map · Go</div>
-          <ul class="concepts" id="concepts" aria-labelledby="map-title"></ul>
+          <div class="kicker" id="history-title">質問履歴</div>
+          <p class="sidebar-note" id="conversations-note" hidden></p>
+          <ul class="conversations" id="conversations" aria-labelledby="history-title"></ul>
+          <button id="conversations-more" hidden>さらに読み込む</button>
           <div class="sidebar-foot">
             <button id="import-open">履歴から地図を作る</button><button id="settings">設定</button>
           </div>
@@ -47,6 +49,7 @@
               <div class="message-head">
                 <div class="avatar" aria-hidden="true">学</div>
                 <h2 id="card-title">回答</h2>
+                <button id="history-delete" type="button" hidden>履歴を削除</button>
                 <button id="card-close" aria-label="回答を閉じる">×</button>
               </div>
               <div id="answer" aria-live="polite"></div>

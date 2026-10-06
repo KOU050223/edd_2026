@@ -19,7 +19,10 @@ contextBridge.exposeInMainWorld("desktop", {
   close: () => ipcRenderer.invoke("window:close"),
   minimize: () => ipcRenderer.invoke("window:minimize"),
   openExternalLink: (url: string) => ipcRenderer.invoke("external-link:open", url),
-  getConcepts: () => ipcRenderer.invoke("concepts:list"),
+  // 質問履歴の一覧・詳細・削除（Issue #199）。
+  listConversations: (cursor?: string) => ipcRenderer.invoke("conversations:list", cursor),
+  getConversation: (id: string) => ipcRenderer.invoke("conversations:get", id),
+  deleteConversation: (id: string) => ipcRenderer.invoke("conversations:delete", id),
   openAccessibilitySettings: () => ipcRenderer.invoke("system:accessibility"),
   onSelection: (listener: (payload: { selection: string; error?: string }) => void) =>
     ipcRenderer.on("selection", (_event, payload) => listener(payload)),

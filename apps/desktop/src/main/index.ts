@@ -50,7 +50,10 @@ import { describeApiFailure } from "./api-error.js";
 import { ApiRequestError } from "./api-request.js";
 import { buildConversation } from "./conversation.js";
 import {
+  deleteConversation,
+  getConversation,
   getUserSettings,
+  listConversations,
   putConversation,
   setSaveConversationHistory,
 } from "./conversations-api.js";
@@ -989,15 +992,26 @@ app
       const store = consentStore();
       return { granted: store.has(), grantedAt: store.grantedAt() };
     });
-    // Concept 一覧は packages/domain が正典。習熟度は API 側で導出されるため、
-    // ここでは一覧だけを渡し、status は未取得を表す "unobserved" を既定にする。
-    ipcMain.handle("concepts:list", () =>
-      CONCEPTS.map((concept) => ({
-        id: concept.id,
-        label: concept.label,
-        language: concept.language,
-      })),
-    );
+    // 質問履歴（Issue #199）。サイドバーの一覧と詳細表示に使う。
+    // 値の正はサーバーで、本文はこの端末へ永続化しない。
+    ipcMain.handle("conversations:list", (_event, cursor: unknown) => {
+      if (cursor !== undefined && typeof cursor !== "string") {
+        throw new Error("カーソルは文字列で指定してください。");
+      }
+      return listConversations(historyApiDeps(), cursor);
+    });
+    ipcMain.handle("conversations:get", (_event, id: unknown) => {
+      if (typeof id !== "string" || id.length === 0) {
+        throw new Error("履歴の ID が指定されていません。");
+      }
+      return getConversation(historyApiDeps(), id);
+    });
+    ipcMain.handle("conversations:delete", (_event, id: unknown) => {
+      if (typeof id !== "string" || id.length === 0) {
+        throw new Error("削除する履歴の ID が指定されていません。");
+      }
+      return deleteConversation(historyApiDeps(), id);
+    });
     ipcMain.handle("history:detect", detectHistorySources);
     ipcMain.handle("history:pick-file", async () => {
       const options = {
