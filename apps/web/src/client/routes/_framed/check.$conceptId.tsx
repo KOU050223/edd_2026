@@ -28,6 +28,7 @@ import {
   generateCheck,
   generationTargets,
   gradeCheck,
+  nextCheckIndex,
   orderedChecks,
   recommendedLevel,
   savedTargetsOf,
@@ -393,10 +394,12 @@ function CheckPage() {
   const sets = useRef<HTMLElement>(null);
   // 出している組の狙い（`checkTargetOf`）。作り直しで日時が変わっても同じ組を指し続ける（#270）。
   const [current, setCurrent] = useState<string>();
-  // 最後の組から「次へ」進んだ。まとめを出す。
+  // 終えていない組が無くなって「次へ」進んだ。まとめを出す。
   const [finished, setFinished] = useState(false);
   // 採点した組の鍵（`checkSetKey`）と、2問とも正解だったか。スキップした組は入らない。
   const [results, setResults] = useState<ReadonlyMap<string, boolean>>(new Map());
+  // 「次へ」「スキップ」で離れた組の鍵。採点した組と合わせて「終えた組」とする。
+  const [left, setLeft] = useState<ReadonlySet<string>>(new Set());
 
   const objectiveLabel = new Map(
     loaded.objectives.map((objective) => [objective.id, objective.label]),
@@ -409,8 +412,15 @@ function CheckPage() {
   const generating = progress !== undefined;
 
   const ordered = orderedChecks(checks);
+  const open = ordered.map((check) => {
+    const key = checkSetKey(check, round);
+    return !left.has(key) && !results.has(key);
+  });
+  const firstOpen = open.indexOf(true);
+  // まとめを開いたあとに新しい組ができたら、まとめを閉じてその組を出す（作っている間に増える）。
+  const summarized = finished && firstOpen === -1;
   const found = ordered.findIndex((check) => checkTargetOf(check) === current);
-  const position = found === -1 ? 0 : found;
+  const position = finished ? Math.max(firstOpen, 0) : found === -1 ? 0 : found;
   const shownCheck = ordered[position];
 
   /** 組を出す。組の頭へ送り、解く組が変わったことが分かるようにする。 */
@@ -419,15 +429,21 @@ function CheckPage() {
     setFinished(false);
     sets.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
-  /** 次の組へ（スキップも同じ）。最後の組からはまとめへ。スキップは何も記録しない。 */
+  /**
+   * 次の組へ（スキップも同じ）。まだ終えていない組へ進み、無ければまとめへ。
+   * スキップは何も記録しない。
+   */
   const next = () => {
-    const following = ordered[position + 1];
-    if (following === undefined) {
+    if (shownCheck === undefined) return;
+    setLeft((current) => new Set(current).add(checkSetKey(shownCheck, round)));
+    const following = nextCheckIndex(open, position);
+    const target = following === undefined ? undefined : ordered[following];
+    if (target === undefined) {
       setFinished(true);
       sets.current?.scrollIntoView({ behavior: "smooth", block: "start" });
       return;
     }
-    show(checkTargetOf(following));
+    show(checkTargetOf(target));
   };
 
   /** 選んだ狙いを順に1組ずつ作る。1組ごとに AI の利用回数を1回使う。 */
@@ -524,6 +540,7 @@ function CheckPage() {
   const review = () => {
     setRound((current) => current + 1);
     setResults(new Map());
+    setLeft(new Set());
     const first = ordered[0];
     if (first !== undefined) show(checkTargetOf(first));
   };
@@ -703,7 +720,7 @@ function CheckPage() {
                       <button
                         type="button"
                         className={classes.join(" ")}
-                        aria-current={!finished && index === position ? "step" : undefined}
+                        aria-current={!summarized && index === position ? "step" : undefined}
                         title={titleOf(check)}
                         onClick={() => show(checkTargetOf(check))}
                       >
@@ -714,7 +731,7 @@ function CheckPage() {
                 })}
               </ol>
               <span className="muted">
-                {finished ? "まとめ" : `${position + 1} / ${ordered.length} 組目`}
+                {summarized ? "まとめ" : `${position + 1} / ${ordered.length} 組目`}
               </span>
             </nav>
             {ordered.map((check) => (
@@ -722,7 +739,7 @@ function CheckPage() {
                 key={checkSetKey(check, round)}
                 check={check}
                 title={titleOf(check)}
-                hidden={finished || check !== shownCheck}
+                hidden={summarized || check !== shownCheck}
                 retakable={scope === "objective"}
                 regenerateLabel={`作り直す（${CHECK_LEVEL_LABELS[level]}）`}
                 regenerating={generating}
@@ -748,7 +765,7 @@ function CheckPage() {
                 }
               />
             ))}
-            {finished ? (
+            {summarized ? (
               <section className="check-summary" role="status">
                 <h3>全部の組を終えました</h3>
                 <p>
@@ -771,7 +788,7 @@ function CheckPage() {
                   </button>
                 ) : (
                   <button type="button" onClick={next}>
-                    {position + 1 < ordered.length ? "次の組へ" : "まとめを見る"}
+                    {nextCheckIndex(open, position) === undefined ? "まとめを見る" : "次の組へ"}
                   </button>
                 )}
               </div>

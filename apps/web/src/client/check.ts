@@ -371,6 +371,20 @@ export function checkSetKey(check: PersonalConceptCheck, round: number): string 
 }
 
 /**
+ * 「次の組へ」「スキップ」で移る先（#270）。今の組より後ろで、まだ終えていない最初の組。
+ * 後ろに無ければ前から探す。作っている間に新しい組が前（Q1 側）に増えても、
+ * 出さないまままとめへ進まないようにする。終えていない組が無ければ `undefined`（まとめへ）。
+ *
+ * @param open 並びの順に、まだ終えていない（採点も「次へ」もしていない）か。
+ */
+export function nextCheckIndex(open: readonly boolean[], position: number): number | undefined {
+  const isOpen = (index: number) => index !== position && open[index] === true;
+  for (let index = position + 1; index < open.length; index += 1) if (isOpen(index)) return index;
+  for (let index = 0; index < position; index += 1) if (isOpen(index)) return index;
+  return undefined;
+}
+
+/**
  * 全部の組を終えたときのまとめ（#270 の決定）。例「3 組中 2 組正解」。
  * スキップした組は採点していないので、正解に数えない。スキップの数は出さない。
  *

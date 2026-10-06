@@ -16,6 +16,7 @@ import {
   generationTargets,
   gradeCheck,
   isPersonalConceptCheck,
+  nextCheckIndex,
   orderedChecks,
   recommendedLevel,
   upsertCheck,
@@ -293,4 +294,15 @@ test("まとめは、採点して2問とも正解した組だけを正解に数�
   expect(checkTally([CHECK, failed, skipped], 1, results)).toEqual({ total: 3, passed: 1 });
   // 解き直すと前の回の結果は数えない。
   expect(checkTally([CHECK, failed, skipped], 2, results)).toEqual({ total: 3, passed: 0 });
+});
+
+test("次の組は、後ろのまだ終えていない組。無ければ前から探す", () => {
+  expect(nextCheckIndex([true, true, true], 0)).toBe(1);
+  // 終えた組は飛ばす。
+  expect(nextCheckIndex([true, false, true], 0)).toBe(2);
+  // 作っている間に前（Q1 側）へ増えた組を、出さないまままとめへ進まない。
+  expect(nextCheckIndex([true, false], 1)).toBe(0);
+  // 今の組は数えない。
+  expect(nextCheckIndex([false, true], 1)).toBeUndefined();
+  expect(nextCheckIndex([false, false, false], 2)).toBeUndefined();
 });
