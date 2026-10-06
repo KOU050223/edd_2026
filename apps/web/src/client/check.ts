@@ -43,10 +43,11 @@ export const CHECK_GENERATION_CONSENT_PATH = "/api/v1/check-generation-consent";
 /**
  * 生成の締め切り（RULE-001）。
  *
- * API は上流（Gemini）を 30 秒で切る。そこへ中継と保存の分を足す。
+ * API は上流（Gemini）を送り直しも含めて 150 秒で切る。そこへ中継と保存の分を足す。
  * 他の書き込みと同じ 10 秒にすると、生成が終わる前にこちらが諦めてしまう。
+ * 生成は時間がかかる前提で、上限を 3 分にする（#259 の決定）。
  */
-export const CHECK_GENERATE_TIMEOUT_MS = 45_000;
+export const CHECK_GENERATE_TIMEOUT_MS = 180_000;
 
 /** 同意の記録の読み書きの締め切り（RULE-001）。 */
 const CONSENT_TIMEOUT_MS = 10_000;
