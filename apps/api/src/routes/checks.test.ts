@@ -723,14 +723,58 @@ describe("POST /v1/checks:generate", () => {
     const response = await generate(buildApp());
 
     expect(response.status).toBe(502);
-    // 上流の本文（"nope"）は載せない。状態コードだけを添える。
-    await expect(response.json()).resolves.toEqual({
+    await expect(response.json()).resolves.toMatchObject({
       error: "AI upstream request failed",
       reason: "upstream-status",
       status: 500,
-      message: "AI の呼び出しに失敗しました（状態 500）。時間をおいて、もう一度お試しください。",
+      message: expect.stringMatching(
+        /^AI の呼び出しに失敗しました（状態 500）。時間をおいて、もう一度お試しください。［詳細: /,
+      ),
+      // JSON でない本文は、そのまま文として添える。
+      upstream: { upstreamMessage: "nope" },
     });
     expect(error).toHaveBeenCalled();
+  });
+
+  it("Gemini のエラー本文の要点と送信の経過を、応答と画面の文に添える", async () => {
+    // 原因（混雑か割り当て超過か）を本番で切り分けるため（#253）。
+    const geminiError = JSON.stringify({
+      error: {
+        code: 429,
+        message: "You exceeded your current quota. key=AIzaSyA1234567890abcdefghijklmnop",
+        status: "RESOURCE_EXHAUSTED",
+        details: [
+          {
+            "@type": "type.googleapis.com/google.rpc.QuotaFailure",
+            violations: [{ quotaId: "GenerateRequestsPerDayPerProjectPerModel-FreeTier" }],
+          },
+          { "@type": "type.googleapis.com/google.rpc.RetryInfo", retryDelay: "33s" },
+        ],
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(() => Promise.resolve(new Response(geminiError, { status: 429 }))),
+    );
+    silenceError();
+
+    const response = await generate(buildApp());
+
+    expect(response.status).toBe(502);
+    const body = (await response.json()) as { message: string; upstream: unknown };
+    expect(body.upstream).toMatchObject({
+      attempts: 1,
+      statuses: [429],
+      upstreamStatus: "RESOURCE_EXHAUSTED",
+      quotaId: "GenerateRequestsPerDayPerProjectPerModel-FreeTier",
+      retryDelay: "33s",
+      elapsedMs: expect.any(Number),
+    });
+    // キーらしい文字列は伏せる。
+    expect(JSON.stringify(body)).not.toContain("AIza");
+    expect(body.message).toContain("RESOURCE_EXHAUSTED / GenerateRequestsPerDayPerProjectPerModel");
+    expect(body.message).toContain("「You exceeded your current quota. key=[redacted]」");
+    expect(body.message).toContain("1 回送信（429）");
   });
 
   it("上流が混雑（503）を返したら、送り直して生成する", async () => {
@@ -769,6 +813,8 @@ describe("POST /v1/checks:generate", () => {
     await expect(response.json()).resolves.toMatchObject({
       reason: "upstream-status",
       status: 503,
+      upstream: { attempts: 3, statuses: [503, 503, 503] },
+      message: expect.stringContaining("3 回送信（503, 503, 503）"),
     });
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
@@ -846,6 +892,7 @@ describe("POST /v1/checks:generate", () => {
     await expect(response.json()).resolves.toMatchObject({
       reason: "upstream-unreachable",
       message: expect.stringContaining("AI に接続できませんでした"),
+      upstream: { attempts: 1, statuses: [], cause: "TypeError: network unreachable" },
     });
     expect(error).toHaveBeenCalled();
   });

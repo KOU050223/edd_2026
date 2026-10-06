@@ -283,13 +283,113 @@ type UpstreamFailure =
   "upstream-timeout" | "upstream-unreachable" | "upstream-status" | "upstream-unreadable";
 
 /**
+ * 上流への呼び出しの経過。失敗の原因を切り分けるために応答へ添える（#253）。
+ *
+ * 状態コードだけでは、混雑（UNAVAILABLE）か割り当て超過（RESOURCE_EXHAUSTED）か、
+ * キーやプロジェクトの問題かが分からず、本番で原因を絞れなかった。
+ */
+type UpstreamTrace = {
+  /** 送った回数（送り直しを含む）。 */
+  attempts: number;
+  /** 送った順の状態コード。届かなかった回は含まない。 */
+  statuses: number[];
+  /** 最初の送信から失敗が決まるまでの時間。 */
+  elapsedMs: number;
+  /** Gemini のエラー本文の `error.status`（例: `UNAVAILABLE`）。 */
+  upstreamStatus?: string;
+  /** Gemini のエラー本文の `error.message`。長さを切り、キーらしい文字列は伏せる。 */
+  upstreamMessage?: string;
+  /** `ErrorInfo.reason`（例: `API_KEY_INVALID`）。 */
+  upstreamReason?: string;
+  /** `QuotaFailure` で超えた割り当て（例: `GenerateRequestsPerDayPerProjectPerModel`）。 */
+  quotaId?: string;
+  /** `RetryInfo.retryDelay`（例: `33s`）。 */
+  retryDelay?: string;
+  /** 届かなかったときの例外の名前と文。 */
+  cause?: string;
+};
+
+type UpstreamErrorDetail = Pick<
+  UpstreamTrace,
+  "upstreamStatus" | "upstreamMessage" | "upstreamReason" | "quotaId" | "retryDelay"
+>;
+
+/** 応答へ載せる上流の文の上限。想定外に長い本文をそのまま中継しない。 */
+const UPSTREAM_TEXT_LIMIT = 300;
+
+/** 載せる文を切り詰め、API キーらしい文字列を伏せる。Gemini はキーを返さないが念のため。 */
+function clipUpstreamText(text: string): string {
+  const redacted = text.replace(/AIza[0-9A-Za-z_-]{20,}/g, "[redacted]");
+  return redacted.length > UPSTREAM_TEXT_LIMIT
+    ? `${redacted.slice(0, UPSTREAM_TEXT_LIMIT)}…`
+    : redacted;
+}
+
+/**
+ * Gemini のエラー本文（`{ error: { code, message, status, details } }`）から、
+ * 原因の切り分けに使う項目だけを取り出す。JSON でなければ本文の先頭を文として返す。
+ */
+function readUpstreamError(raw: string): UpstreamErrorDetail {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    const text = raw.trim();
+    return text.length === 0 ? {} : { upstreamMessage: clipUpstreamText(text) };
+  }
+  const error = (parsed as { error?: unknown } | null)?.error;
+  if (typeof error !== "object" || error === null) return {};
+  const { status, message, details } = error as {
+    status?: unknown;
+    message?: unknown;
+    details?: unknown;
+  };
+  const found: UpstreamErrorDetail = {};
+  if (typeof status === "string") found.upstreamStatus = clipUpstreamText(status);
+  if (typeof message === "string") found.upstreamMessage = clipUpstreamText(message);
+  if (Array.isArray(details)) {
+    for (const detail of details as unknown[]) {
+      if (typeof detail !== "object" || detail === null) continue;
+      const item = detail as Record<string, unknown>;
+      const type = typeof item["@type"] === "string" ? item["@type"] : "";
+      if (type.endsWith("ErrorInfo") && typeof item.reason === "string") {
+        found.upstreamReason = clipUpstreamText(item.reason);
+      } else if (type.endsWith("RetryInfo") && typeof item.retryDelay === "string") {
+        found.retryDelay = clipUpstreamText(item.retryDelay);
+      } else if (type.endsWith("QuotaFailure") && Array.isArray(item.violations)) {
+        const first = (item.violations as unknown[])[0] as { quotaId?: unknown } | undefined;
+        if (typeof first?.quotaId === "string") found.quotaId = clipUpstreamText(first.quotaId);
+      }
+    }
+  }
+  return found;
+}
+
+/** 経過を、画面の文の末尾に添える形にする。 */
+function describeTrace(trace: UpstreamTrace): string {
+  const parts: string[] = [];
+  const labels = [trace.upstreamStatus, trace.upstreamReason, trace.quotaId].filter(
+    (part) => part !== undefined,
+  );
+  if (labels.length > 0) parts.push(labels.join(" / "));
+  if (trace.upstreamMessage !== undefined) parts.push(`「${trace.upstreamMessage}」`);
+  if (trace.retryDelay !== undefined) parts.push(`再試行の目安 ${trace.retryDelay}`);
+  if (trace.cause !== undefined) parts.push(trace.cause);
+  const statuses = trace.statuses.length > 0 ? `（${trace.statuses.join(", ")}）` : "";
+  parts.push(`${String(trace.attempts)} 回送信${statuses}`);
+  parts.push(`${(trace.elapsedMs / 1000).toFixed(1)} 秒`);
+  return `［詳細: ${parts.join("・")}］`;
+}
+
+/**
  * 上流への呼び出しの失敗を、理由つきで返す本文。
  *
  * どれも同じ「用意できませんでした」にすると、届かなかったのか、時間切れか、
  * Gemini が拒否したのかを、利用者も運営も切り分けられない（#253 の調査で困った）。
- * 上流の本文（プロバイダのエラー文）は載せない。状態コードだけを添える。
+ * 本番のログを見られないので、Gemini のエラー本文の要点（状態・文・理由）と
+ * 送信の経過を `upstream` に添え、画面の文の末尾にも出す。
  */
-function upstreamFailureBody(reason: UpstreamFailure, status?: number) {
+function upstreamFailureBody(reason: UpstreamFailure, trace: UpstreamTrace, status?: number) {
   const message = {
     "upstream-timeout":
       "AI の応答が時間内に返りませんでした。時間をおいて、もう一度お試しください。",
@@ -301,7 +401,8 @@ function upstreamFailureBody(reason: UpstreamFailure, status?: number) {
     error: "AI upstream request failed" as const,
     reason,
     ...(status === undefined ? {} : { status }),
-    message,
+    message: `${message}${describeTrace(trace)}`,
+    upstream: trace,
   };
 }
 
@@ -660,8 +761,19 @@ export function createChecksRoute(resolve: ChecksDepsResolver) {
     // 再送をまたいで1つの期限を使う。再送のたびに延ばすと、利用者を待たせる上限が決まらない（RULE-001）。
     const deadline = AbortSignal.timeout(UPSTREAM_TIMEOUT_MS);
     const retryDelaysMs = deps.retryDelaysMs ?? UPSTREAM_RETRY_DELAYS_MS;
+    // 失敗したときに原因を切り分けられるよう、送った回数・状態コード・時間を残す（#253）。
+    const startedAt = Date.now();
+    const statuses: number[] = [];
+    let attempts = 0;
+    const trace = (detail: Partial<UpstreamTrace> = {}): UpstreamTrace => ({
+      attempts,
+      statuses: [...statuses],
+      elapsedMs: Date.now() - startedAt,
+      ...detail,
+    });
     try {
       for (let attempt = 0; ; attempt += 1) {
+        attempts = attempt + 1;
         upstream = await deps.fetch(
           `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
           {
@@ -687,6 +799,7 @@ export function createChecksRoute(resolve: ChecksDepsResolver) {
             }),
           },
         );
+        statuses.push(upstream.status);
         const delay = retryDelaysMs[attempt];
         if (!RETRYABLE_UPSTREAM_STATUSES.has(upstream.status) || delay === undefined) {
           break;
@@ -715,21 +828,44 @@ export function createChecksRoute(resolve: ChecksDepsResolver) {
     } catch (cause) {
       // fetch の拒否（ネットワーク断、タイムアウト）は
       // 下の !ok 分岐に届かない。失敗として数えられるよう応答の前に記録する。
-      console.error("check generation upstream request failed", { conceptId, model, cause });
+      const failed = trace({
+        cause: clipUpstreamText(
+          cause instanceof Error ? `${cause.name}: ${cause.message}` : String(cause),
+        ),
+      });
+      console.error("check generation upstream request failed", {
+        conceptId,
+        model,
+        cause,
+        trace: failed,
+      });
       return c.json(
-        upstreamFailureBody(isTimeout(cause) ? "upstream-timeout" : "upstream-unreachable"),
+        upstreamFailureBody(isTimeout(cause) ? "upstream-timeout" : "upstream-unreachable", failed),
         502,
       );
     }
 
     if (!upstream.ok) {
-      // ステータスは残すが、上流の本文（エラーメッセージ）は読まずに捨てる。
+      // 上流のエラー本文から、原因の切り分けに使う要点だけを取り出して添える（#253）。
+      // 本文が読めなくても、状態コードで失敗は伝えられるので続ける。
+      let errorBody = "";
+      try {
+        errorBody = await upstream.text();
+      } catch (cause) {
+        console.warn("check generation could not read an upstream error body", {
+          conceptId,
+          model,
+          cause,
+        });
+      }
+      const failed = trace(readUpstreamError(errorBody));
       console.error("check generation upstream request failed", {
         conceptId,
         model,
         status: upstream.status,
+        trace: failed,
       });
-      return c.json(upstreamFailureBody("upstream-status", upstream.status), 502);
+      return c.json(upstreamFailureBody("upstream-status", failed, upstream.status), 502);
     }
 
     let raw: string;
@@ -742,7 +878,7 @@ export function createChecksRoute(resolve: ChecksDepsResolver) {
         model,
         cause,
       });
-      return c.json(upstreamFailureBody("upstream-unreadable"), 502);
+      return c.json(upstreamFailureBody("upstream-unreadable", trace()), 502);
     }
 
     // 実消費を当月へ足す。本文が使えない応答（切れた・空・拒否）でも上流では課金されるので、
