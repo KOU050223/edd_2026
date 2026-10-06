@@ -8,12 +8,16 @@ import {
   CheckGenerationError,
   changeGenerationConsent,
   checkErrorText,
+  checkSetKey,
+  checkTally,
   defaultObjectiveSelection,
   fetchSavedChecks,
   generateCheck,
   generationTargets,
   gradeCheck,
   isPersonalConceptCheck,
+  nextCheckIndex,
+  orderedChecks,
   recommendedLevel,
   upsertCheck,
 } from "./check.js";
@@ -259,4 +263,50 @@ test("作り直した組は同じ狙いの古い組と置き換えて先頭に�
   const regenerated = { ...CHECK, level: "advanced" as const, generatedAt: "2026-10-05T00:00:00Z" };
 
   expect(upsertCheck([other, CHECK], regenerated)).toEqual([regenerated, other]);
+});
+
+test("組は「理解すること」の一覧の上から順に出し、Concept 全体の組は先頭", () => {
+  const first = { ...CHECK, objectiveId: "go.defer:lifo", generatedAt: "2026-10-03T00:00:00Z" };
+  const second = { ...CHECK, objectiveId: "go.defer:args", generatedAt: "2026-10-05T00:00:00Z" };
+  const whole = { ...CHECK, scope: "concept" as const, objectiveId: undefined };
+  const unknown = { ...CHECK, objectiveId: "go.defer:removed" };
+  const checks = [unknown, second, CHECK, whole, first];
+
+  expect(
+    orderedChecks(checks, ["go.defer:lifo", "go.defer:execution_timing", "go.defer:args"]),
+  ).toEqual([whole, first, CHECK, second, unknown]);
+  // 元の一覧は並べ替えない。
+  expect(checks).toEqual([unknown, second, CHECK, whole, first]);
+});
+
+test("組の鍵は作り直し・解き直しで変わる", () => {
+  const regenerated = { ...CHECK, generatedAt: "2026-10-05T00:00:00Z" };
+
+  expect(checkSetKey(CHECK, 0)).not.toBe(checkSetKey(regenerated, 0));
+  expect(checkSetKey(CHECK, 0)).not.toBe(checkSetKey(CHECK, 1));
+  expect(checkSetKey(CHECK, 0)).toBe(checkSetKey({ ...CHECK }, 0));
+});
+
+test("まとめは、採点して2問とも正解した組だけを正解に数える", () => {
+  const failed = { ...CHECK, objectiveId: "go.defer:lifo" };
+  const skipped = { ...CHECK, objectiveId: "go.defer:args" };
+  const results = new Map([
+    [checkSetKey(CHECK, 1), true],
+    [checkSetKey(failed, 1), false],
+  ]);
+
+  expect(checkTally([CHECK, failed, skipped], 1, results)).toEqual({ total: 3, passed: 1 });
+  // 解き直すと前の回の結果は数えない。
+  expect(checkTally([CHECK, failed, skipped], 2, results)).toEqual({ total: 3, passed: 0 });
+});
+
+test("次の組は、後ろのまだ終えていない組。無ければ前から探す", () => {
+  expect(nextCheckIndex([true, true, true], 0)).toBe(1);
+  // 終えた組は飛ばす。
+  expect(nextCheckIndex([true, false, true], 0)).toBe(2);
+  // 作っている間に前（Q1 側）へ増えた組を、出さないまままとめへ進まない。
+  expect(nextCheckIndex([true, false], 1)).toBe(0);
+  // 今の組は数えない。
+  expect(nextCheckIndex([false, true], 1)).toBeUndefined();
+  expect(nextCheckIndex([false, false, false], 2)).toBeUndefined();
 });

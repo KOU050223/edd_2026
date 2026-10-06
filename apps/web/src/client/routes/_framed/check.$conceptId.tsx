@@ -20,12 +20,16 @@ import {
   CheckConsentRequiredError,
   changeGenerationConsent,
   checkErrorText,
+  checkSetKey,
+  checkTally,
   defaultObjectiveSelection,
   fetchGenerationConsent,
   fetchSavedChecks,
   generateCheck,
   generationTargets,
   gradeCheck,
+  nextCheckIndex,
+  orderedChecks,
   recommendedLevel,
   savedTargetsOf,
   upsertCheck,
@@ -112,19 +116,31 @@ function RecordStatus({ state, onRetry }: { state: RecordState; onRetry: () => v
  * 保存済みの1組。概要問題と実践問題の2問を選んでからまとめて採点し、
  * **2問とも正解のときだけ** `check_passed`、それ以外は `check_failed` を1件記録する（#43）。
  * 回答内容（選んだ選択肢）は送らない。
+ *
+ * 画面には1組ずつ出す（#270）。出していない組も `hidden` で残し、
+ * 別の組へ移って戻ってきても、選んだ答えや採点の結果、記録の送信を失わない。
  */
 function CheckSet({
   check,
   title,
+  hidden,
+  retakable,
   regenerateLabel,
   regenerating,
   onRegenerate,
+  onGraded,
+  onRetake,
 }: {
   check: PersonalConceptCheck;
   title: string;
+  hidden: boolean;
+  /** 採点のあとに「もう一度解く」を出すか。範囲が「理解すること」のときだけ（#270 の決定）。 */
+  retakable: boolean;
   regenerateLabel: string;
   regenerating: boolean;
   onRegenerate: () => void;
+  onGraded: (passed: boolean) => void;
+  onRetake: () => void;
 }) {
   const router = useRouter();
   const [answers, setAnswers] = useState<CheckAnswers>({});
@@ -169,6 +185,7 @@ function CheckSet({
     const result = gradeCheck(check, answers);
     if (result === null) return;
     setCorrect(result);
+    onGraded(result.overview && result.practice);
     event.current = checkResultEvent({
       conceptId: check.conceptId,
       correct: result,
@@ -184,6 +201,7 @@ function CheckSet({
     setAnswers({});
     setCorrect(undefined);
     setRecord(undefined);
+    onRetake();
   };
 
   const graded = correct !== undefined;
@@ -191,7 +209,7 @@ function CheckSet({
   const answeredAll = gradeCheck(check, answers) !== null;
 
   return (
-    <article className="check-set">
+    <article className="check-set" hidden={hidden}>
       <div className="check-set-head">
         <div>
           <h3>{title}</h3>
@@ -215,13 +233,13 @@ function CheckSet({
           grade();
         }}
       >
-        {checkQuestionsOf(check).map(({ kind, question }, index) => (
+        {checkQuestionsOf(check).map(({ kind, question }) => (
           <fieldset
             key={kind}
             className={`check-question${graded ? (correct[kind] ? " correct" : " incorrect") : ""}`}
           >
             <legend>
-              Q{index + 1}. {KIND_LABEL[kind]}
+              {KIND_LABEL[kind]}
               {graded && (
                 <strong className="check-verdict">{correct[kind] ? "正解" : "不正解"}</strong>
               )}
@@ -287,11 +305,13 @@ function CheckSet({
               : "2問とも正解したときだけ理解できたものとして記録します。解説を読んでから、もう一度解いてみてください。"}
           </p>
           {record && <RecordStatus state={record} onRetry={send} />}
-          <div className="actions">
-            <button type="button" onClick={retake} disabled={record?.kind === "sending"}>
-              もう一度解く
-            </button>
-          </div>
+          {retakable && (
+            <div className="actions">
+              <button type="button" onClick={retake} disabled={record?.kind === "sending"}>
+                もう一度解く
+              </button>
+            </div>
+          )}
         </section>
       )}
     </article>
@@ -372,6 +392,14 @@ function CheckPage() {
   // 「復習する」で増やす。組の key に入れて、採点済みの組も未回答から解き直せるようにする。
   const [round, setRound] = useState(0);
   const sets = useRef<HTMLElement>(null);
+  // 出している組の狙い（`checkTargetOf`）。作り直しで日時が変わっても同じ組を指し続ける（#270）。
+  const [current, setCurrent] = useState<string>();
+  // 終えていない組が無くなって「次へ」進んだ。まとめを出す。
+  const [finished, setFinished] = useState(false);
+  // 採点した組の鍵（`checkSetKey`）と、2問とも正解だったか。スキップした組は入らない。
+  const [results, setResults] = useState<ReadonlyMap<string, boolean>>(new Map());
+  // 「次へ」「スキップ」で離れた組の鍵。採点した組と合わせて「終えた組」とする。
+  const [left, setLeft] = useState<ReadonlySet<string>>(new Set());
 
   const objectiveLabel = new Map(
     loaded.objectives.map((objective) => [objective.id, objective.label]),
@@ -383,6 +411,44 @@ function CheckPage() {
   const savedTargets = savedTargetsOf(checks);
   const generating = progress !== undefined;
 
+  const ordered = orderedChecks(
+    checks,
+    loaded.objectives.map((objective) => objective.id),
+  );
+  const open = ordered.map((check) => {
+    const key = checkSetKey(check, round);
+    return !left.has(key) && !results.has(key);
+  });
+  const firstOpen = open.indexOf(true);
+  // まとめを開いたあとに新しい組ができたら、まとめを閉じてその組を出す（作っている間に増える）。
+  const summarized = finished && firstOpen === -1;
+  const found = ordered.findIndex((check) => checkTargetOf(check) === current);
+  const position = finished ? Math.max(firstOpen, 0) : found === -1 ? 0 : found;
+  const shownCheck = ordered[position];
+
+  /** 組を出す。組の頭へ送り、解く組が変わったことが分かるようにする。 */
+  const show = (target: string) => {
+    setCurrent(target);
+    setFinished(false);
+    sets.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+  /**
+   * 次の組へ（スキップも同じ）。まだ終えていない組へ進み、無ければまとめへ。
+   * スキップは何も記録しない。
+   */
+  const next = () => {
+    if (shownCheck === undefined) return;
+    setLeft((current) => new Set(current).add(checkSetKey(shownCheck, round)));
+    const following = nextCheckIndex(open, position);
+    const target = following === undefined ? undefined : ordered[following];
+    if (target === undefined) {
+      setFinished(true);
+      sets.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      return;
+    }
+    show(checkTargetOf(target));
+  };
+
   /** 選んだ狙いを順に1組ずつ作る。1組ごとに AI の利用回数を1回使う。 */
   const run = (targets: Target[], consentVersion: number | undefined) => {
     // 入口で弾く（RULE-007）。
@@ -392,6 +458,7 @@ function CheckPage() {
     void submitGuard.current
       .run("generate", async () => {
         const generated = new Set<string>();
+        let shown = false;
         for (const [index, target] of targets.entries()) {
           try {
             const check = await generateCheck({
@@ -403,6 +470,11 @@ function CheckPage() {
             });
             setChecks((current) => upsertCheck(current, check));
             generated.add(checkTargetOf(check));
+            // 作った組を出す（#270 の決定）。続けて作る組で、解き始めた組から動かさないよう最初の1組だけ。
+            if (!shown) {
+              shown = true;
+              show(checkTargetOf(check));
+            }
           } catch (value: unknown) {
             if (value instanceof ApiError && value.kind === "session_expired") {
               window.location.href = "/login";
@@ -470,8 +542,13 @@ function CheckPage() {
   // 保存済みの問題を解き直す。生成しないので AI の利用回数を使わない（#236）。
   const review = () => {
     setRound((current) => current + 1);
-    sets.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    setResults(new Map());
+    setLeft(new Set());
+    const first = ordered[0];
+    if (first !== undefined) show(checkTargetOf(first));
   };
+  const tally = checkTally(checks, round, results);
+  const shownResult = shownCheck && results.get(checkSetKey(shownCheck, round));
   const reviewable = scope === "concept" && targets.length === 0 && checks.length > 0;
   const toggle = (objectiveId: string) =>
     setSelected((current) =>
@@ -631,23 +708,95 @@ function CheckPage() {
         {checks.length === 0 ? (
           <p className="muted">まだ問題がありません。上で範囲を選んで作ってください。</p>
         ) : (
-          checks.map((check) => (
-            <CheckSet
-              key={`${checkTargetOf(check)}:${check.generatedAt}:${String(round)}`}
-              check={check}
-              title={titleOf(check)}
-              regenerateLabel={`作り直す（${CHECK_LEVEL_LABELS[level]}）`}
-              regenerating={generating}
-              onRegenerate={() =>
-                request([
-                  {
-                    scope: check.scope,
-                    ...(check.objectiveId === undefined ? {} : { objectiveId: check.objectiveId }),
-                  },
-                ])
-              }
-            />
-          ))
+          <>
+            <nav className="check-nav" aria-label="組の移動">
+              <ol>
+                {ordered.map((check, index) => {
+                  const result = results.get(checkSetKey(check, round));
+                  const classes = [
+                    "check-nav-item",
+                    result === true && "passed",
+                    result === false && "failed",
+                  ].filter(Boolean);
+                  return (
+                    <li key={checkTargetOf(check)}>
+                      <button
+                        type="button"
+                        className={classes.join(" ")}
+                        aria-current={!summarized && index === position ? "step" : undefined}
+                        title={titleOf(check)}
+                        onClick={() => show(checkTargetOf(check))}
+                      >
+                        Q{index + 1}
+                      </button>
+                    </li>
+                  );
+                })}
+              </ol>
+              <span className="muted">
+                {summarized ? "まとめ" : `${position + 1} / ${ordered.length} 組目`}
+              </span>
+            </nav>
+            {ordered.map((check) => (
+              <CheckSet
+                key={checkSetKey(check, round)}
+                check={check}
+                title={titleOf(check)}
+                hidden={summarized || check !== shownCheck}
+                retakable={scope === "objective"}
+                regenerateLabel={`作り直す（${CHECK_LEVEL_LABELS[level]}）`}
+                regenerating={generating}
+                onRegenerate={() =>
+                  request([
+                    {
+                      scope: check.scope,
+                      ...(check.objectiveId === undefined
+                        ? {}
+                        : { objectiveId: check.objectiveId }),
+                    },
+                  ])
+                }
+                onGraded={(passed) =>
+                  setResults((current) => new Map(current).set(checkSetKey(check, round), passed))
+                }
+                onRetake={() =>
+                  setResults((current) => {
+                    const rest = new Map(current);
+                    rest.delete(checkSetKey(check, round));
+                    return rest;
+                  })
+                }
+              />
+            ))}
+            {summarized ? (
+              <section className="check-summary" role="status">
+                <h3>全部の組を終えました</h3>
+                <p>
+                  {tally.total} 組中 {tally.passed} 組正解
+                </p>
+                <div className="actions">
+                  {scope === "concept" && (
+                    <button type="button" disabled={generating} onClick={review}>
+                      もう一度解く
+                    </button>
+                  )}
+                  <span className="muted">上の Q を押すと、その組へ戻れます。</span>
+                </div>
+              </section>
+            ) : (
+              <div className="actions check-step">
+                {shownResult === undefined ? (
+                  <button type="button" className="secondary" onClick={next}>
+                    スキップ
+                  </button>
+                ) : (
+                  <button type="button" onClick={next}>
+                    {nextCheckIndex(open, position) === undefined ? "まとめを見る" : "次の組へ"}
+                  </button>
+                )}
+              </div>
+            )}
+          </>
         )}
       </section>
     </section>

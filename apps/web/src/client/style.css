@@ -1187,14 +1187,65 @@ button.link:disabled {
   margin: 10px 0 0;
   padding-left: 1.2em;
 }
-.check-set {
-  margin-top: 16px;
-  padding-top: 16px;
-  border-top: 1px solid #e2e8f0;
+/* 組は1つずつ出す（#270）。Q1, Q2 … で組を移り、解いたら「次の組へ」。 */
+.check-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: center;
+  margin-bottom: 16px;
 }
-.check-set:first-of-type {
-  border-top: 0;
-  padding-top: 0;
+.check-nav ol {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.check-nav .muted {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.check-nav-item {
+  min-width: 40px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 4px 8px;
+  background: #fff;
+  color: #334155;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.check-nav-item.passed {
+  border-color: #047857;
+  color: #047857;
+}
+.check-nav-item.failed {
+  border-color: #b91c1c;
+  color: #b91c1c;
+}
+.check-nav-item[aria-current] {
+  border-color: #0f766e;
+  background: #0f766e;
+  color: #fff;
+}
+.check-step {
+  margin-top: 16px;
+}
+.check-summary {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 14px 18px;
+}
+.check-summary h3 {
+  font-size: 15px;
+  margin: 0 0 6px;
+}
+.check-summary p {
+  margin: 0 0 10px;
 }
 .check-set-head {
   display: flex;

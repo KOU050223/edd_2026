@@ -352,6 +352,63 @@ export function upsertCheck(
   return [generated, ...checks.filter((check) => checkTargetOf(check) !== target)];
 }
 
+/**
+ * 組を出す順番（#270 の決定）。「理解すること」の一覧の上から順（AI へ渡す順と同じ）で、
+ * Concept 全体の組は先頭。作った日時では並べ替えず、作り直しても位置は変わらない。
+ * 狙い1つにつき組は1つ（作り直しは上書き）なので、出すのはいつも最新の組になる。
+ * 一覧に無い項目の組は末尾に、元の並びのまま置く。
+ */
+export function orderedChecks(
+  checks: readonly PersonalConceptCheck[],
+  objectiveIds: readonly string[],
+): PersonalConceptCheck[] {
+  const rank = (check: PersonalConceptCheck) => {
+    if (check.objectiveId === undefined) return -1;
+    const index = objectiveIds.indexOf(check.objectiveId);
+    return index === -1 ? objectiveIds.length : index;
+  };
+  return [...checks].sort((left, right) => rank(left) - rank(right));
+}
+
+/**
+ * 解いている1組を指す鍵。作り直すと日時が、解き直すと回（`round`）が変わり、
+ * 前の採点の結果を引き継がない。
+ */
+export function checkSetKey(check: PersonalConceptCheck, round: number): string {
+  return `${checkTargetOf(check)}:${check.generatedAt}:${String(round)}`;
+}
+
+/**
+ * 「次の組へ」「スキップ」で移る先（#270）。今の組より後ろで、まだ終えていない最初の組。
+ * 後ろに無ければ前から探す。解いている組より上の項目の組があとからできても
+ * （項目を一覧と違う順に選んだときや、上の項目を作り直したとき）、出さないまままとめへ進まない。終えていない組が無ければ `undefined`（まとめへ）。
+ *
+ * @param open 並びの順に、まだ終えていない（採点も「次へ」もしていない）か。
+ */
+export function nextCheckIndex(open: readonly boolean[], position: number): number | undefined {
+  const isOpen = (index: number) => index !== position && open[index] === true;
+  for (let index = position + 1; index < open.length; index += 1) if (isOpen(index)) return index;
+  for (let index = 0; index < position; index += 1) if (isOpen(index)) return index;
+  return undefined;
+}
+
+/**
+ * 全部の組を終えたときのまとめ（#270 の決定）。例「3 組中 2 組正解」。
+ * スキップした組は採点していないので、正解に数えない。スキップの数は出さない。
+ *
+ * @param results 採点した組の鍵（`checkSetKey`）と、2問とも正解だったか。
+ */
+export function checkTally(
+  checks: readonly PersonalConceptCheck[],
+  round: number,
+  results: ReadonlyMap<string, boolean>,
+): { total: number; passed: number } {
+  return {
+    total: checks.length,
+    passed: checks.filter((check) => results.get(checkSetKey(check, round)) === true).length,
+  };
+}
+
 /** 生成する狙い1つ。範囲が項目なら項目 ID を持つ。 */
 export type CheckTarget = { scope: CheckScope; objectiveId?: string };
 
