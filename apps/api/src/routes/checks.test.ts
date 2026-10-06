@@ -314,27 +314,17 @@ describe("POST /v1/checks:generate", () => {
     await expect(harness.checks.listByConcept(USER_A, CONCEPT_ID)).resolves.toEqual([expected]);
   });
 
-  it("上流へはタイムアウトと出力上限を付けて送る", async () => {
+  it("順に試すモデルの設定が無ければ、GEMINI_MODEL のモデルへ送る", async () => {
+    // 送り方の細部は `checks/upstream.test.ts` が固定している。ここは設定から送り先への経路を見る。
     const fetchMock = stubUpstream(generatedCheck());
     silenceInfo();
 
-    await generate(buildApp());
+    await generate(buildApp(), CONCEPT_BASIC, { ...ENV, GEMINI_MODEL: "gemini-3.8-flash" });
 
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent",
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent",
     );
-    // 単発の外向き fetch なので壁時計で切る（RULE-001）。
-    expect(init.signal).toBeInstanceOf(AbortSignal);
-    // 資格情報を載せるのでリダイレクトを追跡しない（RULE-002）。Workers は
-    // `redirect: "error"` を実装しておらず送信前に例外を投げるので `manual`（#253）。
-    expect(init.redirect).toBe("manual");
-    expect(JSON.parse(String(init.body))).toMatchObject({
-      generationConfig: {
-        maxOutputTokens: AI_USAGE_LIMITS.outputTokensPerRequest,
-        responseMimeType: "application/json",
-      },
-    });
   });
 
   it("1組の生成につき ai_usage を1回数える", async () => {
@@ -467,82 +457,27 @@ describe("POST /v1/checks:generate", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("その項目で自力解決した質問の本文だけを、新しい順に3件まで材料に渡す", async () => {
+  it("その項目で自力解決した質問を材料としてプロンプトへ渡し、件数を記録する", async () => {
+    // 集め方の細部（件数・順序・渡す範囲）は `checks/material.test.ts` が固定している。
     const fetchMock = stubUpstream(generatedCheck());
     const info = silenceInfo();
     const harness = buildApp(OBJECTIVES);
-    for (const [index, day] of ["01", "02", "03", "04"].entries()) {
-      await seedSolvedConversation(
-        harness,
-        `conv-${String(index)}`,
-        `2026-09-${day}T00:00:00.000Z`,
-        `質問${String(index)}: 値レシーバで n++ が効かない`,
-      );
-    }
+    await seedSolvedConversation(
+      harness,
+      "conv-1",
+      "2026-09-01T00:00:00.000Z",
+      "値レシーバで n++ が効かない",
+    );
 
     await generate(harness, OBJECTIVE_BASIC);
 
     const prompt = sentPrompt(fetchMock);
-    expect(prompt).toContain("<<<質問1\n質問3: 値レシーバで n++ が効かない\n質問1>>>");
-    expect(prompt).toContain("<<<質問3\n質問1: 値レシーバで n++ が効かない\n質問3>>>");
-    expect(prompt).not.toContain("質問0:");
-    // 選択したコードと AI の回答は送らない（#236 の決定）。
+    expect(prompt).toContain("<<<質問1\n値レシーバで n++ が効かない\n質問1>>>");
     expect(prompt).not.toContain("SELECTED-CODE-SECRET");
     expect(prompt).not.toContain("ASSISTANT-ANSWER");
     expect(info).toHaveBeenCalledWith(
       "check generation completed",
-      expect.objectContaining({ materialCount: 3 }),
-    );
-  });
-
-  it("質問は上限の文字数で切る", async () => {
-    const fetchMock = stubUpstream(generatedCheck());
-    silenceInfo();
-    const harness = buildApp(OBJECTIVES);
-    await seedSolvedConversation(
-      harness,
-      "conv-long",
-      "2026-09-01T00:00:00.000Z",
-      "あ".repeat(700),
-    );
-
-    await generate(harness, OBJECTIVE_BASIC);
-
-    expect(sentPrompt(fetchMock)).toContain(`<<<質問1\n${"あ".repeat(600)}\n質問1>>>`);
-  });
-
-  it("会話が保存されていなければ、材料なしで1組作る", async () => {
-    const fetchMock = stubUpstream(generatedCheck());
-    silenceInfo();
-    const harness = buildApp(OBJECTIVES);
-    await seedSolvedConversation(harness, "conv-1", "2026-09-01T00:00:00.000Z", "質問");
-    await harness.conversations.deleteAllByUser(USER_A);
-
-    const response = await generate(harness, OBJECTIVE_BASIC);
-
-    expect(response.status).toBe(200);
-    expect(sentPrompt(fetchMock)).not.toContain("自力で解決した質問");
-  });
-
-  it("「質問履歴の保存」を後から無効にした人の会話は、保存済みでも渡さない", async () => {
-    // 無効にしても保存済みの履歴は残る。同意の文面は「有効にしているときだけ」と約束している。
-    const fetchMock = stubUpstream(generatedCheck());
-    const info = silenceInfo();
-    const harness = buildApp(OBJECTIVES);
-    await seedSolvedConversation(harness, "conv-1", "2026-09-01T00:00:00.000Z", "保存済みの質問");
-    await harness.settings.put(
-      USER_A,
-      { saveConversationHistory: false },
-      "2026-09-02T00:00:00.000Z",
-    );
-
-    const response = await generate(harness, OBJECTIVE_BASIC);
-
-    expect(response.status).toBe(200);
-    expect(sentPrompt(fetchMock)).not.toContain("保存済みの質問");
-    expect(info).toHaveBeenCalledWith(
-      "check generation completed",
-      expect.objectContaining({ materialCount: 0 }),
+      expect.objectContaining({ materialCount: 1 }),
     );
   });
 
@@ -555,30 +490,6 @@ describe("POST /v1/checks:generate", () => {
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toMatchObject({ error: "invalid objective" });
     expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("長い質問が揃っても入力の上限に収まるまで削り、生成できる", async () => {
-    const fetchMock = stubUpstream(generatedCheck());
-    silenceInfo();
-    const harness = buildApp(OBJECTIVES);
-    for (const [index, day] of ["01", "02", "03"].entries()) {
-      await seedSolvedConversation(
-        harness,
-        `conv-${String(index)}`,
-        `2026-09-${day}T00:00:00.000Z`,
-        `質問${String(index)}` + "長".repeat(700),
-      );
-    }
-
-    const response = await generate(harness, OBJECTIVE_BASIC);
-
-    expect(response.status).toBe(200);
-    const prompt = sentPrompt(fetchMock);
-    expect(new TextEncoder().encode(prompt).length).toBeLessThanOrEqual(
-      AI_USAGE_LIMITS.inputTokensPerRequest,
-    );
-    // 新しい質問から載せる。
-    expect(prompt).toContain("<<<質問1\n質問2長");
   });
 
   it("生成中に学習データが削除されたら、作った問題を保存しない", async () => {
@@ -629,17 +540,6 @@ describe("POST /v1/checks:generate", () => {
     await generate(harness);
 
     expect(sentPrompt(fetchMock)).not.toContain("質問の本文");
-  });
-
-  it("他人の会話は材料にしない", async () => {
-    const fetchMock = stubUpstream(generatedCheck());
-    silenceInfo();
-    const harness = buildApp(OBJECTIVES);
-    await seedSolvedConversation(harness, "conv-1", "2026-09-01T00:00:00.000Z", "A さんの質問");
-
-    await generate(harness, OBJECTIVE_BASIC, ENV, "other-token");
-
-    expect(sentPrompt(fetchMock)).not.toContain("A さんの質問");
   });
 
   it("選んだ技術レベルをプロンプトへ伝える", async () => {
@@ -747,71 +647,8 @@ describe("POST /v1/checks:generate", () => {
     expect(error).toHaveBeenCalled();
   });
 
-  it("Gemini のエラー本文の要点と送信の経過を、応答と画面の文に添える", async () => {
-    // 原因（混雑か割り当て超過か）を本番で切り分けるため（#253）。
-    const geminiError = JSON.stringify({
-      error: {
-        code: 429,
-        message: "You exceeded your current quota. key=AIzaSyA1234567890abcdefghijklmnop",
-        status: "RESOURCE_EXHAUSTED",
-        details: [
-          {
-            "@type": "type.googleapis.com/google.rpc.QuotaFailure",
-            violations: [{ quotaId: "GenerateRequestsPerDayPerProjectPerModel-FreeTier" }],
-          },
-          { "@type": "type.googleapis.com/google.rpc.RetryInfo", retryDelay: "33s" },
-        ],
-      },
-    });
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockImplementation(() => Promise.resolve(new Response(geminiError, { status: 429 }))),
-    );
-    silenceError();
-
-    const response = await generate(buildApp());
-
-    expect(response.status).toBe(502);
-    const body = (await response.json()) as { message: string; upstream: unknown };
-    expect(body.upstream).toMatchObject({
-      attempts: 1,
-      statuses: [429],
-      upstreamStatus: "RESOURCE_EXHAUSTED",
-      quotaId: "GenerateRequestsPerDayPerProjectPerModel-FreeTier",
-      retryDelay: "33s",
-      elapsedMs: expect.any(Number),
-    });
-    // キーらしい文字列は伏せる。
-    expect(JSON.stringify(body)).not.toContain("AIza");
-    expect(body.message).toContain("RESOURCE_EXHAUSTED / GenerateRequestsPerDayPerProjectPerModel");
-    expect(body.message).toContain("「You exceeded your current quota. key=[redacted]」");
-    expect(body.message).toContain("1 回送信（429）");
-  });
-
-  it("上流が混雑（503）を返したら、送り直して生成する", async () => {
-    const success = JSON.stringify({
-      candidates: [{ content: { parts: [{ text: generatedCheck() }] }, finishReason: "STOP" }],
-      usageMetadata: { totalTokenCount: 900 },
-    });
-    const fetchMock = vi
-      .fn()
-      .mockImplementationOnce(() => Promise.resolve(new Response("busy", { status: 503 })))
-      .mockImplementationOnce(() => Promise.resolve(new Response(success, { status: 200 })));
-    vi.stubGlobal("fetch", fetchMock);
-    silenceWarn();
-    silenceInfo();
-    const harness = buildApp();
-
-    const response = await generate(harness);
-
-    expect(response.status).toBe(200);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    // 送り直しても、回数は1回だけ数える。
-    expect(await usedToday(harness)).toBe(1);
-  });
-
-  it("先頭のモデルが混雑（503）なら、待たずに次のモデルで生成し、そのモデルを記録する", async () => {
-    // 混雑はモデルごとなので、同じモデルを待つより別のモデルへ回す（#268）。
+  it("送り直して作れたら、応答したモデルを記録し、回数は1回だけ数える", async () => {
+    // 送り直しの規則は `checks/upstream.test.ts` が固定している。ここは生成の結果への反映を見る。
     const success = JSON.stringify({
       candidates: [{ content: { parts: [{ text: generatedCheck() }] }, finishReason: "STOP" }],
       usageMetadata: { totalTokenCount: 900 },
@@ -828,61 +665,12 @@ describe("POST /v1/checks:generate", () => {
     const response = await generate(harness);
 
     expect(response.status).toBe(200);
-    const urls = fetchMock.mock.calls.map(([url]) => String(url));
-    expect(urls[0]).toContain("/models/gemini-3.8-flash:generateContent");
-    expect(urls[1]).toContain("/models/gemini-3.5-flash-lite:generateContent");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     await expect(response.json()).resolves.toMatchObject({ model: "gemini-3.5-flash-lite" });
+    await expect(harness.checks.listByConcept(USER_A, CONCEPT_ID)).resolves.toMatchObject([
+      { model: "gemini-3.5-flash-lite" },
+    ]);
     expect(await usedToday(harness)).toBe(1);
-  });
-
-  it("どのモデルも混雑なら、巡ごとに全部を試してから、モデルごとの結果を伝える", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockImplementation(() => Promise.resolve(new Response("busy", { status: 503 })));
-    vi.stubGlobal("fetch", fetchMock);
-    silenceWarn();
-    silenceError();
-
-    const response = await generate(
-      buildApp([], { models: ["gemini-3.8-flash", "gemini-3.5-flash-lite"] }),
-    );
-
-    expect(response.status).toBe(502);
-    // 待ち時間 2 つ → 3 巡 × 2 モデル。
-    expect(fetchMock).toHaveBeenCalledTimes(6);
-    await expect(response.json()).resolves.toMatchObject({
-      reason: "upstream-status",
-      status: 503,
-      upstream: {
-        attempts: 6,
-        models: [
-          "gemini-3.8-flash",
-          "gemini-3.5-flash-lite",
-          "gemini-3.8-flash",
-          "gemini-3.5-flash-lite",
-          "gemini-3.8-flash",
-          "gemini-3.5-flash-lite",
-        ],
-      },
-      message: expect.stringContaining(
-        "6 回送信（gemini-3.8-flash 503, gemini-3.5-flash-lite 503, gemini-3.8-flash 503,",
-      ),
-    });
-  });
-
-  it("要求の誤り（4xx）なら、次のモデルへ回さない", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockImplementation(() => Promise.resolve(new Response("bad", { status: 400 })));
-    vi.stubGlobal("fetch", fetchMock);
-    silenceError();
-
-    const response = await generate(
-      buildApp([], { models: ["gemini-3.8-flash", "gemini-3.5-flash-lite"] }),
-    );
-
-    expect(response.status).toBe(502);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("順に試すモデルに許可外が1つでもあれば、どこへも送らずに設定の誤りとする", async () => {
@@ -899,124 +687,6 @@ describe("POST /v1/checks:generate", () => {
       error: "AI service is not configured",
     });
     expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("混雑が続けば、決めた回数だけ送り直してから失敗を伝える", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockImplementation(() => Promise.resolve(new Response("busy", { status: 503 })));
-    vi.stubGlobal("fetch", fetchMock);
-    silenceWarn();
-    silenceError();
-
-    const response = await generate(buildApp());
-
-    expect(response.status).toBe(502);
-    await expect(response.json()).resolves.toMatchObject({
-      reason: "upstream-status",
-      status: 503,
-      upstream: { attempts: 3, statuses: [503, 503, 503] },
-      message: expect.stringContaining("3 回送信（503, 503, 503）"),
-    });
-    expect(fetchMock).toHaveBeenCalledTimes(3);
-  });
-
-  it("503 の本文が壊れていても、送り直す", async () => {
-    // 本文を捨てる処理の失敗を、接続の失敗として扱わない。
-    const broken = new ReadableStream({
-      start(controller) {
-        controller.error(new Error("connection closed"));
-      },
-    });
-    const success = JSON.stringify({
-      candidates: [{ content: { parts: [{ text: generatedCheck() }] }, finishReason: "STOP" }],
-      usageMetadata: { totalTokenCount: 900 },
-    });
-    const fetchMock = vi
-      .fn()
-      .mockImplementationOnce(() => Promise.resolve(new Response(broken, { status: 503 })))
-      .mockImplementationOnce(() => Promise.resolve(new Response(success, { status: 200 })));
-    vi.stubGlobal("fetch", fetchMock);
-    silenceWarn();
-    silenceInfo();
-
-    const response = await generate(buildApp());
-
-    expect(response.status).toBe(200);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-  });
-
-  it("要求の誤り（4xx）は送り直さない", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockImplementation(() => Promise.resolve(new Response("bad", { status: 400 })));
-    vi.stubGlobal("fetch", fetchMock);
-    silenceError();
-
-    const response = await generate(buildApp());
-
-    expect(response.status).toBe(502);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("上流が転送（3xx）を返したら、追わずに失敗として扱う", async () => {
-    // `redirect: "manual"` では 3xx がそのまま返る。API キーを転送先へ送り直さない（#253）。
-    const fetchMock = vi
-      .fn()
-      .mockImplementation(() =>
-        Promise.resolve(
-          new Response(null, { status: 302, headers: { location: "https://evil.example" } }),
-        ),
-      );
-    vi.stubGlobal("fetch", fetchMock);
-    silenceError();
-
-    const response = await generate(buildApp());
-
-    expect(response.status).toBe(502);
-    await expect(response.json()).resolves.toMatchObject({
-      reason: "upstream-status",
-      status: 302,
-    });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("上流へ届かなかった場合も 502 とし、届かなかったことを伝える", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockImplementation(() => Promise.reject(new TypeError("network unreachable"))),
-    );
-    const error = silenceError();
-
-    const response = await generate(buildApp());
-
-    expect(response.status).toBe(502);
-    await expect(response.json()).resolves.toMatchObject({
-      reason: "upstream-unreachable",
-      message: expect.stringContaining("AI に接続できませんでした"),
-      upstream: { attempts: 1, statuses: [], cause: "TypeError: network unreachable" },
-    });
-    expect(error).toHaveBeenCalled();
-  });
-
-  it("時間切れは、時間内に返らなかったことを伝える", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi
-        .fn()
-        .mockImplementation(() =>
-          Promise.reject(new DOMException("The operation timed out.", "TimeoutError")),
-        ),
-    );
-    silenceError();
-
-    const response = await generate(buildApp());
-
-    expect(response.status).toBe(502);
-    await expect(response.json()).resolves.toMatchObject({
-      reason: "upstream-timeout",
-      message: expect.stringContaining("時間内に返りませんでした"),
-    });
   });
 
   it("2問揃わない応答を受理せず、理由を利用者へ伝え、保存しない", async () => {
