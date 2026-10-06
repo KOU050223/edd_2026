@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { CONCEPTS } from "@gakushu-sochi/domain";
+import { CONCEPTS, MOCK_LEARNING_OBJECTIVES } from "@gakushu-sochi/domain";
 import { cors } from "hono/cors";
 import { HTTPException } from "hono/http-exception";
 import { requireAuth, type AuthVariables } from "./auth/middleware.js";
@@ -14,6 +14,7 @@ import {
   D1ImportSessionRepository,
   D1LearningEventRepository,
   D1LearningEvidenceRepository,
+  D1LearningMapRepository,
   D1MasteryOverrideRepository,
   D1PersonalCheckRepository,
   D1UserSettingsRepository,
@@ -32,6 +33,8 @@ import { createMasteryOverridesRoute } from "./routes/mastery-overrides.js";
 import { createUserSettingsRoute } from "./routes/user-settings.js";
 import { createConversationsRoute } from "./routes/conversations.js";
 import { createConversationLearningEventsRoute } from "./routes/conversation-learning-events.js";
+import { createLearningMapsRoute } from "./routes/learning-maps.js";
+import { randomKey } from "./maps/content.js";
 
 /** Cloudflare Worker から提供する HTTP API。 */
 export const app = new Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>();
@@ -164,6 +167,12 @@ app.use(
 // 頻度の性質は Profile と同じなので同じ上限を使う。
 app.use(
   "/v1/conversations*",
+  rateLimit((env) => env.PROFILE_RATE_LIMITER),
+);
+// 学習マップ（#242）。一覧・表示は画面を開くたび、保存は利用者の操作ごとに1回で、
+// 頻度の性質は Profile と同じなので同じ上限を使う。
+app.use(
+  "/v1/learning-maps*",
   rateLimit((env) => env.PROFILE_RATE_LIMITER),
 );
 
@@ -331,5 +340,20 @@ app.route(
   "/v1",
   createConversationLearningEventsRoute((env) => ({
     events: new D1LearningEventRepository(env.DB),
+  })),
+);
+
+// 利用者が手で作る学習マップ（#242）。退会で消えるよう users(id) を CASCADE で参照する表に置く
+// （migrations/0013_learning_maps.sql）。
+app.route(
+  "/v1",
+  createLearningMapsRoute((env) => ({
+    identity: new D1IdentityRepository(env.DB),
+    maps: new D1LearningMapRepository(env.DB),
+    fixedConcepts: CONCEPTS,
+    fixedObjectives: MOCK_LEARNING_OBJECTIVES,
+    newKey: randomKey,
+    nowIso: () => new Date().toISOString(),
+    nowMs: () => Date.now(),
   })),
 );

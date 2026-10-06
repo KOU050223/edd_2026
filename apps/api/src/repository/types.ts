@@ -23,6 +23,11 @@ import type {
 } from "@gakushu-sochi/domain";
 import type { AreaCompletion } from "../contract/area-completions.js";
 import type { ConversationSummary } from "../contract/conversations.js";
+import type {
+  LearningMapSummary,
+  LearningMapVisibility,
+  LearningObjectiveSource,
+} from "../contract/learning-maps.js";
 import type { UserSettings, UserSettingsInput } from "../contract/user-settings.js";
 import type { ImportSessionView } from "../contract/history-import.js";
 
@@ -544,4 +549,120 @@ export interface CheckGenerationConsentRepository {
   put(userId: string, record: ConsentRecord): Promise<void>;
   /** 記録を消す（取り消し）。無くても成功とする。 */
   delete(userId: string): Promise<void>;
+}
+
+/** 保存するマップのノード（migrations/0013_learning_maps.sql）。 */
+export type StoredMapNode =
+  | { kind: "own"; conceptId: string; label: string; summary: string }
+  | { kind: "reference"; conceptId: string };
+
+/** 保存するマップの中身。ノードは学習の順に並ぶ。線の両端は同じマップのノード。 */
+export interface StoredMapContent {
+  title: string;
+  description: string;
+  nodes: StoredMapNode[];
+  edges: { from: string; to: string }[];
+}
+
+/** 保存した「理解すること」の1項目。 */
+export interface StoredLearningObjective {
+  id: string;
+  conceptId: string;
+  label: string;
+  source: LearningObjectiveSource;
+}
+
+/** 保存したマップ1件。`objectives` はこのマップのノード（参照ではないもの）の項目。 */
+export interface StoredLearningMap extends StoredMapContent {
+  id: string;
+  visibility: LearningMapVisibility;
+  createdAt: string;
+  updatedAt: string;
+  /** Concept ID → 項目（保存した順）。項目の無いノードは含まない。 */
+  objectives: Map<string, StoredLearningObjective[]>;
+}
+
+/** 自分のマップのノード（参照ではないもの）1件と、その項目。参照の解決と VS Code 向けの一覧に使う。 */
+export interface StoredOwnMapNode {
+  conceptId: string;
+  label: string;
+  summary: string;
+  mapId: string;
+  mapTitle: string;
+  /** 前提のノードの Concept ID（同じマップの線から引く）。 */
+  prerequisites: string[];
+  objectives: StoredLearningObjective[];
+}
+
+/**
+ * 利用者が手で作る学習マップ（migrations/0013_learning_maps.sql、Issue #242）。
+ *
+ * どの操作も `ownerUserId` で絞る。他人のマップは「無い」として扱い、
+ * ルートは 404 を返す（存在を隠す）。
+ * 呼び出し前に `users` 行が存在している必要がある（外部キー）。
+ */
+export interface LearningMapRepository {
+  /**
+   * マップを作る。1人のマップ数が `maxMaps` に達していれば何も書かず `created: false` を返す。
+   * 数えることと書くことを1つの操作にまとめる（同時に作られても上限を超えない）。
+   */
+  create(
+    ownerUserId: string,
+    params: {
+      id: string;
+      content: StoredMapContent;
+      nowIso: string;
+      nowMs: number;
+      maxMaps: number;
+    },
+  ): Promise<{ created: boolean }>;
+
+  /** 自分のマップの一覧。更新の新しい順（同時刻は ID の昇順）。 */
+  listByOwner(ownerUserId: string): Promise<LearningMapSummary[]>;
+
+  /** マップ1件。自分のものでなければ `null`。 */
+  get(ownerUserId: string, mapId: string): Promise<StoredLearningMap | null>;
+
+  /**
+   * 題名・説明・ノード・線をまとめて置き換える。途中で壊れた状態を残さない（1つの batch）。
+   *
+   * 残したノードの「理解すること」は消さない。送られなかったノードは、その項目と線ごと消える。
+   * @returns 自分のマップが無ければ `false`。
+   */
+  replace(
+    ownerUserId: string,
+    mapId: string,
+    content: StoredMapContent,
+    now: { nowIso: string; nowMs: number },
+  ): Promise<boolean>;
+
+  /** マップを消す。ノード・線・項目も消える。@returns 消したら `true`。 */
+  delete(ownerUserId: string, mapId: string): Promise<boolean>;
+
+  /**
+   * 1つのノードの「理解すること」をまとめて置き換える。並びは渡した順。
+   *
+   * ノードが自分のマップの参照ではないノードであることを、書き込みと同じ操作の中で確かめる。
+   * 呼び出し側が読んでから書くまでの間に、別の端末でマップやノードが消されうるため。
+   * @returns そのノードが無ければ何も書かず `false`。
+   */
+  replaceObjectives(
+    ownerUserId: string,
+    params: {
+      mapId: string;
+      conceptId: string;
+      objectives: readonly { id: string; label: string; source: LearningObjectiveSource }[];
+      nowIso: string;
+      nowMs: number;
+    },
+  ): Promise<boolean>;
+
+  /** 自分のマップのノード（参照ではないもの）のうち、指定した Concept ID のもの。 */
+  findOwnNodes(ownerUserId: string, conceptIds: readonly string[]): Promise<StoredOwnMapNode[]>;
+
+  /**
+   * 自分のマップのノード（参照ではないもの）を、更新の新しいマップから順に `limit` 件まで。
+   * マップの中ではノードの並び（学習の順）に従う。
+   */
+  listOwnNodes(ownerUserId: string, limit: number): Promise<StoredOwnMapNode[]>;
 }
