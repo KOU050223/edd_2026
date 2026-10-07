@@ -1,11 +1,12 @@
 // ポップアップウィンドウの生成と表示、開発時の dev server URL の検証
 // （Issue #279 ステップ 3 で index.ts から分離）。
-import { app, BrowserWindow, shell } from "electron";
+import { app, BrowserWindow, session, shell } from "electron";
 import path from "node:path";
 
 import { appState } from "../app-state.js";
 import { activatePopup } from "../activation.js";
 import { isSafeExternalUrl } from "../external-link.js";
+import { RENDERER_INDEX_URL } from "../renderer-scheme.js";
 import { send } from "../ipc/helpers.js";
 import { EVENT_CHANNELS } from "../../shared/ipc.js";
 
@@ -32,6 +33,24 @@ export function resolveRendererDevServerUrl(): string | undefined {
   return url.toString();
 }
 
+/**
+ * セッション全体の Web 権限を拒否し、webView の取り付けを止める（Issue #279 ステップ 5）。
+ * このアプリはカメラ・マイク・通知・webView を使わないので、要求が来た時点で拒否する。
+ * 新しいウィンドウについては各 window の setWindowOpenHandler と同じ方針
+ * （安全な外部リンクだけ shell で開き、ウィンドウは作らない）に揃える。
+ */
+export function installSessionSecurity(): void {
+  session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => {
+    callback(false);
+  });
+  session.defaultSession.setPermissionCheckHandler(() => false);
+  app.on("web-contents-created", (_event, contents) => {
+    contents.on("will-attach-webview", (attachEvent) => {
+      attachEvent.preventDefault();
+    });
+  });
+}
+
 export function createPopup(): BrowserWindow {
   const window = new BrowserWindow({
     width: 1100,
@@ -50,6 +69,8 @@ export function createPopup(): BrowserWindow {
       preload: path.join(app.getAppPath(), "out/preload/index.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
+      // preload は contextBridge・ipcRenderer だけを使うので sandbox 化できる。
+      sandbox: true,
     },
   });
   window.webContents.setWindowOpenHandler(({ url }) => {
@@ -71,7 +92,10 @@ export function createPopup(): BrowserWindow {
   if (appState.rendererDevServerUrl) {
     void window.loadURL(appState.rendererDevServerUrl);
   } else {
-    void window.loadFile(path.join(app.getAppPath(), "out/renderer/index.html"));
+    // 本番は app://renderer/ から配る（file:// は GrantFileProtocolExtraPrivileges を
+    // 有効にしないと asar 内を読めず、有効にすると file:// ページにローカル
+    // ファイルへの fetch 権まで付いてしまうため）。
+    void window.loadURL(RENDERER_INDEX_URL);
   }
   window.on("closed", () => {
     appState.popup = undefined;

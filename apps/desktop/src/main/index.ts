@@ -2,6 +2,7 @@
 // 処理の本体は各機能モジュールへ置き、ここは単一インスタンスの制御と
 // 起動順序の配線だけにする（Issue #279 ステップ 3）。
 import { app, dialog, globalShortcut } from "electron";
+import path from "node:path";
 
 import { guideAccessibilityPermission } from "./accessibility.js";
 import { appState } from "./app-state.js";
@@ -12,11 +13,15 @@ import { registerConversationsIpc } from "./ipc/conversations.js";
 import { registerHistoryIpc } from "./ipc/history.js";
 import { registerSettingsIpc } from "./ipc/settings.js";
 import { registerWindowIpc } from "./ipc/window.js";
+import { installRendererProtocolHandler, registerRendererScheme } from "./renderer-scheme.js";
 import { loadSettings, updateLoginItem } from "./settings-store.js";
 import { registerShortcut } from "./shortcut.js";
 import { shouldShowStartupWindow } from "./startup.js";
 import { createTray } from "./tray.js";
-import { resolveRendererDevServerUrl, showPopup } from "./windows/popup.js";
+import { installSessionSecurity, resolveRendererDevServerUrl, showPopup } from "./windows/popup.js";
+
+// app:// スキームの特権登録は whenReady より前に行う必要がある（Issue #279 ステップ 5）。
+registerRendererScheme();
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) {
@@ -35,6 +40,8 @@ app
   .then(async () => {
     if (!hasSingleInstanceLock) return;
     appState.rendererDevServerUrl = resolveRendererDevServerUrl();
+    installRendererProtocolHandler(path.join(app.getAppPath(), "out/renderer"));
+    installSessionSecurity();
     await loadSettings();
     updateLoginItem();
     await guideAccessibilityPermission();

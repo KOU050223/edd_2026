@@ -2,8 +2,9 @@
 import { loginWithBrowser, logout } from "../auth/index.js";
 import { INVOKE_CHANNELS } from "../../shared/ipc.js";
 import { handle } from "./helpers.js";
+import { INVOKE_SCHEMAS } from "./schemas.js";
 
 export function registerAuthIpc(): void {
-  handle(INVOKE_CHANNELS.authLogin, loginWithBrowser);
-  handle(INVOKE_CHANNELS.authLogout, logout);
+  handle(INVOKE_CHANNELS.authLogin, INVOKE_SCHEMAS["auth:login"], loginWithBrowser);
+  handle(INVOKE_CHANNELS.authLogout, INVOKE_SCHEMAS["auth:logout"], logout);
 }

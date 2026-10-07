@@ -72,24 +72,6 @@ function migrateTightenedPolicies(value: Record<string, unknown>): Record<string
   return migrated;
 }
 
-/**
- * `settings:save` で受け取った候補を検査し、保存してよい形へ直す。
- *
- * 型違いなど normalizeSettings が丸ごと既定値へ戻すしかない入力をそのまま
- * 保存すると、API URL やショートカットまで消えてしまう。既定値と違う入力が
- * 既定値に正規化されるときだけ「不正な入力」として弾く。
- */
-export function normalizeSettingsForSave(candidate: unknown): DesktopSettings {
-  const valid = normalizeSettings(candidate);
-  if (
-    JSON.stringify(valid) === JSON.stringify(DEFAULT_SETTINGS) &&
-    JSON.stringify(candidate) !== JSON.stringify(DEFAULT_SETTINGS)
-  ) {
-    throw new Error("設定値が不正です。");
-  }
-  return valid;
-}
-
 export function normalizeSettings(value: unknown): DesktopSettings {
   if (typeof value !== "object" || value === null) return { ...DEFAULT_SETTINGS };
   const migrated = migrateTightenedPolicies(value as Record<string, unknown>);
@@ -118,32 +100,14 @@ export function isManagedAiModel(value: string): boolean {
   return (MANAGED_AI_MODELS as readonly string[]).includes(value);
 }
 
-function isSettings(value: unknown): value is DesktopSettings {
-  if (typeof value !== "object" || value === null) return false;
-  const settings = value as Record<string, unknown>;
-  return (
-    typeof settings.apiBaseUrl === "string" &&
-    isSafeApiBaseUrl(settings.apiBaseUrl) &&
-    typeof settings.shortcut === "string" &&
-    settings.shortcut.length > 0 &&
-    typeof settings.model === "string" &&
-    isManagedAiModel(settings.model) &&
-    typeof settings.temperature === "number" &&
-    settings.temperature >= 0 &&
-    settings.temperature <= 2 &&
-    typeof settings.maxTokens === "number" &&
-    Number.isInteger(settings.maxTokens) &&
-    settings.maxTokens > 0 &&
-    settings.maxTokens <= MANAGED_AI_MAX_OUTPUT_TOKENS &&
-    typeof settings.restoreClipboard === "boolean" &&
-    typeof settings.launchAtLogin === "boolean" &&
-    typeof settings.persona === "string" &&
-    settings.persona.length <= PERSONA_MAX_LENGTH &&
-    typeof settings.saveConversationHistory === "boolean"
-  );
-}
-
-function isSafeApiBaseUrl(value: string): boolean {
+/**
+ * 各項目の制約をまとめた述語群。
+ *
+ * `isSettings`（古い settings.json の読み込み用の寛容な検査）と
+ * `settings:save` のスキーマ（src/main/ipc/schemas.ts）の両方がここを正本にして、
+ * モデルの一覧・persona の上限・URL の扱い・数値の範囲が 2 か所でずれないようにする。
+ */
+export function isSafeApiBaseUrl(value: string): boolean {
   try {
     const url = new URL(value);
     if (url.protocol === "https:") return true;
@@ -152,4 +116,42 @@ function isSafeApiBaseUrl(value: string): boolean {
   } catch {
     return false;
   }
+}
+
+export function isValidShortcut(value: string): boolean {
+  return value.length > 0;
+}
+
+export function isValidTemperature(value: number): boolean {
+  return value >= 0 && value <= 2;
+}
+
+export function isValidMaxTokens(value: number): boolean {
+  return Number.isInteger(value) && value > 0 && value <= MANAGED_AI_MAX_OUTPUT_TOKENS;
+}
+
+export function isValidPersona(value: string): boolean {
+  return value.length <= PERSONA_MAX_LENGTH;
+}
+
+function isSettings(value: unknown): value is DesktopSettings {
+  if (typeof value !== "object" || value === null) return false;
+  const settings = value as Record<string, unknown>;
+  return (
+    typeof settings.apiBaseUrl === "string" &&
+    isSafeApiBaseUrl(settings.apiBaseUrl) &&
+    typeof settings.shortcut === "string" &&
+    isValidShortcut(settings.shortcut) &&
+    typeof settings.model === "string" &&
+    isManagedAiModel(settings.model) &&
+    typeof settings.temperature === "number" &&
+    isValidTemperature(settings.temperature) &&
+    typeof settings.maxTokens === "number" &&
+    isValidMaxTokens(settings.maxTokens) &&
+    typeof settings.restoreClipboard === "boolean" &&
+    typeof settings.launchAtLogin === "boolean" &&
+    typeof settings.persona === "string" &&
+    isValidPersona(settings.persona) &&
+    typeof settings.saveConversationHistory === "boolean"
+  );
 }
