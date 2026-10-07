@@ -259,35 +259,57 @@ describe("requestCheckGeneration", () => {
       expect(signals[0]?.aborted).toBe(true);
     });
 
-    it.each([200, 400])(
-      "%i のヘッダーのあと本文が止まれば、期限で本文の読み込みも中断する",
-      async (status) => {
-        // 本文の読み込みも期限の内側（RULE-001）。中断しないと、失敗を返したあとも接続が残る。
-        vi.useFakeTimers();
-        silence("warn");
-        silence("error");
-        const signals: AbortSignal[] = [];
-        const fetchMock = vi.fn<typeof fetch>((_url, init) => {
-          const signal = init!.signal!;
-          signals.push(signal);
-          // 本物の fetch と同じく、signal の中断で本文のストリームを失敗させる。
-          const body = new ReadableStream({
-            start(controller) {
-              signal.addEventListener("abort", () => controller.error(signal.reason));
-            },
-          });
-          return Promise.resolve(new Response(body, { status }));
+    /** ヘッダー（状態コード）は返すが、本文が終わらない応答を返す `fetch`。 */
+    function stallingBody(status: number) {
+      const signals: AbortSignal[] = [];
+      const fetchMock = vi.fn<typeof fetch>((_url, init) => {
+        const signal = init!.signal!;
+        signals.push(signal);
+        // 本物の fetch と同じく、signal の中断で本文のストリームを失敗させる。
+        const body = new ReadableStream({
+          start(controller) {
+            signal.addEventListener("abort", () => controller.error(signal.reason));
+          },
         });
+        return Promise.resolve(new Response(body, { status }));
+      });
+      return { fetchMock, signals };
+    }
 
-        const pending = request(fetchMock);
-        await vi.advanceTimersByTimeAsync(150_000);
-        const result = await pending;
-        vi.useRealTimers();
+    it("2xx のヘッダーのあと本文が止まれば、期限で本文の読み込みも中断して upstream-timeout にする", async () => {
+      // 本文の読み込みも期限の内側（RULE-001）。中断しないと、失敗を返したあとも接続が残る。
+      vi.useFakeTimers();
+      silence("error");
+      const { fetchMock, signals } = stallingBody(200);
 
-        expect(result).toMatchObject({ ok: false, reason: "upstream-timeout" });
-        expect(signals[0]?.aborted).toBe(true);
-      },
-    );
+      const pending = request(fetchMock);
+      await vi.advanceTimersByTimeAsync(150_000);
+      const result = await pending;
+      vi.useRealTimers();
+
+      expect(result).toMatchObject({ ok: false, reason: "upstream-timeout" });
+      expect(signals[0]?.aborted).toBe(true);
+    });
+
+    it("エラーのヘッダーのあと本文が止まっても、期限で中断して状態コードで失敗を返す", async () => {
+      // 状態コードはもう分かっている。時間切れで上書きすると、原因を切り分ける手がかりが消える（#253）。
+      vi.useFakeTimers();
+      const warn = silence("warn");
+      silence("error");
+      const { fetchMock, signals } = stallingBody(400);
+
+      const pending = request(fetchMock);
+      await vi.advanceTimersByTimeAsync(150_000);
+      const result = await pending;
+      vi.useRealTimers();
+
+      expect(result).toMatchObject({ ok: false, reason: "upstream-status", status: 400 });
+      expect(signals[0]?.aborted).toBe(true);
+      expect(warn).toHaveBeenCalledWith(
+        "check generation could not read an upstream error body",
+        expect.anything(),
+      );
+    });
 
     it("送り直しの待ちも期限に含める", async () => {
       vi.useFakeTimers();

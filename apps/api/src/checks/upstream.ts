@@ -275,6 +275,36 @@ export function requestCheckGeneration(request: UpstreamRequest): Promise<Upstre
   // fetch が応答を返した時点で役目を終えるので、そのあとの本文の読み込みを止められない。
   // 本物の fetch は、この signal の中断で本文のストリームも失敗させる。
   const deadline = new AbortController();
+  // 再送の待ちと本文の読み込みまで含めて1つの期限にする。再送のたびに延ばすと、
+  // 利用者を待たせる上限が決まらない（RULE-001）。
+  const deadlineAt = startedAt + UPSTREAM_TIMEOUT_MS;
+
+  /**
+   * 期限の残りで切る。切れたら送信中の fetch も読み込み中の本文も abort し、`onTimeout` で失敗にする。
+   * 期限が来たときの扱いは段ごとに違うので、呼ぶ側が決める。
+   */
+  const withinDeadline = <A, E, E2>(
+    effect: Effect.Effect<A, E>,
+    onTimeout: (cause: DOMException) => E2,
+  ): Effect.Effect<A, E | E2> =>
+    Effect.suspend(() =>
+      effect.pipe(
+        Effect.onInterrupt(() => Effect.sync(() => deadline.abort())),
+        Effect.timeoutOrElse({
+          duration: Duration.millis(Math.max(0, deadlineAt - Date.now())),
+          orElse: () =>
+            Effect.fail(
+              onTimeout(
+                // fetch の `AbortSignal.timeout` と同じ名前にし、経過（`trace.cause`）の書式を揃える。
+                new DOMException(
+                  `no response within ${String(UPSTREAM_TIMEOUT_MS)} ms`,
+                  "TimeoutError",
+                ),
+              ),
+            ),
+        }),
+      ),
+    );
 
   /** 1回送る。状態コードを受け取れたら、それが何であっても成功とする。 */
   const send = Effect.fnUntraced(function* (
@@ -294,7 +324,7 @@ export function requestCheckGeneration(request: UpstreamRequest): Promise<Upstre
             // `UpstreamRejected` として扱う（#253）。
             redirect: "manual",
             // 応答を一括で受け取る単発のリクエストなので、壁時計で必ず切る（RULE-001）。
-            // 期限は再送をまたいで1つで、`timeoutOrElse` で中断されたら `deadline` を abort する。
+            // 期限は再送をまたいで1つで、`withinDeadline` で切れたら `deadline` を abort する。
             signal: deadline.signal,
             body: JSON.stringify({
               contents: [{ parts: [{ text: request.prompt }] }],
@@ -364,10 +394,15 @@ export function requestCheckGeneration(request: UpstreamRequest): Promise<Upstre
 
   /** 2xx 以外の応答を、エラー本文の要点つきの失敗にする（#253）。 */
   const reject = ({ response, model }: Sent): Effect.Effect<never, UpstreamRejected> =>
-    Effect.tryPromise({
-      try: () => response.text(),
-      catch: (cause) => new UpstreamBodyFailed({ cause }),
-    }).pipe(
+    withinDeadline(
+      Effect.tryPromise({
+        try: () => response.text(),
+        catch: (cause) => new UpstreamBodyFailed({ cause }),
+      }),
+      // 期限が来ても状態コードはもう分かっている。時間切れで上書きすると、原因を切り分ける
+      // 手がかり（400 か 403 か、など）が消える（#253）。本文が読めなかったとして扱う。
+      (cause) => new UpstreamBodyFailed({ cause }),
+    ).pipe(
       // 本文が読めなくても、状態コードで失敗は伝えられるので続ける。
       Effect.catchTag("UpstreamBodyFailed", ({ cause }) =>
         Effect.sync(() => {
@@ -387,10 +422,13 @@ export function requestCheckGeneration(request: UpstreamRequest): Promise<Upstre
     );
 
   const read = ({ response, model }: Sent) =>
-    Effect.tryPromise({
-      try: () => response.text(),
-      catch: (cause) => new UpstreamUnreadable({ model, cause }),
-    }).pipe(Effect.map((raw): UpstreamResult => ({ ok: true, raw, model })));
+    withinDeadline(
+      Effect.tryPromise({
+        try: () => response.text(),
+        catch: (cause) => new UpstreamUnreadable({ model, cause }),
+      }),
+      (cause) => new UpstreamTimedOut({ cause }),
+    ).pipe(Effect.map((raw): UpstreamResult => ({ ok: true, raw, model })));
 
   /** 届かなかった・時間切れを、例外の名前と文つきの失敗にする。 */
   const unsent = (reason: UpstreamFailure, cause: unknown): UpstreamResult => {
@@ -404,27 +442,13 @@ export function requestCheckGeneration(request: UpstreamRequest): Promise<Upstre
     return { ok: false, reason, trace: failed };
   };
 
-  const program = round(0).pipe(
-    Effect.flatMap((sent): Effect.Effect<UpstreamResult, UpstreamRejected | UpstreamUnreadable> =>
-      sent.response.ok ? read(sent) : reject(sent),
+  const program = withinDeadline(round(0), (cause) => new UpstreamTimedOut({ cause })).pipe(
+    Effect.flatMap(
+      (
+        sent,
+      ): Effect.Effect<UpstreamResult, UpstreamRejected | UpstreamUnreadable | UpstreamTimedOut> =>
+        sent.response.ok ? read(sent) : reject(sent),
     ),
-    // 期限で中断されたら、送信中の fetch も読み込み中の本文も止める。
-    Effect.onInterrupt(() => Effect.sync(() => deadline.abort())),
-    // 再送の待ちと本文の読み込みまで含めて1つの期限にする。再送のたびに延ばすと、
-    // 利用者を待たせる上限が決まらない（RULE-001）。
-    Effect.timeoutOrElse({
-      duration: Duration.millis(UPSTREAM_TIMEOUT_MS),
-      orElse: () =>
-        Effect.fail(
-          new UpstreamTimedOut({
-            // fetch の `AbortSignal.timeout` と同じ名前にし、経過（`trace.cause`）の書式を揃える。
-            cause: new DOMException(
-              `no response within ${String(UPSTREAM_TIMEOUT_MS)} ms`,
-              "TimeoutError",
-            ),
-          }),
-        ),
-    }),
     // 失敗の種類ごとに応答を作る。種類を足して扱い忘れると、ここで型が合わなくなる。
     Effect.catchTags({
       UpstreamUnreachable: ({ cause }) => Effect.succeed(unsent("upstream-unreachable", cause)),
