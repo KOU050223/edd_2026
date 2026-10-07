@@ -1,5 +1,10 @@
 import { PERSONA_MAX_LENGTH } from "@gakushu-sochi/domain";
 
+import type { DesktopSettings } from "../shared/types.js";
+
+// DTO の正本は src/shared/types.ts（IPC の契約側）。ここからも使えるように再 export する。
+export type { DesktopSettings } from "../shared/types.js";
+
 /**
  * Managed AI の1回あたりの出力上限（tokens）。
  *
@@ -18,30 +23,6 @@ export const MANAGED_AI_MAX_OUTPUT_TOKENS = 2_048;
  * 設定を利用者に作らせることになる。**サーバー側を直すときは、この値も一緒に動かす。**
  */
 export const MANAGED_AI_MODELS = ["gemini-3.6-flash", "gemini-3.8-flash"] as const;
-
-// persona の上限は domain が正本（PERSONA_MAX_LENGTH）。ここを緩めると、
-// 保存できるのに送信すると必ず 400 で弾かれる設定を利用者に作らせることになる。
-export interface DesktopSettings {
-  apiBaseUrl: string;
-  shortcut: string;
-  model: string;
-  temperature: number;
-  maxTokens: number;
-  restoreClipboard: boolean;
-  launchAtLogin: boolean;
-  /** 応答の人物像・口調（自由記述）。空文字は未設定。 */
-  persona: string;
-  /**
-   * 「質問履歴の保存」オプトインのローカルキャッシュ（Issue #204）。
-   *
-   * 正はサーバーの `user_settings.saveConversationHistory`。本文を送る前の
-   * プリチェックに使うだけで、キャッシュが true でもサーバー側が無効なら
-   * `PUT /v1/conversations` は 403 で拒否される（docs/conversation-history.md）。
-   * ここが true に偽装されても本文の保存は増えず、古い true のまま残ると
-   * 無意味な送信が毎回失敗するため、403 が返ったら false へ戻す。
-   */
-  saveConversationHistory: boolean;
-}
 
 export const DEFAULT_SETTINGS: DesktopSettings = {
   apiBaseUrl: "http://localhost:8787",
@@ -89,6 +70,24 @@ function migrateTightenedPolicies(value: Record<string, unknown>): Record<string
   }
 
   return migrated;
+}
+
+/**
+ * `settings:save` で受け取った候補を検査し、保存してよい形へ直す。
+ *
+ * 型違いなど normalizeSettings が丸ごと既定値へ戻すしかない入力をそのまま
+ * 保存すると、API URL やショートカットまで消えてしまう。既定値と違う入力が
+ * 既定値に正規化されるときだけ「不正な入力」として弾く。
+ */
+export function normalizeSettingsForSave(candidate: unknown): DesktopSettings {
+  const valid = normalizeSettings(candidate);
+  if (
+    JSON.stringify(valid) === JSON.stringify(DEFAULT_SETTINGS) &&
+    JSON.stringify(candidate) !== JSON.stringify(DEFAULT_SETTINGS)
+  ) {
+    throw new Error("設定値が不正です。");
+  }
+  return valid;
 }
 
 export function normalizeSettings(value: unknown): DesktopSettings {

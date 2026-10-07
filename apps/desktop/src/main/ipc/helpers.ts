@@ -3,7 +3,12 @@
 // renderer から来る値そのものの実行時検査は各ハンドラが従来どおり担う。
 import { ipcMain, type IpcMainInvokeEvent, type WebContents } from "electron";
 
-import type { EventChannel, EventContract, InvokeChannel, InvokeContract } from "../shared/ipc.js";
+import type {
+  EventChannel,
+  EventContract,
+  InvokeChannel,
+  InvokeContract,
+} from "../../shared/ipc.js";
 
 type InvokeHandler<C extends InvokeChannel> = (
   event: IpcMainInvokeEvent,

@@ -8,7 +8,6 @@ import {
   type AnalysisProviderEntry,
   type Concept,
   type ConceptFamiliarity,
-  type ConceptId,
   type EvidenceImportedBy,
   type HistoryAnalysisResult,
   type HistoryObservation,
@@ -21,7 +20,11 @@ import {
 } from "@gakushu-sochi/domain";
 
 import { AnalysisProviderError } from "./providers.js";
-import { conversationDigest, sanitizeConversation, type SanitizedKind } from "./preprocess.js";
+import { conversationDigest, sanitizeConversation } from "./preprocess.js";
+import type { ImportPreview, ImportProgress, SanitizedKind } from "../../shared/types.js";
+
+// DTO の正本は src/shared/types.ts（IPC の契約側）。ここからも使えるように再 export する。
+export type { ConceptSummary, ImportPreview, ImportProgress } from "../../shared/types.js";
 
 /**
  * 履歴インポートの実行パイプライン（Issue #157）。
@@ -38,52 +41,6 @@ import { conversationDigest, sanitizeConversation, type SanitizedKind } from "./
 const CONVERSATIONS_PER_ANALYSIS = 50;
 /** 1回のインポートで読む会話の上限。メモリと予算の両方を守る上限。 */
 const MAX_CONVERSATIONS_PER_IMPORT = 10_000;
-
-export interface ImportProgress {
-  phase: "scanning" | "analyzing" | "normalizing";
-  /** 現在スキャン/分析しているソース。 */
-  provider?: HistoryProviderId;
-  /** AI 分析に使っている Provider の ID（aiProviders 段階のみ）。 */
-  analyzerId?: string;
-  scannedCount: number;
-  /** AI 分析が終わった会話数。 */
-  analyzedCount: number;
-  totalCount: number;
-}
-
-export interface ConceptSummary {
-  conceptId: ConceptId;
-  label: string;
-  count: number;
-}
-
-export interface ImportPreview {
-  sessionId: string;
-  importedBy: EvidenceImportedBy;
-  providers: HistoryProviderId[];
-  /** 前処理を通過した会話数。 */
-  conversationCount: number;
-  /** 重複として除いた会話数。 */
-  duplicateCount: number;
-  /** プログラミング関連と判断されず落とした会話数。 */
-  ignoredCount: number;
-  /** 前処理で除去したものの種類ごとの件数（email/token/local-path/truncated）。 */
-  sanitized: Partial<Record<SanitizedKind, number>>;
-  /** ローカルルールで分類できた会話数。 */
-  localCoveredCount: number;
-  /** AI 分析までたどり着けなかった会話数。 */
-  unanalyzedCount: number;
-  evidence: LearningEvidence[];
-  familiarity: Record<ConceptId, ConceptFamiliarity | undefined>;
-  /** 観測数の多い順の Concept 要約（プレビュー用）。 */
-  conceptSummaries: ConceptSummary[];
-  unmapped: UnmappedCandidate[];
-  rejected: RejectedObservation[];
-  warnings: string[];
-  /** 実際に分析した Provider の ID（出現順）。 */
-  analyzersUsed: string[];
-  managedCallsUsed: number;
-}
 
 export interface ImportRun {
   preview: ImportPreview;

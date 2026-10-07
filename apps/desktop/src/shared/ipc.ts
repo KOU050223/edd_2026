@@ -2,18 +2,44 @@
 // 共有する唯一の正本。チャネル名・引数・戻り値・イベント payload をここだけで定義する。
 //
 // **このファイルは electron も Node も import しない**（renderer のバンドルからも
-// 読むため）。型とチャネル名の定数だけを置く。
-import type {
-  AnalysisMode,
-  Conversation,
-  HistoryProviderId,
-  HistorySourceDetection,
-} from "@gakushu-sochi/domain";
+// 読むため）。型とチャネル名の定数だけを置く。DTO の型は `types.ts` が正本。
+import type { Conversation, HistoryProviderId } from "@gakushu-sochi/domain";
 
-import type { DesktopSettings } from "../main/settings.js";
-import type { ListConversationsResult } from "../main/conversations-api.js";
-import type { CreateImportSessionResult, ImportSessionView } from "../main/history/api.js";
-import type { ImportPreview, ImportProgress } from "../main/history/pipeline.js";
+import type {
+  AuthState,
+  ConsentStatus,
+  ConversationHistoryOptIn,
+  CreateImportSessionResult,
+  DesktopSettings,
+  HistoryAnalyzeRequest,
+  HistoryApplyRequest,
+  HistoryDetectResult,
+  ImportAnalyzeView,
+  ImportProgress,
+  ImportSessionView,
+  ListConversationsResult,
+  SelectionEvent,
+  SettingsState,
+} from "./types.js";
+
+export type {
+  AuthState,
+  ConsentStatus,
+  ConversationHistoryOptIn,
+  CreateImportSessionResult,
+  DesktopSettings,
+  HistoryAnalyzeRequest,
+  HistoryApplyRequest,
+  HistoryDetectResult,
+  ImportAnalyzeView,
+  ImportPreview,
+  ImportPreviewView,
+  ImportProgress,
+  ImportSessionView,
+  ListConversationsResult,
+  SelectionEvent,
+  SettingsState,
+} from "./types.js";
 
 // ---------------------------------------------------------------------------
 // チャネル名（呼び出し側・受け側はリテラルを書かずこの定数を使う）
@@ -59,53 +85,6 @@ export const EVENT_CHANNELS = {
 // ---------------------------------------------------------------------------
 // invoke 系（renderer → main）の引数・戻り値
 // ---------------------------------------------------------------------------
-
-/** `settings:get` が返す形。ローカル設定＋トークン保持の有無。 */
-export interface SettingsState extends DesktopSettings {
-  hasRefreshToken: boolean;
-}
-
-/** `consent:*` が返す形。`grantedAt` は未同意なら undefined。 */
-export interface ConsentStatus {
-  granted: boolean;
-  grantedAt: string | undefined;
-}
-
-/** 「質問履歴の保存」オプトインの形（Issue #204）。サーバーの値が正。 */
-export interface ConversationHistoryOptIn {
-  saveConversationHistory: boolean;
-}
-
-/** `history:analyze` の引数（Issue #157）。 */
-export interface HistoryAnalyzeRequest {
-  providers?: HistoryProviderId[];
-  filePath?: string;
-  fileProvider?: HistoryProviderId;
-  mode?: AnalysisMode;
-  sinceMs?: number;
-}
-
-/** `history:apply` の引数。 */
-export interface HistoryApplyRequest {
-  excludeConceptIds?: unknown;
-}
-
-/** renderer へ返す分析プレビュー。evidence（概念IDのみ）と pending（本文）は渡さない。 */
-export type ImportPreviewView = Omit<ImportPreview, "evidence"> & { evidenceCount: number };
-
-/** `history:analyze` / `history:paste-analysis` が返す形。 */
-export interface ImportAnalyzeView extends ImportPreviewView {
-  /** AI 分析へ回す素材が残っている会話数。 */
-  pendingCount: number;
-  /** プロンプトをコピーする導線を出せるか。 */
-  canCopyPrompt: boolean;
-}
-
-/** `history:detect` が返す形。 */
-export interface HistoryDetectResult {
-  sources: ({ provider: HistoryProviderId } & HistorySourceDetection)[];
-  analyzers: { id: string; available: boolean }[];
-}
 
 export interface InvokeContract {
   "settings:get": { args: []; result: SettingsState };
@@ -153,15 +132,6 @@ export type InvokeChannel = keyof InvokeContract;
 // ---------------------------------------------------------------------------
 // イベント系（main → renderer）の payload
 // ---------------------------------------------------------------------------
-
-export interface SelectionEvent {
-  selection: string;
-  error?: string;
-}
-
-export interface AuthState {
-  hasRefreshToken: boolean;
-}
 
 export interface EventContract {
   selection: SelectionEvent;

@@ -2,6 +2,11 @@ import { createHash } from "node:crypto";
 
 import type { RawConversation } from "@gakushu-sochi/domain";
 
+import type { SanitizedKind } from "../../shared/types.js";
+
+// DTO の正本は src/shared/types.ts（IPC の契約側）。ここからも使えるように再 export する。
+export type { SanitizedKind } from "../../shared/types.js";
+
 /**
  * 外部履歴の前処理。
  *
@@ -13,9 +18,6 @@ import type { RawConversation } from "@gakushu-sochi/domain";
 
 /** 1会話あたりの本文上限。API 側の excerpt と揃え、超過分は先頭を残す。 */
 export const MAX_BODY_CHARS = 4_000;
-
-/** 除去したものの種類。UI 上の「除去: N件」表示や監査のために種類名だけを数える。 */
-export type SanitizedKind = "email" | "token" | "local-path" | "truncated";
 
 export interface SanitizedConversation {
   conversation: RawConversation;

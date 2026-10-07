@@ -6,6 +6,7 @@ import {
   DEFAULT_SETTINGS,
   MANAGED_AI_MAX_OUTPUT_TOKENS,
   normalizeSettings,
+  normalizeSettingsForSave,
   type DesktopSettings,
 } from "./settings.js";
 
@@ -148,5 +149,25 @@ describe("normalizeSettings", () => {
     expect(normalizeSettings({ ...DEFAULT_SETTINGS, apiBaseUrl: "not a URL" })).toEqual(
       DEFAULT_SETTINGS,
     );
+  });
+});
+
+describe("normalizeSettingsForSave", () => {
+  it("returns normalized settings when the input is a valid update", () => {
+    const input = { ...DEFAULT_SETTINGS, temperature: 0.9 };
+    expect(normalizeSettingsForSave(input)).toEqual(input);
+  });
+
+  it("accepts settings identical to the defaults", () => {
+    expect(normalizeSettingsForSave(DEFAULT_SETTINGS)).toEqual(DEFAULT_SETTINGS);
+  });
+
+  it("rejects input that normalizes away to the defaults", () => {
+    // 型違いの項目を含む入力をそのまま保存すると、API URL やショートカットまで
+    // 既定値へ消えてしまうので「不正な入力」として弾く。
+    expect(() => normalizeSettingsForSave({ ...DEFAULT_SETTINGS, maxTokens: "4096" })).toThrow(
+      "設定値が不正です。",
+    );
+    expect(() => normalizeSettingsForSave({ apiBaseUrl: 42 })).toThrow("設定値が不正です。");
   });
 });

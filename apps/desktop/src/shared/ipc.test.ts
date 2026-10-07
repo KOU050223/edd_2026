@@ -2,7 +2,7 @@
 // Electron は起動せず、contextBridge / ipcRenderer / ipcMain をモックして、
 // preload が公開する API・main が handle/send するチャネルが契約（ipc.ts）と
 // 一致することを確かめる。
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 
 import { EVENT_CHANNELS, INVOKE_CHANNELS, type DesktopApi } from "./ipc.js";
@@ -54,7 +54,10 @@ const expectedApi: Record<string, { channel: string; args: unknown[] } | { onCha
   onHistorySaveFailed: { onChannel: EVENT_CHANNELS.historySaveFailed },
   close: { channel: INVOKE_CHANNELS.windowClose, args: [] },
   minimize: { channel: INVOKE_CHANNELS.windowMinimize, args: [] },
-  openExternalLink: { channel: INVOKE_CHANNELS.externalLinkOpen, args: ["https://example.com"] },
+  openExternalLink: {
+    channel: INVOKE_CHANNELS.externalLinkOpen,
+    args: ["https://example.com"],
+  },
   listConversations: { channel: INVOKE_CHANNELS.conversationsList, args: ["cursor"] },
   getConversation: { channel: INVOKE_CHANNELS.conversationsGet, args: ["id"] },
   deleteConversation: { channel: INVOKE_CHANNELS.conversationsDelete, args: ["id"] },
@@ -74,13 +77,13 @@ const expectedApi: Record<string, { channel: string; args: unknown[] } | { onCha
   onAuthState: { onChannel: EVENT_CHANNELS.authState },
 };
 
-describe("preload の window.desktop", () => {
-  it('"desktop" という名前で公開し、キーの集合が契約と一致する', () => {
+describe("preload window.desktop", () => {
+  it('exposes the api as "desktop" with exactly the contract keys', () => {
     expect(mocks.exposed.name).toBe("desktop");
     expect(Object.keys(apiRecord).sort()).toEqual(Object.keys(expectedApi).sort());
   });
 
-  it("invoke 系メソッドが契約のチャネルを呼ぶ", () => {
+  it("invokes the contract channel for each invoke-style method", () => {
     const usedChannels = new Set<string>();
     for (const [name, spec] of Object.entries(expectedApi)) {
       if (!("channel" in spec)) continue;
@@ -93,7 +96,7 @@ describe("preload の window.desktop", () => {
     expect(usedChannels).toEqual(new Set(Object.values(INVOKE_CHANNELS)));
   });
 
-  it("on* メソッドが契約のチャネルを購読し、登録解除の関数を返す", () => {
+  it("subscribes the contract channel for each on* method and returns an unsubscribe", () => {
     const usedChannels = new Set<string>();
     for (const [name, spec] of Object.entries(expectedApi)) {
       if (!("onChannel" in spec)) continue;
@@ -117,10 +120,26 @@ describe("preload の window.desktop", () => {
   });
 });
 
-describe("main のハンドラ登録", () => {
-  const mainSource = readFileSync(new URL("../main/index.ts", import.meta.url), "utf8");
+describe("main handler registration", () => {
+  // ハンドラ登録は src/main/ipc/*.ts と index.ts に分かれている。
+  // src/main 全体を読んで handle/send の呼び出しを拾う。
+  function readSources(dir: URL): { path: string; source: string }[] {
+    const base = dir.href.endsWith("/") ? dir.href : `${dir.href}/`;
+    const out: { path: string; source: string }[] = [];
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const child = new URL(`${base}${entry.name}`);
+      if (entry.isDirectory()) out.push(...readSources(child));
+      else if (entry.name.endsWith(".ts") && !entry.name.endsWith(".test.ts")) {
+        out.push({ path: child.pathname, source: readFileSync(child, "utf8") });
+      }
+    }
+    return out;
+  }
 
-  it("handle() で契約の全 invoke チャネルを登録している", () => {
+  const mainSources = readSources(new URL("../main/", import.meta.url));
+  const mainSource = mainSources.map(({ source }) => source).join("\n");
+
+  it("registers every invoke channel of the contract via handle()", () => {
     const handled = new Set(
       [...mainSource.matchAll(/\bhandle\(\s*INVOKE_CHANNELS\.(\w+)/g)].map(
         (m) => INVOKE_CHANNELS[m[1] as keyof typeof INVOKE_CHANNELS],
@@ -129,7 +148,7 @@ describe("main のハンドラ登録", () => {
     expect(handled).toEqual(new Set(Object.values(INVOKE_CHANNELS)));
   });
 
-  it("send() で契約の全イベントチャネルを送っている", () => {
+  it("sends every event channel of the contract via send()", () => {
     const sent = new Set(
       [...mainSource.matchAll(/\bsend\([^,]+,\s*EVENT_CHANNELS\.(\w+)/g)].map(
         (m) => EVENT_CHANNELS[m[1] as keyof typeof EVENT_CHANNELS],
@@ -138,12 +157,17 @@ describe("main のハンドラ登録", () => {
     expect(sent).toEqual(new Set(Object.values(EVENT_CHANNELS)));
   });
 
-  it("チャネル名を main / preload のコードへ直書きしていない", () => {
+  it("does not write channel name literals in main / preload code", () => {
     const preloadSource = readFileSync(new URL("../preload/index.ts", import.meta.url), "utf8");
-    expect(mainSource).not.toContain("ipcMain.handle(");
+    // ipcMain.handle は helpers.ts だけで包む。各ハンドラは handle() を使う。
+    for (const { path, source } of mainSources) {
+      if (!path.endsWith("ipc/helpers.ts")) {
+        expect(source, path).not.toContain("ipcMain.handle(");
+      }
+    }
     // handle/send/invoke/on の第一引数にチャネル名のリテラルが残っていないこと。
     // 正規表現は `"xxx:yyy"` 形のリテラルだけを対象にし、イベント名（"closed" 等）は許容する。
-    for (const source of [mainSource, preloadSource]) {
+    for (const source of [...mainSources.map((s) => s.source), preloadSource]) {
       expect(source).not.toMatch(
         /\b(?:handle|invoke)\(\s*"[a-z-]+:[a-z-]+"|\bsend\(\s*"[^"]+:[^"]+"/,
       );
