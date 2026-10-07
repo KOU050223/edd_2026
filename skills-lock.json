@@ -7,6 +7,12 @@
       "skillPath": "plugins/auth0/skills/auth0/SKILL.md",
       "computedHash": "7b880feacff86c4a64a4291dcfdb361a9fe43fd05f4fab1bca36cd7d481adefa"
     },
+    "effect-ts": {
+      "source": "Effect-TS/skills",
+      "sourceType": "github",
+      "skillPath": "skills/effect-ts/SKILL.md",
+      "computedHash": "6bdb9b95aa83071eca2f67ae947b7d398a22e9e6e08f6cfa35de9516b03efa6e"
+    },
     "rule-harvest": {
       "source": "./.agents/skills/rule-harvest",
       "sourceType": "local",

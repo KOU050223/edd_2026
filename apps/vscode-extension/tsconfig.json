@@ -1,6 +1,8 @@
 {
   "compilerOptions": {
-    "module": "Node16",
+    // 出力は esbuild がバンドルするので、解決もバンドラーに合わせる。Node16 の CommonJS 扱いだと
+    // ESM 専用の依存（effect v4）を型検査で import できない。
+    "module": "Preserve",
     "target": "ES2022",
     "lib": ["ES2022"],
     // 拡張は Node.js 上で動く。console / setTimeout はここから来る。
@@ -14,7 +16,10 @@
     "noUnusedParameters": true,
     "noImplicitReturns": true,
     "noFallthroughCasesInSwitch": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    // Effect 固有の診断（yield* の付け忘れ、捨てられた Effect など）をエディタに出す。
+    // tsc はプラグインを読まないので、CI では `effect-language-service diagnostics` で回す。
+    "plugins": [{ "name": "@effect/language-service" }]
   },
   "include": ["src"],
   "exclude": ["node_modules", "dist"]

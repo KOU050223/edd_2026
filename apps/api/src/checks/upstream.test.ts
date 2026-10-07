@@ -227,6 +227,49 @@ describe("requestCheckGeneration", () => {
       expect(result).toMatchObject({ ok: false, reason: "upstream-timeout" });
     });
 
+    it("応答が返らなければ、期限で送信を中断して upstream-timeout にする", async () => {
+      // 期限は再送をまたいで1つ（RULE-001）。送信の signal まで中断が届くこと。
+      vi.useFakeTimers();
+      silence("error");
+      const signals: AbortSignal[] = [];
+      const fetchMock = vi.fn<typeof fetch>(
+        (_url, init) =>
+          new Promise<Response>((_resolve, reject) => {
+            const signal = init!.signal!;
+            signals.push(signal);
+            signal.addEventListener("abort", () => reject(signal.reason as Error));
+          }),
+      );
+
+      const pending = request(fetchMock);
+      await vi.advanceTimersByTimeAsync(150_000);
+      const result = await pending;
+      vi.useRealTimers();
+
+      expect(result).toMatchObject({
+        ok: false,
+        reason: "upstream-timeout",
+        trace: { attempts: 1, statuses: [] },
+      });
+      expect(signals[0]?.aborted).toBe(true);
+    });
+
+    it("送り直しの待ちも期限に含める", async () => {
+      vi.useFakeTimers();
+      silence("warn");
+      silence("error");
+      const fetchMock = fetchReturning(busy);
+
+      const pending = request(fetchMock, { retryDelaysMs: [200_000] });
+      await vi.advanceTimersByTimeAsync(150_000);
+      const result = await pending;
+      vi.useRealTimers();
+
+      // 待ちの途中で期限が来るので、2回目は送らない。
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(result).toMatchObject({ ok: false, reason: "upstream-timeout" });
+    });
+
     it("2xx でも本文が読めなければ失敗とする", async () => {
       // 成功の状態コードで失敗を隠さない（RULE-004）。
       const error = silence("error");

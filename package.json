@@ -24,6 +24,7 @@
     "harvest:rules": "node scripts/harvest-review-rules.mjs"
   },
   "devDependencies": {
+    "@effect/language-service": "^0.87.4",
     "concurrently": "^10.0.5",
     "prettier": "^3.9.6"
   }
