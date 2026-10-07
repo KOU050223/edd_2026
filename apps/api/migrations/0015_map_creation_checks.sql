@@ -14,7 +14,11 @@ ALTER TABLE user_concept_checks
 --   NULL なら作成時の問題を作らない（手で作ったマップ・断ったマップ）。
 -- creation_checks_attempts: 作成時の問題を頼んだ回数。全部失敗したときにもう一度だけ頼めるよう数える。
 -- creation_checks_done_at: 1組でも保存できた時刻。以後は作成時の問題を頼めない。
+-- creation_checks_started_at_ms: 作っている最中の印（頼んだ時刻）。印がある間は次の要求を通さない
+--   （同時に2回頼まれて二重に作らないため）。終われば消す。Worker が途中で止まって印が残っても
+--   固まらないよう、一定時間（maps/creation-checks.ts の CREATION_CHECKS_LEASE_MS）を過ぎた印は無いものとして扱う。
 ALTER TABLE learning_maps
   ADD COLUMN creation_checks_level TEXT CHECK (creation_checks_level IN ('intro', 'basic', 'advanced'));
 ALTER TABLE learning_maps ADD COLUMN creation_checks_attempts INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE learning_maps ADD COLUMN creation_checks_done_at TEXT;
+ALTER TABLE learning_maps ADD COLUMN creation_checks_started_at_ms INTEGER;

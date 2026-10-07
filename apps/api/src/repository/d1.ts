@@ -1715,6 +1715,7 @@ function toCreationChecks(row: LearningMapRow): StoredCreationChecks | null {
     level: toCheckLevel(row.creation_checks_level),
     attempts: row.creation_checks_attempts,
     doneAt: row.creation_checks_done_at ?? null,
+    startedAtMs: row.creation_checks_started_at_ms ?? null,
   };
 }
 
@@ -1731,6 +1732,7 @@ interface LearningMapRow {
   creation_checks_level?: string | null;
   creation_checks_attempts?: number;
   creation_checks_done_at?: string | null;
+  creation_checks_started_at_ms?: number | null;
 }
 
 interface LearningMapNodeRow {
@@ -1942,7 +1944,8 @@ export class D1LearningMapRepository implements LearningMapRepository {
       this.db
         .prepare(
           `SELECT id, title, description, visibility, created_at, updated_at, 0 AS node_count,
-                  creation_checks_level, creation_checks_attempts, creation_checks_done_at
+                  creation_checks_level, creation_checks_attempts, creation_checks_done_at,
+                  creation_checks_started_at_ms
            FROM learning_maps WHERE id = ? AND owner_user_id = ?`,
         )
         .bind(mapId, ownerUserId),
@@ -1988,22 +1991,41 @@ export class D1LearningMapRepository implements LearningMapRepository {
   async claimCreationChecks(
     ownerUserId: string,
     mapId: string,
-    maxAttempts: number,
+    params: { maxAttempts: number; nowMs: number; leaseMs: number },
   ): Promise<CheckLevel | null> {
-    // 判定と加算を1文で行う。読んでから足すと、同時に2回頼まれたときに両方が通る。
+    // 判定と書き込みを1文で行う。読んでから書くと、同時に2回頼まれたときに両方が通る。
     const row = await this.db
       .prepare(
-        `UPDATE learning_maps SET creation_checks_attempts = creation_checks_attempts + 1
+        `UPDATE learning_maps
+         SET creation_checks_attempts = creation_checks_attempts + 1,
+             creation_checks_started_at_ms = ?
          WHERE id = ? AND owner_user_id = ?
            AND creation_checks_level IS NOT NULL
            AND creation_checks_done_at IS NULL
            AND creation_checks_attempts < ?
+           AND (creation_checks_started_at_ms IS NULL OR creation_checks_started_at_ms <= ?)
          RETURNING creation_checks_level`,
       )
-      .bind(mapId, ownerUserId, maxAttempts)
+      .bind(params.nowMs, mapId, ownerUserId, params.maxAttempts, params.nowMs - params.leaseMs)
       .first<{ creation_checks_level: string }>();
     if (row === null) return null;
     return toCheckLevel(row.creation_checks_level);
+  }
+
+  async releaseCreationChecks(
+    ownerUserId: string,
+    mapId: string,
+    params: { refundAttempt: boolean },
+  ): Promise<void> {
+    await this.db
+      .prepare(
+        `UPDATE learning_maps
+         SET creation_checks_started_at_ms = NULL,
+             creation_checks_attempts = MAX(0, creation_checks_attempts - ?)
+         WHERE id = ? AND owner_user_id = ?`,
+      )
+      .bind(params.refundAttempt ? 1 : 0, mapId, ownerUserId)
+      .run();
   }
 
   async completeCreationChecks(
@@ -2013,7 +2035,8 @@ export class D1LearningMapRepository implements LearningMapRepository {
   ): Promise<boolean> {
     const result = await this.db
       .prepare(
-        `UPDATE learning_maps SET creation_checks_done_at = ?
+        `UPDATE learning_maps
+         SET creation_checks_done_at = ?, creation_checks_started_at_ms = NULL
          WHERE id = ? AND owner_user_id = ?`,
       )
       .bind(nowIso, mapId, ownerUserId)

@@ -293,8 +293,12 @@ export interface MapGenerationConsentBody {
   grantedAt?: string;
 }
 
-/** `POST /v1/learning-maps/:id/checks:generate` の応答（#247）。保存できた組と、作れなかった組の数。 */
+/** `POST /v1/learning-maps/:id/checks:generate` の応答（#247）。 */
 export interface GenerateCreationChecksResponse {
+  /** 保存できた組。 */
   checks: PersonalConceptCheck[];
+  /** 頼んだが作れなかった組の数（上流の失敗・形式の逸脱・生成中の削除）。 */
   failedCount: number;
+  /** 入力の上限や回数分のトークンに収まらず、頼まなかった組の数。 */
+  skippedCount: number;
 }

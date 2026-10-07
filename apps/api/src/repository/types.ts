@@ -619,6 +619,8 @@ export interface StoredCreationChecks {
   attempts: number;
   /** 1組でも保存できた時刻。まだなら `null`。 */
   doneAt: string | null;
+  /** 作っている最中の印（頼んだ時刻）。無ければ `null`。 */
+  startedAtMs: number | null;
 }
 
 /** 自分のマップのノード（参照ではないもの）1件と、その項目。参照の解決と VS Code 向けの一覧に使う。 */
@@ -665,16 +667,27 @@ export interface LearningMapRepository {
 
   /**
    * 作成時の確認問題を頼む権利を取る（#247）。まだ作成済みでなく、頼んだ回数が
-   * `maxAttempts` 未満のときだけ回数を1つ増やし、技術レベルを返す。判定と加算は1つの操作で行う
-   * （同時に2回頼まれても、両方は通さない）。取れなければ `null`。
+   * `maxAttempts` 未満で、**作っている最中でない**ときだけ、回数を1つ増やして作っている最中の印を付け、
+   * 技術レベルを返す。判定と書き込みは1つの操作で行う（同時に2回頼まれても、両方は通さない）。
+   * `leaseMs` より古い印は、途中で止まった要求の残りとして無視する。取れなければ `null`。
    */
   claimCreationChecks(
     ownerUserId: string,
     mapId: string,
-    maxAttempts: number,
+    params: { maxAttempts: number; nowMs: number; leaseMs: number },
   ): Promise<CheckLevel | null>;
 
-  /** 作成時の確認問題を作成済みにする。@returns 自分のマップが無ければ `false`。 */
+  /**
+   * 作っている最中の印を外す（作れなかったとき）。`refundAttempt` なら頼んだ回数も1つ戻す
+   * （上流へ送る前に止まった、回数の枠が足りなかったときなど）。
+   */
+  releaseCreationChecks(
+    ownerUserId: string,
+    mapId: string,
+    params: { refundAttempt: boolean },
+  ): Promise<void>;
+
+  /** 作成時の確認問題を作成済みにし、作っている最中の印を外す。@returns 自分のマップが無ければ `false`。 */
   completeCreationChecks(ownerUserId: string, mapId: string, nowIso: string): Promise<boolean>;
 
   /** 自分のマップの一覧。更新の新しい順（同時刻は ID の昇順）。 */

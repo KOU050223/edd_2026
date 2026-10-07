@@ -97,8 +97,9 @@ describe("planCreationCheckBatches（#247）", () => {
     Array.from({ length: count }, (_, index) => `mabcdefgh.k${String(index)}`);
 
   it("目安の長さなら、10 組を2組ずつ5回で頼む", () => {
-    const batches = planCreationCheckBatches(ids(10).map(typical), "basic")!;
+    const { batches, skipped } = planCreationCheckBatches(ids(10).map(typical), "basic");
 
+    expect(skipped).toBe(0);
     expect(batches.map((batch) => batch.targets.length)).toEqual([2, 2, 2, 2, 2]);
     for (const batch of batches) {
       expect(estimateInputTokens(batch.prompt)).toBeLessThanOrEqual(
@@ -108,7 +109,7 @@ describe("planCreationCheckBatches（#247）", () => {
   });
 
   it("2組が入力に収まらなければ1組ずつにし、5 回分を超える分は後ろから落とす", () => {
-    const batches = planCreationCheckBatches(ids(10).map(longest), "advanced")!;
+    const { batches, skipped } = planCreationCheckBatches(ids(10).map(longest), "advanced");
 
     expect(batches.every((batch) => batch.targets.length === 1)).toBe(true);
     const total = batches.reduce(
@@ -120,5 +121,23 @@ describe("planCreationCheckBatches（#247）", () => {
     expect(batches.map((batch) => batch.targets[0]!.input.id)).toEqual(
       ids(10).slice(0, batches.length),
     );
+    expect(skipped).toBe(10 - batches.length);
+  });
+
+  it("1組でも入力に収まらない項目は飛ばし、他の項目は頼む", () => {
+    const tooLong = longest("mabcdefgh.big");
+    // 子が多いノード: 次に接続する概念の表示名だけで入力の上限を超える。
+    tooLong.input.nextLabels = Array.from({ length: 49 }, () => "次".repeat(MAX_NODE_LABEL_LENGTH));
+
+    const { batches, skipped } = planCreationCheckBatches(
+      [tooLong, typical("mabcdefgh.k1"), typical("mabcdefgh.k2")],
+      "basic",
+    );
+
+    expect(skipped).toBe(1);
+    expect(batches.flatMap((batch) => batch.targets.map((target) => target.input.id))).toEqual([
+      "mabcdefgh.k1",
+      "mabcdefgh.k2",
+    ]);
   });
 });

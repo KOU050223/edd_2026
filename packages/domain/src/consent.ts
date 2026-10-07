@@ -138,10 +138,10 @@ export const CHECK_GENERATION_CONSENT_VERSION = 1;
  * 送るものが違う（本人の理解度を送る）ので、文面と版は別に持つ。
  *
  * 版の履歴:
- * - 1: テーマ・目標・技術レベルと、既存の Concept の表示名・本人の理解度を送る（#243）。
- *   「確認問題も作る」を選んだときは、作ったマップの定義から確認問題を作る（#247）
+ * - 1: テーマ・目標・技術レベルと、既存の Concept の表示名・本人の理解度を送る（#243）
+ * - 2: 「確認問題も作る」を選んだときは、作ったマップの定義から確認問題を作る（#247）
  */
-export const MAP_GENERATION_CONSENT_VERSION = 1;
+export const MAP_GENERATION_CONSENT_VERSION = 2;
 
 /** 確認問題の生成で、1組の材料に載せる自力解決した質問の最大件数。 */
 export const CHECK_MATERIAL_MAX_QUESTIONS = 3;

@@ -26,6 +26,7 @@ import {
   InMemoryMapGenerationConsentRepository,
   InMemoryPersonalCheckRepository,
 } from "../repository/memory.js";
+import { CREATION_CHECKS_LEASE_MS } from "../maps/creation-checks.js";
 import { createLearningMapsRoute } from "./learning-maps.js";
 
 const NOW = new Date("2026-10-08T09:00:00.000Z");
@@ -444,6 +445,7 @@ describe("POST /v1/learning-maps/:id/checks:generate（#247）", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as GenerateCreationChecksResponse;
     expect(body.failedCount).toBe(0);
+    expect(body.skippedCount).toBe(0);
     const firstTen = map.nodes.slice(0, 10);
     expect(body.checks.map((check) => check.objectiveId)).toEqual(
       firstTen.map((node) => (node.kind === "own" ? node.objectives[0]!.id : undefined)),
@@ -539,6 +541,40 @@ describe("POST /v1/learning-maps/:id/checks:generate（#247）", () => {
     expect(fetchMock).not.toHaveBeenCalled();
     const after = (await (await send("GET", `/learning-maps/${map.id}`)).json()) as LearningMapView;
     expect(after.creationChecks).toEqual({ status: "pending" });
+    // 頼んだ回数も戻っている（印も外れている）ので、まだ2回頼める。
+    expect((await maps.get("user-a", map.id))?.creationChecks).toMatchObject({
+      attempts: 0,
+      startedAtMs: null,
+    });
+  });
+
+  it("別の画面で作っている最中なら、回数を使わずに 409 を返す", async () => {
+    const map = await generatedMap(3);
+    // 別のタブが先に頼む権利を取った（まだ終わっていない）。
+    await maps.claimCreationChecks("user-a", map.id, {
+      maxAttempts: 2,
+      nowMs: NOW.getTime(),
+      leaseMs: 60_000,
+    });
+
+    const res = await send("POST", `/learning-maps/${map.id}/checks:generate`);
+
+    expect(res.status).toBe(409);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(await usedRequests()).toBe(MAP_GENERATION_USAGE_COST);
+  });
+
+  it("途中で止まった要求の印は、有効期間を過ぎたら無視して頼める", async () => {
+    const map = await generatedMap(1);
+    await maps.claimCreationChecks("user-a", map.id, {
+      maxAttempts: 2,
+      nowMs: NOW.getTime() - CREATION_CHECKS_LEASE_MS - 1,
+      leaseMs: CREATION_CHECKS_LEASE_MS,
+    });
+
+    const res = await send("POST", `/learning-maps/${map.id}/checks:generate`);
+
+    expect(res.status).toBe(200);
   });
 
   it("作成時の組を解くときに作り直すと、作成時の組ではなくなる", async () => {

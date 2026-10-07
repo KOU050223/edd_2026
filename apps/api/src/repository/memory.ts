@@ -794,7 +794,7 @@ export class InMemoryLearningMapRepository implements LearningMapRepository {
       creationChecks:
         params.creationChecksLevel === undefined
           ? null
-          : { level: params.creationChecksLevel, attempts: 0, doneAt: null },
+          : { level: params.creationChecksLevel, attempts: 0, doneAt: null, startedAtMs: null },
     });
     return Promise.resolve({ created: true });
   }
@@ -802,20 +802,42 @@ export class InMemoryLearningMapRepository implements LearningMapRepository {
   claimCreationChecks(
     ownerUserId: string,
     mapId: string,
-    maxAttempts: number,
+    params: { maxAttempts: number; nowMs: number; leaseMs: number },
   ): Promise<CheckLevel | null> {
     const state = this.owned(ownerUserId, mapId)?.creationChecks;
-    if (state == null || state.doneAt !== null || state.attempts >= maxAttempts) {
+    if (
+      state == null ||
+      state.doneAt !== null ||
+      state.attempts >= params.maxAttempts ||
+      (state.startedAtMs !== null && state.startedAtMs > params.nowMs - params.leaseMs)
+    ) {
       return Promise.resolve(null);
     }
     state.attempts += 1;
+    state.startedAtMs = params.nowMs;
     return Promise.resolve(state.level);
+  }
+
+  releaseCreationChecks(
+    ownerUserId: string,
+    mapId: string,
+    params: { refundAttempt: boolean },
+  ): Promise<void> {
+    const state = this.owned(ownerUserId, mapId)?.creationChecks;
+    if (state != null) {
+      state.startedAtMs = null;
+      if (params.refundAttempt) state.attempts = Math.max(0, state.attempts - 1);
+    }
+    return Promise.resolve();
   }
 
   completeCreationChecks(ownerUserId: string, mapId: string, nowIso: string): Promise<boolean> {
     const state = this.owned(ownerUserId, mapId)?.creationChecks;
     if (state === undefined) return Promise.resolve(false);
-    if (state !== null) state.doneAt = nowIso;
+    if (state !== null) {
+      state.doneAt = nowIso;
+      state.startedAtMs = null;
+    }
     return Promise.resolve(true);
   }
 
