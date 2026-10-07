@@ -2,7 +2,10 @@ import { createFileRoute, Link, useNavigate, useRouter } from "@tanstack/react-r
 import { useEffect, useRef } from "react";
 import {
   CompleteBadge,
+  CONCEPT_BY_ID,
   ConceptDetail,
+  FIXED_OBJECTIVES_NOTE,
+  OBJECTIVES_BY_CONCEPT,
   LINKS,
   loadLearningMap,
   languageLabel,
@@ -142,6 +145,9 @@ function LanguageMap() {
         {selected && (
           <ConceptDetail
             concept={selected}
+            summary={CONCEPT_BY_ID.get(selected.conceptId)?.summary}
+            objectives={OBJECTIVES_BY_CONCEPT.get(selected.conceptId) ?? []}
+            objectivesNote={FIXED_OBJECTIVES_NOTE}
             links={LINKS.get(selected.conceptId)}
             concepts={concepts}
             isCurrent={selected.conceptId === current}

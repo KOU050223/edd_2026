@@ -18,7 +18,7 @@ test("randomKey は英小文字と数字 8 文字を返す", () => {
 
 test("振ったノードの ID は今の Concept ID の形を満たす", () => {
   const result = resolveMapContent(
-    "m7k2x9qa",
+    "m7k2x9qa4",
     { title: "t", description: "", nodes: [own("new:a")], edges: [] },
     new Set(),
     randomKey,

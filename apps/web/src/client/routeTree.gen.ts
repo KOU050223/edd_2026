@@ -18,6 +18,8 @@ import { Route as FramedCheckConceptIdRouteImport } from './routes/_framed/check
 import { Route as FramedHistoryIndexRouteImport } from './routes/_framed/history.index'
 import { Route as FramedHistoryConversationIdRouteImport } from './routes/_framed/history.$conversationId'
 import { Route as FramedMapLanguageRouteImport } from './routes/_framed/map.$language'
+import { Route as FramedMapsIndexRouteImport } from './routes/_framed/maps.index'
+import { Route as FramedMapsMapIdRouteImport } from './routes/_framed/maps.$mapId'
 import { Route as FramedSettingsIndexRouteImport } from './routes/_framed/settings/index'
 import { Route as FramedSettingsBillingRouteImport } from './routes/_framed/settings/billing'
 import { Route as FramedSettingsDataRouteImport } from './routes/_framed/settings/data'
@@ -68,6 +70,16 @@ const FramedMapLanguageRoute = FramedMapLanguageRouteImport.update({
   path: '/map/$language',
   getParentRoute: () => FramedRouteRoute,
 } as any)
+const FramedMapsIndexRoute = FramedMapsIndexRouteImport.update({
+  id: '/maps/',
+  path: '/maps/',
+  getParentRoute: () => FramedRouteRoute,
+} as any)
+const FramedMapsMapIdRoute = FramedMapsMapIdRouteImport.update({
+  id: '/maps/$mapId',
+  path: '/maps/$mapId',
+  getParentRoute: () => FramedRouteRoute,
+} as any)
 const FramedSettingsIndexRoute = FramedSettingsIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -97,10 +109,12 @@ export interface FileRoutesByFullPath {
   '/check/$conceptId': typeof FramedCheckConceptIdRoute
   '/history/$conversationId': typeof FramedHistoryConversationIdRoute
   '/map/$language': typeof FramedMapLanguageRoute
+  '/maps/$mapId': typeof FramedMapsMapIdRoute
   '/settings/billing': typeof FramedSettingsBillingRoute
   '/settings/data': typeof FramedSettingsDataRoute
   '/settings/usage': typeof FramedSettingsUsageRoute
   '/history/': typeof FramedHistoryIndexRoute
+  '/maps/': typeof FramedMapsIndexRoute
   '/settings/': typeof FramedSettingsIndexRoute
 }
 export interface FileRoutesByTo {
@@ -110,10 +124,12 @@ export interface FileRoutesByTo {
   '/check/$conceptId': typeof FramedCheckConceptIdRoute
   '/history/$conversationId': typeof FramedHistoryConversationIdRoute
   '/map/$language': typeof FramedMapLanguageRoute
+  '/maps/$mapId': typeof FramedMapsMapIdRoute
   '/settings/billing': typeof FramedSettingsBillingRoute
   '/settings/data': typeof FramedSettingsDataRoute
   '/settings/usage': typeof FramedSettingsUsageRoute
   '/history': typeof FramedHistoryIndexRoute
+  '/maps': typeof FramedMapsIndexRoute
   '/settings': typeof FramedSettingsIndexRoute
 }
 export interface FileRoutesById {
@@ -126,10 +142,12 @@ export interface FileRoutesById {
   '/_framed/check/$conceptId': typeof FramedCheckConceptIdRoute
   '/_framed/history/$conversationId': typeof FramedHistoryConversationIdRoute
   '/_framed/map/$language': typeof FramedMapLanguageRoute
+  '/_framed/maps/$mapId': typeof FramedMapsMapIdRoute
   '/_framed/settings/billing': typeof FramedSettingsBillingRoute
   '/_framed/settings/data': typeof FramedSettingsDataRoute
   '/_framed/settings/usage': typeof FramedSettingsUsageRoute
   '/_framed/history/': typeof FramedHistoryIndexRoute
+  '/_framed/maps/': typeof FramedMapsIndexRoute
   '/_framed/settings/': typeof FramedSettingsIndexRoute
 }
 export interface FileRouteTypes {
@@ -142,10 +160,12 @@ export interface FileRouteTypes {
     | '/check/$conceptId'
     | '/history/$conversationId'
     | '/map/$language'
+    | '/maps/$mapId'
     | '/settings/billing'
     | '/settings/data'
     | '/settings/usage'
     | '/history/'
+    | '/maps/'
     | '/settings/'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -155,10 +175,12 @@ export interface FileRouteTypes {
     | '/check/$conceptId'
     | '/history/$conversationId'
     | '/map/$language'
+    | '/maps/$mapId'
     | '/settings/billing'
     | '/settings/data'
     | '/settings/usage'
     | '/history'
+    | '/maps'
     | '/settings'
   id:
     | '__root__'
@@ -170,10 +192,12 @@ export interface FileRouteTypes {
     | '/_framed/check/$conceptId'
     | '/_framed/history/$conversationId'
     | '/_framed/map/$language'
+    | '/_framed/maps/$mapId'
     | '/_framed/settings/billing'
     | '/_framed/settings/data'
     | '/_framed/settings/usage'
     | '/_framed/history/'
+    | '/_framed/maps/'
     | '/_framed/settings/'
   fileRoutesById: FileRoutesById
 }
@@ -247,6 +271,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof FramedMapLanguageRouteImport
       parentRoute: typeof FramedRouteRoute
     }
+    '/_framed/maps/': {
+      id: '/_framed/maps/'
+      path: '/maps'
+      fullPath: '/maps/'
+      preLoaderRoute: typeof FramedMapsIndexRouteImport
+      parentRoute: typeof FramedRouteRoute
+    }
+    '/_framed/maps/$mapId': {
+      id: '/_framed/maps/$mapId'
+      path: '/maps/$mapId'
+      fullPath: '/maps/$mapId'
+      preLoaderRoute: typeof FramedMapsMapIdRouteImport
+      parentRoute: typeof FramedRouteRoute
+    }
     '/_framed/settings/': {
       id: '/_framed/settings/'
       path: '/'
@@ -302,7 +340,9 @@ interface FramedRouteRouteChildren {
   FramedCheckConceptIdRoute: typeof FramedCheckConceptIdRoute
   FramedHistoryConversationIdRoute: typeof FramedHistoryConversationIdRoute
   FramedMapLanguageRoute: typeof FramedMapLanguageRoute
+  FramedMapsMapIdRoute: typeof FramedMapsMapIdRoute
   FramedHistoryIndexRoute: typeof FramedHistoryIndexRoute
+  FramedMapsIndexRoute: typeof FramedMapsIndexRoute
 }
 
 const FramedRouteRouteChildren: FramedRouteRouteChildren = {
@@ -312,7 +352,9 @@ const FramedRouteRouteChildren: FramedRouteRouteChildren = {
   FramedCheckConceptIdRoute: FramedCheckConceptIdRoute,
   FramedHistoryConversationIdRoute: FramedHistoryConversationIdRoute,
   FramedMapLanguageRoute: FramedMapLanguageRoute,
+  FramedMapsMapIdRoute: FramedMapsMapIdRoute,
   FramedHistoryIndexRoute: FramedHistoryIndexRoute,
+  FramedMapsIndexRoute: FramedMapsIndexRoute,
 }
 
 const FramedRouteRouteWithChildren = FramedRouteRoute._addFileChildren(

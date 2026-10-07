@@ -20,6 +20,7 @@ import {
   requestJson,
 } from "./api.js";
 import { toErrorText } from "./errors.js";
+import { mapIdOfConcept } from "./learning-maps.js";
 import {
   attachFamiliarity,
   completeConcepts,
@@ -144,7 +145,9 @@ export const AREAS = conceptAreas(TREES);
 export const CONCEPT_BY_ID: ReadonlyMap<string, DomainConcept> = new Map(
   CONCEPTS.map((concept) => [concept.id, concept]),
 );
-// 「理解すること」（#224）。生成の口ができるまでは Go だけのモックを表示する。
+// 「理解すること」（#224）。固定の一覧は、生成の口ができるまで Go だけのモックを表示する。
+/** 固定の一覧の「理解すること」はモックなので、見出しにそう添える。 */
+export const FIXED_OBJECTIVES_NOTE = "仮データ";
 export const OBJECTIVES_BY_CONCEPT: ReadonlyMap<string, readonly LearningObjective[]> = (() => {
   const byConcept = new Map<string, LearningObjective[]>();
   for (const objective of MOCK_LEARNING_OBJECTIVES) {
@@ -155,14 +158,17 @@ export const OBJECTIVES_BY_CONCEPT: ReadonlyMap<string, readonly LearningObjecti
 
 // 応答は観測済みの Concept だけなので、定義の全件と突き合わせて未観測を補う。
 // 手動上書きは補ったあとに重ねる。未観測の Concept も手動で確認済みにできる。
+//
+// `definitions` は既定で固定の一覧。手で作ったマップの画面は、そのマップのノードを渡す（#242）。
 export function overlaidConcepts(
   profile: MapProfile | null,
   overrides: MasteryOverrides | null,
+  definitions: readonly DomainConcept[] = CONCEPTS,
 ): OverlaidConcept[] {
   // Familiarity は Mastery を底上げしない。「過去に触れた形跡」として
   // 別のフィールドに載せる（Issue #157）。
   return attachFamiliarity(
-    applyOverrides(completeConcepts(profile?.concepts ?? [], CONCEPTS), overrides ?? {}),
+    applyOverrides(completeConcepts(profile?.concepts ?? [], definitions), overrides ?? {}),
     profile?.familiarity,
   );
 }
@@ -204,12 +210,17 @@ export const nameOf = (concept: OverlaidConcept) => concept.label ?? concept.con
 const percent = (score: number | null) => (score === null ? "—" : `${Math.round(score * 100)}%`);
 
 /**
- * Concept を選ぶ遷移。属する領域があればそのマップへ、
- * 地図に無い Concept は項目一覧へ（どちらも `?concept=` で詳細が開く）。
+ * Concept を選ぶ遷移。属する領域があればそのマップへ、手で作ったノードはそのマップへ（#242）、
+ * 地図に無い Concept は項目一覧へ（どれも `?concept=` で詳細が開く）。
  */
 export function useGoToConcept(): (conceptId: string) => void {
   const navigate = useNavigate();
   return (conceptId) => {
+    const mapId = mapIdOfConcept(conceptId);
+    if (mapId !== undefined) {
+      void navigate({ to: "/maps/$mapId", params: { mapId }, search: { concept: conceptId } });
+      return;
+    }
     const language = AREAS.get(conceptId);
     if (language === undefined) {
       void navigate({ to: "/", search: { concept: conceptId } });
@@ -309,6 +320,7 @@ function MasteryPicker({
 /** 1 領域ぶんの Skill Tree。Map 内には Concept 名と状態だけを出し、詳細は右のパネルへ回す。 */
 export function SkillTree({
   tree,
+  title,
   concepts,
   current,
   next,
@@ -316,6 +328,8 @@ export function SkillTree({
   onSelect,
 }: {
   tree: MapTree;
+  /** 見出し。省略すると領域名。手で作ったマップは題名を渡す（#242）。 */
+  title?: string;
   concepts: ReadonlyMap<string, OverlaidConcept>;
   current: string | undefined;
   next: ReadonlySet<string>;
@@ -338,7 +352,7 @@ export function SkillTree({
   }, [currentDepth]);
   return (
     <section className="tree">
-      <h2>{languageLabel[tree.language] ?? tree.language}</h2>
+      <h2>{title ?? languageLabel[tree.language] ?? tree.language}</h2>
       <div className="tree-scroll" ref={scroller}>
         <div className="tree-canvas" style={{ width, height }}>
           <svg width={width} height={height} aria-hidden="true">
@@ -444,6 +458,11 @@ function ConceptLinksList({
 /** 選んだ Concept の詳細。Evidence・前提・次の Concept・理解度の修正をまとめる。 */
 export function ConceptDetail({
   concept,
+  summary,
+  objectives: definedObjectives,
+  objectivesNote,
+  note,
+  fromMapId,
   links,
   concepts,
   isCurrent,
@@ -454,6 +473,19 @@ export function ConceptDetail({
   panel,
 }: {
   concept: OverlaidConcept;
+  /** 概要。定義に無ければ出さない。 */
+  summary: string | undefined;
+  /** この Concept の「理解すること」。 */
+  objectives: readonly LearningObjective[];
+  /** 「理解すること」の見出しに添える注記（固定の一覧のモックなら「仮データ」）。 */
+  objectivesNote?: string;
+  /** 見出しの下に添える注記（参照のノードなど）。 */
+  note?: string;
+  /**
+   * 手で作ったマップの画面から開いたなら、そのマップの ID。確認問題から戻る先にする。
+   * 参照のノードは元の Concept と同じ ID なので、ID だけでは来たマップが分からない（#242）。
+   */
+  fromMapId?: string;
   links: ConceptLinks | undefined;
   concepts: ReadonlyMap<string, OverlaidConcept>;
   isCurrent: boolean;
@@ -463,20 +495,20 @@ export function ConceptDetail({
   onSelect: (conceptId: string) => void;
   panel: RefObject<HTMLElement | null>;
 }) {
-  const summary = CONCEPT_BY_ID.get(concept.conceptId)?.summary;
   // 手動修正は status だけを変えるので、項目の割合は自動算出のまま見せる。
-  const objectives = objectiveProgress(OBJECTIVES_BY_CONCEPT.get(concept.conceptId) ?? [], {
+  const objectives = objectiveProgress(definedObjectives, {
     status: concept.derived.status,
     objectives: concept.objectives,
   });
   return (
     <aside className="detail" aria-label="Concept の詳細" ref={panel}>
       <h2>{nameOf(concept)}</h2>
+      {note && <p className="muted">{note}</p>}
       {summary && <p className="detail-summary">{summary}</p>}
       {objectives.length > 0 && (
         <section className="detail-objectives" aria-label="理解すること">
           <h3>
-            理解すること <span className="muted">（仮データ）</span>
+            理解すること {objectivesNote && <span className="muted">（{objectivesNote}）</span>}
           </h3>
           <ul>
             {objectives.map((objective) => (
@@ -550,6 +582,7 @@ export function ConceptDetail({
           <Link
             to="/check/$conceptId"
             params={{ conceptId: concept.conceptId }}
+            search={fromMapId === undefined ? {} : { from: fromMapId }}
             preload={false}
             className="check-link"
           >
