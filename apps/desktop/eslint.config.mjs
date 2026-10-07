@@ -1,4 +1,5 @@
 import js from "@eslint/js";
+import reactHooks from "eslint-plugin-react-hooks";
 import tseslint from "typescript-eslint";
 import prettier from "eslint-config-prettier";
 
@@ -8,9 +9,20 @@ export default [
   ...tseslint.configs.recommended,
   prettier,
   {
-    files: ["src/renderer/**/*.js"],
+    files: ["src/renderer/**/*.{js,ts,tsx}"],
     languageOptions: {
       globals: { document: "readonly", window: "readonly", navigator: "readonly" },
+    },
+  },
+  {
+    // renderer の React コードだけに Hooks の規則をかける。
+    // web 側はこのプラグインを使っていないため、ここで新規に足す
+    // （useDesktopEvent など、依存配線の誤りをコンパイルより早く止める）。
+    files: ["src/renderer/**/*.{ts,tsx}"],
+    plugins: { "react-hooks": reactHooks },
+    rules: {
+      "react-hooks/rules-of-hooks": "error",
+      "react-hooks/exhaustive-deps": "error",
     },
   },
   {

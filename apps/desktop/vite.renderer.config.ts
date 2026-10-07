@@ -1,3 +1,4 @@
+import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
 // renderer は `loadFile` で file:// から読むので、出力される asset の参照は
@@ -6,5 +7,6 @@ import { defineConfig } from "vite";
 export default defineConfig({
   root: "src/renderer",
   base: "./",
+  plugins: [react()],
   build: { outDir: "../../out/renderer", emptyOutDir: true },
 });

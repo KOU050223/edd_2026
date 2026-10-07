@@ -88,7 +88,9 @@ describe("preload window.desktop", () => {
     for (const [name, spec] of Object.entries(expectedApi)) {
       if (!("channel" in spec)) continue;
       mocks.invoke.mockClear();
-      apiRecord[name](...spec.args);
+      const method = apiRecord[name];
+      if (method === undefined) throw new Error(`公開 API が見つかりません: ${name}`);
+      method(...spec.args);
       expect(mocks.invoke, name).toHaveBeenCalledWith(spec.channel, ...spec.args);
       usedChannels.add(spec.channel);
     }
@@ -103,7 +105,9 @@ describe("preload window.desktop", () => {
       mocks.on.mockClear();
       mocks.removeListener.mockClear();
       const listener = vi.fn();
-      const unsubscribe = apiRecord[name](listener);
+      const method = apiRecord[name];
+      if (method === undefined) throw new Error(`公開 API が見つかりません: ${name}`);
+      const unsubscribe = method(listener);
       expect(mocks.on, name).toHaveBeenCalledTimes(1);
       const [channel, wrapped] = mocks.on.mock.calls[0] as [string, (...a: unknown[]) => void];
       expect(channel, name).toBe(spec.onChannel);

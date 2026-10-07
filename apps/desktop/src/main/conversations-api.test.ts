@@ -11,10 +11,10 @@ import {
 } from "./conversations-api.js";
 import { buildConversation } from "./conversation.js";
 
-const deps = (fetch: typeof fetch) => ({
+const deps = (fetchImpl: typeof fetch) => ({
   baseUrl: "https://api.example.com/v1",
   getAccessToken: () => Promise.resolve("token"),
-  fetch,
+  fetch: fetchImpl,
 });
 
 const remoteSettings = {
@@ -41,7 +41,9 @@ describe("setSaveConversationHistory", () => {
     expect(saved.saveConversationHistory).toBe(true);
     // 切り替えたい項目だけを送り、GET で先行読み取りはしない。
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [url, init] = fetchMock.mock.calls[0];
+    const callArgs = fetchMock.mock.calls[0];
+    if (callArgs === undefined) throw new Error("fetch が呼ばれていません");
+    const [url, init] = callArgs;
     expect(url).toBe("https://api.example.com/v1/user-settings");
     expect(init?.method).toBe("PUT");
     expect(JSON.parse(String(init?.body))).toEqual({ saveConversationHistory: true });
@@ -145,7 +147,9 @@ describe("listConversations", () => {
 
     await listConversations(deps(fetchMock), "999_id/with+chars");
 
-    const [url] = fetchMock.mock.calls[0];
+    const callArgs = fetchMock.mock.calls[0];
+    if (callArgs === undefined) throw new Error("fetch が呼ばれていません");
+    const [url] = callArgs;
     expect(url).toBe(
       `https://api.example.com/v1/conversations?cursor=${encodeURIComponent("999_id/with+chars")}`,
     );

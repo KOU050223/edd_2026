@@ -1,17 +1,18 @@
 {
+  // 共通の compilerOptions だけを置く基底。実際の検査単位は
+  // tsconfig.node.json（main/preload/shared）と tsconfig.web.json（renderer/shared）。
+  // 直接 `-p tsconfig.json` では検査しない（include を持たない）。
   "compilerOptions": {
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
     "target": "ES2022",
-    "lib": ["ES2022", "DOM"],
-    "types": ["node"],
     "noEmit": true,
     "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "verbatimModuleSyntax": true,
+    "noFallthroughCasesInSwitch": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noImplicitReturns": true,
     "skipLibCheck": true
-  },
-  "include": ["src", "vite.*.config.ts", "vitest.config.ts"],
-  "exclude": ["src/**/*.test.ts", "node_modules", "out"]
+  }
 }

@@ -83,7 +83,10 @@ export function showPopup(selection: string, error?: string): void {
   appState.popup ??= createPopup();
   activatePopup(app, appState.popup);
   const sendSelection = () =>
-    send(appState.popup?.webContents, EVENT_CHANNELS.selection, { selection, error });
+    send(appState.popup?.webContents, EVENT_CHANNELS.selection, {
+      selection,
+      ...(error === undefined ? {} : { error }),
+    });
   if (appState.popup.webContents.isLoading())
     appState.popup.webContents.once("did-finish-load", sendSelection);
   else sendSelection();

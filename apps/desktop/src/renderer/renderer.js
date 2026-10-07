@@ -1,5 +1,5 @@
-import { renderMarkdown } from "./markdown.js";
-import { AUTH_LABELS, authStatusLabel, shouldApplyAuthState } from "./auth-status.js";
+import { renderMarkdown } from "./markdown.ts";
+import { AUTH_LABELS, authStatusLabel, shouldApplyAuthState } from "./auth-status.ts";
 import { setupImportWizard } from "./history.js";
 
 const $ = (id) => document.getElementById(id);
