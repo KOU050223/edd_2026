@@ -24,6 +24,34 @@ Vite で `src/main`・`src/preload`・`src/renderer` の 3 つを `out/{main,pre
 - `npm run start` / `npm run package`：build してから起動 / electron-builder。
 - `npm run compile`：`tsc --noEmit` の型検査だけ。出力は Vite が作る。
 
+## 構成
+
+- `src/main`：メインプロセス。トレイ、グローバルショートカット、IPC、API 通信、OS 連携。
+- `src/preload`：`contextBridge` で `window.api`（`DesktopApi` 型）だけを renderer へ公開する。
+- `src/shared`：main・preload・renderer の 3 環境で評価される共有部。
+  型と IPC 契約だけを置き、Electron・Node・DOM の API を参照してはいけない。
+- `src/renderer`：React の UI。main とは `window.api` 経由でしか話せない。
+
+## IPC を足す手順
+
+1. `src/shared/ipc.ts` にチャネル名と `InvokeContract` / `SendContract` の型を足す
+2. `src/main/ipc/schemas.ts` に引数の valibot スキーマを足す（契約の args 型に結びついている）
+3. `src/main/ipc/<機能>.ts` に `handle` でハンドラを足す
+4. `src/preload/index.ts` の `window.api` に公開する
+
+チャネル名を各所に文字列で散らさない。契約を変えたらスキーマ側が型エラーで追いつく。
+
+## セキュリティ
+
+- renderer は独自スキーム `app://renderer/` で `out/renderer` から配る
+  （`src/main/renderer-scheme.ts`）。dev では loopback の Vite dev server のみ許す。
+- CSP は `src/renderer/index.html` の meta で固定する（`connect-src 'none'`、
+  外部への接続は main 側の fetch だけが担う）。
+- Electron Fuses は `package.json` の `build.electronFuses` で焼き込む
+  （RunAsNode・NodeOptions・CLI inspect・file:// 特権を無効化、asar 完全性を有効化）。
+  配布物に実際に効いているかは `scripts/check-package.mjs` が asar・Fuses・署名を検査する
+  （release ワークフローから実行）。
+
 ## テスト
 
 書き方・実行方法は [`docs/testing-guide.md`](../../docs/testing-guide.md) を参照する。

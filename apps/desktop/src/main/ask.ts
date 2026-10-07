@@ -6,6 +6,16 @@ import { refreshAccessTokenOrClearOnInvalidGrant } from "./auth/index.js";
 import { parseOpenAIStream } from "./stream.js";
 import { refreshTokenStore } from "./token-store.js";
 
+/**
+ * reader を cancel する後始末。中断の片付けの失敗で主処理を止めないが、
+ * 失敗した理由は残す（RULE-004: 隔離しても飲み込まない）。
+ */
+function cancelReader(reader: ReadableStreamDefaultReader<Uint8Array>): void {
+  reader.cancel().catch((error: unknown) => {
+    console.warn("応答ストリームの reader を cancel できませんでした", error);
+  });
+}
+
 /** signal が既に abort 済みか、abort されたら reject する Promise を返す。 */
 function aborted(signal: AbortSignal): Promise<never> {
   return new Promise((_, reject) => {
@@ -49,7 +59,7 @@ export async function readAnswerStream(
     throw new Error(describeApiFailure(response.status, body));
   }
   const reader = response.body.getReader();
-  const cancelOnAbort = () => void reader.cancel().catch(() => undefined);
+  const cancelOnAbort = () => cancelReader(reader);
   signal?.addEventListener("abort", cancelOnAbort, { once: true });
   const decoder = new TextDecoder();
   let pending = "";
@@ -68,7 +78,7 @@ export async function readAnswerStream(
   } finally {
     signal?.removeEventListener("abort", cancelOnAbort);
     // 正常終了で残ったリーダーを残さない。既に cancel 済みなら no-op。
-    void reader.cancel().catch(() => undefined);
+    cancelReader(reader);
     reader.releaseLock();
   }
   signal?.throwIfAborted();

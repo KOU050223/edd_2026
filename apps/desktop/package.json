@@ -17,6 +17,8 @@
   },
   "main": "out/main/index.js",
   "devDependencies": {
+    "@electron/asar": "^3.4.1",
+    "@electron/fuses": "^1.8.0",
     "@eslint/js": "^10.0.1",
     "@gakushu-sochi/domain": "file:../../packages/domain",
     "@testing-library/dom": "^10.4.2",
@@ -55,6 +57,10 @@
     },
     "productName": "Gakushu Sochi",
     "artifactName": "Gakushu-Sochi-${version}-${os}-${arch}.${ext}",
+    "electronLanguages": [
+      "ja",
+      "en"
+    ],
     "files": [
       "out/**",
       "package.json"
@@ -77,13 +83,6 @@
       "target": [
         "nsis"
       ]
-    },
-    "publish": [
-      {
-        "provider": "github",
-        "owner": "KOU050223",
-        "repo": "edd_2026"
-      }
-    ]
+    }
   }
 }

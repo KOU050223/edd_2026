@@ -65,7 +65,8 @@ jobs:
         run: npm ci
       # electron-builder へは publish を渡さない。成果物を集めてから release ジョブが
       # gh でリリースを 1 個だけ作るので、mac/win それぞれがリリースを作りにいく
-      # 競合を起こさない。
+      # 競合を起こさない。build.publish 設定自体も electron-updater を使っていない
+      # ため外してある（自動更新は #278 で入れ直す）。
       - name: Build Desktop packages
         run: |
           # main のバンドルが domain の dist/（CJS）を取り込むので、先に compile が必要。
@@ -73,6 +74,10 @@ jobs:
           # build.afterPack のようなフックのパスは cwd 基準で解決される。
           # apps/desktop を cwd にしないと ./scripts/… がルート側を指して壊れる。
           cd apps/desktop && npm run package -- --publish never
+      # 配布物の中身（asar の混入物・必須ファイル・Fuses・署名）を検査する。
+      # mac では dist/mac と dist/mac-arm64 の両方、win では dist/win-unpacked を調べる。
+      - name: Check packaged app
+        run: node apps/desktop/scripts/check-package.mjs
       - name: Upload installers
         uses: actions/upload-artifact@v4
         with:
@@ -80,7 +85,6 @@ jobs:
           path: |
             apps/desktop/dist/*.dmg
             apps/desktop/dist/*.exe
-            apps/desktop/dist/*.zip
           if-no-files-found: error
 
   release:

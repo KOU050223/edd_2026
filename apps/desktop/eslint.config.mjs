@@ -9,6 +9,50 @@ export default [
   ...tseslint.configs.recommended,
   prettier,
   {
+    // RULE-004 の再発防止: エラーを黙って捨てる .catch(() => {}) /
+    // .catch(() => undefined) 形を禁止する。隔離はしても飲み込まない。
+    files: ["src/**/*.{ts,tsx}"],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector:
+            "CallExpression[callee.property.name='catch'] > :matches(ArrowFunctionExpression, FunctionExpression)[body.type='BlockStatement'][body.body.length=0]",
+          message:
+            "RULE-004: エラーを握りつぶす空の catch コールバックは禁止です。隔離しても飲み込まないよう、理由を console.warn などに残してください。",
+        },
+        {
+          selector:
+            "CallExpression[callee.property.name='catch'] > ArrowFunctionExpression[body.type='Identifier'][body.name='undefined']",
+          message:
+            "RULE-004: エラーを握りつぶす catch コールバックは禁止です。隔離しても飲み込まないよう、理由を console.warn などに残してください。",
+        },
+        {
+          selector:
+            "CallExpression[callee.property.name='catch'] > ArrowFunctionExpression[body.type='Literal'][body.value=null]",
+          message:
+            "RULE-004: エラーを握りつぶす catch コールバックは禁止です。隔離しても飲み込まないよう、理由を console.warn などに残してください。",
+        },
+      ],
+    },
+  },
+  {
+    // 型情報を使う Promise の検査（Issue #279 ステップ 7）。
+    // 待ち忘れ（floating）と、void を期待する位置への Promise 渡しを止める。
+    // 意図的に待たない呼び出しは void を付け、理由が自明でなければコメントを添える。
+    files: ["src/**/*.{ts,tsx}"],
+    languageOptions: {
+      parserOptions: {
+        projectService: true,
+        tsconfigRootDir: import.meta.dirname,
+      },
+    },
+    rules: {
+      "@typescript-eslint/no-floating-promises": "error",
+      "@typescript-eslint/no-misused-promises": "error",
+    },
+  },
+  {
     files: ["src/renderer/**/*.{js,ts,tsx}"],
     languageOptions: {
       globals: { document: "readonly", window: "readonly", navigator: "readonly" },
