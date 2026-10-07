@@ -259,6 +259,34 @@ test("fetchがハングしてもタイムアウトで解決する", async () => 
   expect(outcome.ok).toBe(false);
 }, 20_000);
 
+test("ヘッダーのあと本文が止まれば、タイムアウトで本文の読み込みも中断する", async () => {
+  // 本文の読み込みも期限の内側（RULE-001）。中断しないと、失敗を返したあとも接続が残る。
+  vi.useFakeTimers();
+  const signals: AbortSignal[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockImplementation((_url: string, init: RequestInit) => {
+      const signal = init.signal!;
+      signals.push(signal);
+      // 本物の fetch と同じく、signal の中断で本文のストリームを失敗させる。
+      const body = new ReadableStream({
+        start(controller) {
+          signal.addEventListener("abort", () => controller.error(signal.reason));
+        },
+      });
+      return Promise.resolve(new Response(body, { status: 200 }));
+    }),
+  );
+
+  const pending = syncEvent(EVENT, CONFIG);
+  await vi.advanceTimersByTimeAsync(10_000);
+  const outcome = await pending;
+  vi.useRealTimers();
+
+  expect(outcome.ok).toBe(false);
+  expect(signals[0]?.aborted).toBe(true);
+});
+
 // --- #124: サーバー側の削除への追従 -------------------------------------------
 
 test("応答の削除時刻を呼び出し側へ返す", async () => {

@@ -254,6 +254,36 @@ describe("requestCheckGeneration", () => {
       expect(signals[0]?.aborted).toBe(true);
     });
 
+    it.each([200, 400])(
+      "%i のヘッダーのあと本文が止まれば、期限で本文の読み込みも中断する",
+      async (status) => {
+        // 本文の読み込みも期限の内側（RULE-001）。中断しないと、失敗を返したあとも接続が残る。
+        vi.useFakeTimers();
+        silence("warn");
+        silence("error");
+        const signals: AbortSignal[] = [];
+        const fetchMock = vi.fn<typeof fetch>((_url, init) => {
+          const signal = init!.signal!;
+          signals.push(signal);
+          // 本物の fetch と同じく、signal の中断で本文のストリームを失敗させる。
+          const body = new ReadableStream({
+            start(controller) {
+              signal.addEventListener("abort", () => controller.error(signal.reason));
+            },
+          });
+          return Promise.resolve(new Response(body, { status }));
+        });
+
+        const pending = request(fetchMock);
+        await vi.advanceTimersByTimeAsync(150_000);
+        const result = await pending;
+        vi.useRealTimers();
+
+        expect(result).toMatchObject({ ok: false, reason: "upstream-timeout" });
+        expect(signals[0]?.aborted).toBe(true);
+      },
+    );
+
     it("送り直しの待ちも期限に含める", async () => {
       vi.useFakeTimers();
       silence("warn");

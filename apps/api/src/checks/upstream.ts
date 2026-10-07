@@ -263,6 +263,10 @@ export function requestCheckGeneration(request: UpstreamRequest): Promise<Upstre
     elapsedMs: Date.now() - startedAt,
     ...detail,
   });
+  // 送信と本文の読み込みの両方を、期限で中断するためのもの。`tryPromise` が渡す signal は
+  // fetch が応答を返した時点で役目を終えるので、そのあとの本文の読み込みを止められない。
+  // 本物の fetch は、この signal の中断で本文のストリームも失敗させる。
+  const deadline = new AbortController();
 
   /** 1回送る。状態コードを受け取れたら、それが何であっても成功とする。 */
   const send = Effect.fnUntraced(function* (
@@ -270,8 +274,7 @@ export function requestCheckGeneration(request: UpstreamRequest): Promise<Upstre
   ): Effect.fn.Return<Sent, SendError> {
     sentModels.push(model);
     const response = yield* Effect.tryPromise({
-      // `signal` は期限（下の `timeoutOrElse`）で中断されると abort される。
-      try: (signal) =>
+      try: () =>
         request.fetch(
           `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
           {
@@ -283,8 +286,8 @@ export function requestCheckGeneration(request: UpstreamRequest): Promise<Upstre
             // `UpstreamRejected` として扱う（#253）。
             redirect: "manual",
             // 応答を一括で受け取る単発のリクエストなので、壁時計で必ず切る（RULE-001）。
-            // 期限は再送をまたいで1つで、`timeoutOrElse` が持つ。
-            signal,
+            // 期限は再送をまたいで1つで、`timeoutOrElse` で中断されたら `deadline` を abort する。
+            signal: deadline.signal,
             body: JSON.stringify({
               contents: [{ parts: [{ text: request.prompt }] }],
               generationConfig: {
@@ -391,6 +394,8 @@ export function requestCheckGeneration(request: UpstreamRequest): Promise<Upstre
     Effect.flatMap((sent): Effect.Effect<UpstreamResult, UpstreamRejected | UpstreamUnreadable> =>
       sent.response.ok ? read(sent) : reject(sent),
     ),
+    // 期限で中断されたら、送信中の fetch も読み込み中の本文も止める。
+    Effect.onInterrupt(() => Effect.sync(() => deadline.abort())),
     // 再送の待ちと本文の読み込みまで含めて1つの期限にする。再送のたびに延ばすと、
     // 利用者を待たせる上限が決まらない（RULE-001）。
     Effect.timeoutOrElse({

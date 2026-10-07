@@ -182,9 +182,13 @@ const requestJson = Effect.fnUntraced(function* (
 
   // 応答が返らない場合に待ち続けない（RULE-001）。期限は送信と本文の読み込みに掛け、
   // トークン取得には掛けない。
+  //
+  // `tryPromise` が渡す signal は fetch が応答を返した時点で役目を終え、そのあとの本文の
+  // 読み込みを止められない。送信と本文の両方を止められるよう、自前の signal を渡す。
+  const deadline = new AbortController();
   return yield* Effect.gen(function* () {
     const response = yield* Effect.tryPromise({
-      try: (signal) =>
+      try: () =>
         fetch(url, {
           method: init.method,
           headers: {
@@ -195,8 +199,8 @@ const requestJson = Effect.fnUntraced(function* (
           // リダイレクトを自動追跡しない。転送先へ Authorization ヘッダごと
           // 送られると、トークンが意図しない相手に渡る（RULE-002）。
           redirect: "error",
-          // 下の `timeoutOrElse` で中断されると abort される。
-          signal,
+          // 下の `timeoutOrElse` で中断されたら abort する。
+          signal: deadline.signal,
         }),
       catch: (cause) => new NetworkFailure({ cause }),
     });
@@ -210,6 +214,8 @@ const requestJson = Effect.fnUntraced(function* (
       catch: () => new MalformedResponse({ detail: "JSON ではありません" }),
     });
   }).pipe(
+    // 期限で中断されたら、送信中の fetch も読み込み中の本文も止める。
+    Effect.onInterrupt(() => Effect.sync(() => deadline.abort())),
     Effect.timeoutOrElse({
       duration: Duration.millis(TIMEOUT_MS),
       orElse: () =>
