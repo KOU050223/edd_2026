@@ -50,7 +50,7 @@ import {
   type MapProfile,
 } from "../../learning-map-view.js";
 import { objectiveProgress, type ObjectiveProgress } from "../../learning-map.js";
-import { fetchLearningMap, mapDefinitions, mapIdOfConcept } from "../../learning-maps.js";
+import { fetchLearningMap, isMapId, mapDefinitions, mapIdOfConcept } from "../../learning-maps.js";
 import type { MasteryOverrides } from "../../overrides.js";
 import { takeLoginRetry } from "../../session.js";
 
@@ -74,11 +74,11 @@ type RecordState =
   | { kind: "failed"; message: string };
 
 /**
- * マップへ戻る先。手で作ったノードはそのマップへ（#242）、地図に無い Concept は項目一覧で
- * 詳細を開く。
+ * マップへ戻る先。手で作ったマップの画面から来たならそのマップへ、手で作ったノードは
+ * 属するマップへ（#242）、地図に無い Concept は項目一覧で詳細を開く。
  */
-function BackLink({ conceptId }: { conceptId: string }) {
-  const mapId = mapIdOfConcept(conceptId);
+function BackLink({ conceptId, from }: { conceptId: string; from: string | undefined }) {
+  const mapId = from ?? mapIdOfConcept(conceptId);
   if (mapId !== undefined) {
     return (
       <Link to="/maps/$mapId" params={{ mapId }} search={{ concept: conceptId }} className="link">
@@ -385,6 +385,7 @@ type GenerateFailure = { title: string; message: string };
 
 function CheckPage() {
   const { conceptId } = Route.useParams();
+  const { from } = Route.useSearch();
   const loaded = Route.useLoaderData();
   const { label, areaName } = loaded;
 
@@ -572,7 +573,7 @@ function CheckPage() {
   return (
     <section className="check-page">
       <p>
-        <BackLink conceptId={conceptId} />
+        <BackLink conceptId={conceptId} from={from} />
       </p>
       <h1>{label} の確認問題</h1>
       <p className="muted">
@@ -818,6 +819,7 @@ function CheckPage() {
 /** 失敗は確認問題向けの文面で伝える。ログインが要る場合などは共通の表示に任せる。 */
 function CheckError({ error }: ErrorComponentProps) {
   const { conceptId } = Route.useParams();
+  const { from } = Route.useSearch();
   const router = useRouter();
   if (
     error instanceof ApiError &&
@@ -827,7 +829,7 @@ function CheckError({ error }: ErrorComponentProps) {
   return (
     <section className="check-page">
       <p>
-        <BackLink conceptId={conceptId} />
+        <BackLink conceptId={conceptId} from={from} />
       </p>
       <section className="message error">
         <p>{checkErrorText(error)}</p>
@@ -838,6 +840,9 @@ function CheckError({ error }: ErrorComponentProps) {
 }
 
 export const Route = createFileRoute("/_framed/check/$conceptId")({
+  // 手で作ったマップの画面から来たときの戻り先（`?from=<マップの ID>`）。形の違う値は捨てる。
+  validateSearch: (search: Record<string, unknown>): { from?: string } =>
+    typeof search.from === "string" && isMapId(search.from) ? { from: search.from } : {},
   // 保存済みの組は生成のたびに変わる。戻ってきたときに古い一覧を見せない。
   staleTime: 0,
   loader: async ({ params }) => {

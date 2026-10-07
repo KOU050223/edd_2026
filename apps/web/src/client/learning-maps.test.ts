@@ -4,6 +4,8 @@ import { layoutTrees } from "./learning-map.js";
 import {
   createLearningMap,
   deleteLearningMap,
+  isMapId,
+  isOnExistingMap,
   MapLimitError,
   mapDefinitions,
   mapIdOfConcept,
@@ -130,4 +132,19 @@ test("削除の 204（本文なし）は成功として扱い、404 は対象な
       Response.json({ error: "learning map not found" }, { status: 404 }),
     ),
   ).rejects.toEqual(new ApiError("not_found"));
+});
+
+test("今あるマップに載っている手作りのノードだけを「マップに載っている」とみなす", () => {
+  // API は今あるノードにだけ表示名を付ける。
+  expect(isOnExistingMap({ conceptId: "mrust0001.owner001", label: "所有権" })).toBe(true);
+  // マップやノードを消した後の記録は表示名なしで残る。項目一覧から消さない。
+  expect(isOnExistingMap({ conceptId: "mrust0001.owner001" })).toBe(false);
+  expect(isOnExistingMap({ conceptId: "go.defer", label: "defer" })).toBe(false);
+});
+
+test("マップの ID の形だけを、確認問題からの戻り先として受け取る", () => {
+  expect(isMapId("mrust0001")).toBe(true);
+  expect(isMapId("mrust000")).toBe(false);
+  expect(isMapId("go")).toBe(false);
+  expect(isMapId("mrust0001/../x")).toBe(false);
 });

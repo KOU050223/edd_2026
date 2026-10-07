@@ -71,6 +71,22 @@ export function mapIdOfConcept(conceptId: string): string | undefined {
   return MAP_NODE_ID_PATTERN.exec(conceptId)?.[1];
 }
 
+/**
+ * 今ある自分のマップに載っている、手で作ったノードか。
+ *
+ * API の `learning-profile` は、今あるノードにだけ表示名を付けて返す（固定の一覧と利用者の
+ * マップを合わせた一覧から引く。apps/api/src/maps/catalog.ts）。マップやノードを消した後の
+ * 学習記録は表示名なしで残るので、それを「載っていない」と見分けられる。
+ */
+export function isOnExistingMap(concept: { conceptId: string; label?: string }): boolean {
+  return mapIdOfConcept(concept.conceptId) !== undefined && concept.label !== undefined;
+}
+
+/** マップの ID の形。`m` + 英小文字と数字 8 文字。 */
+export function isMapId(value: string): boolean {
+  return /^m[a-z0-9]{8}$/.test(value);
+}
+
 /** 元が見つからない参照のノードの表示名。 */
 export const MISSING_ORIGIN_LABEL = "（元の Concept が見つかりません）";
 

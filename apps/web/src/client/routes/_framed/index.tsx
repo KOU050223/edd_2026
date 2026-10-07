@@ -1,4 +1,4 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef } from "react";
 import { suggestNextConcepts } from "@gakushu-sochi/domain";
 import type { ConceptFamiliarity, MasteryStatusView } from "@gakushu-sochi/domain";
@@ -21,7 +21,7 @@ import {
   useMasteryChange,
 } from "../../learning-map-view.js";
 import { findCurrentPosition, summarizeTree } from "../../learning-map.js";
-import { mapIdOfConcept } from "../../learning-maps.js";
+import { isOnExistingMap } from "../../learning-maps.js";
 
 /**
  * 項目一覧。領域ごとのカードを並べ、詳しい地図は `/map/$language` へ譲る。
@@ -34,6 +34,7 @@ function AreaIndex() {
   const { concept: selectedId } = Route.useSearch();
   const { saveError, pending, changeStatus } = useMasteryChange();
   const goToConcept = useGoToConcept();
+  const navigate = useNavigate();
   const detail = useRef<HTMLElement>(null);
 
   // 未ログインでは観測も上書きも無いので、全部が未観測の地図になる。
@@ -43,9 +44,10 @@ function AreaIndex() {
   const selected = selectedId === undefined ? undefined : concepts.get(selectedId);
   // 定義から外れた Concept の観測は地図に載らない。件数だけ数えて見えなくすると
   // 記録が消えたように見えるので、一覧の下に並べて選べるようにする（RULE-004）。
-  // 手で作ったマップのノードは「自分のマップ」に載るので、ここには並べない（#242）。
+  // 今あるマップに載っている手作りのノードは「自分のマップ」で見られるので、ここには並べない
+  // （#242）。マップやノードを消した後の記録はどこにも載らないので、ここに残す。
   const unmapped = conceptList.filter(
-    (concept) => !AREAS.has(concept.conceptId) && mapIdOfConcept(concept.conceptId) === undefined,
+    (concept) => !AREAS.has(concept.conceptId) && !isOnExistingMap(concept),
   );
   // 件数はサーバーの記録を正とする。記録は Concept が増えても消えないので、
   // いま全件 確認済みかどうかとは一致しないことがある（RULE-004 の理由で理由も出す）。
@@ -205,7 +207,9 @@ function AreaIndex() {
             <button
               className="link"
               key={concept.conceptId}
-              onClick={() => goToConcept(concept.conceptId)}
+              // どの地図にも載らないので、この画面で詳細を開く。手で作ったノードの ID でも
+              // マップはもう無いので、マップの画面へは送らない。
+              onClick={() => void navigate({ to: "/", search: { concept: concept.conceptId } })}
             >
               {nameOf(concept)}
             </button>

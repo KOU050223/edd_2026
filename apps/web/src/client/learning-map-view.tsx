@@ -462,6 +462,7 @@ export function ConceptDetail({
   objectives: definedObjectives,
   objectivesNote,
   note,
+  fromMapId,
   links,
   concepts,
   isCurrent,
@@ -480,6 +481,11 @@ export function ConceptDetail({
   objectivesNote?: string;
   /** 見出しの下に添える注記（参照のノードなど）。 */
   note?: string;
+  /**
+   * 手で作ったマップの画面から開いたなら、そのマップの ID。確認問題から戻る先にする。
+   * 参照のノードは元の Concept と同じ ID なので、ID だけでは来たマップが分からない（#242）。
+   */
+  fromMapId?: string;
   links: ConceptLinks | undefined;
   concepts: ReadonlyMap<string, OverlaidConcept>;
   isCurrent: boolean;
@@ -576,6 +582,7 @@ export function ConceptDetail({
           <Link
             to="/check/$conceptId"
             params={{ conceptId: concept.conceptId }}
+            search={fromMapId === undefined ? {} : { from: fromMapId }}
             preload={false}
             className="check-link"
           >

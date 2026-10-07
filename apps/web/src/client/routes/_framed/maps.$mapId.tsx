@@ -148,6 +148,7 @@ function LearningMapPage() {
                   : undefined
               }
               note={referenceNote}
+              fromMapId={mapId}
               links={links.get(selected.conceptId)}
               concepts={concepts}
               isCurrent={selected.conceptId === current}
