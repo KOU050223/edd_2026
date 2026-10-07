@@ -24,6 +24,7 @@ import { Route as FramedSettingsIndexRouteImport } from './routes/_framed/settin
 import { Route as FramedSettingsBillingRouteImport } from './routes/_framed/settings/billing'
 import { Route as FramedSettingsDataRouteImport } from './routes/_framed/settings/data'
 import { Route as FramedSettingsUsageRouteImport } from './routes/_framed/settings/usage'
+import { Route as FramedMapsMapIdEditRouteImport } from './routes/_framed/maps.$mapId_.edit'
 
 const FramedRouteRoute = FramedRouteRouteImport.update({
   id: '/_framed',
@@ -100,6 +101,11 @@ const FramedSettingsUsageRoute = FramedSettingsUsageRouteImport.update({
   path: '/usage',
   getParentRoute: () => FramedSettingsRouteRoute,
 } as any)
+const FramedMapsMapIdEditRoute = FramedMapsMapIdEditRouteImport.update({
+  id: '/maps/$mapId_/edit',
+  path: '/maps/$mapId/edit',
+  getParentRoute: () => FramedRouteRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof FramedIndexRoute
@@ -116,6 +122,7 @@ export interface FileRoutesByFullPath {
   '/history/': typeof FramedHistoryIndexRoute
   '/maps/': typeof FramedMapsIndexRoute
   '/settings/': typeof FramedSettingsIndexRoute
+  '/maps/$mapId/edit': typeof FramedMapsMapIdEditRoute
 }
 export interface FileRoutesByTo {
   '/login-failed': typeof LoginFailedRoute
@@ -131,6 +138,7 @@ export interface FileRoutesByTo {
   '/history': typeof FramedHistoryIndexRoute
   '/maps': typeof FramedMapsIndexRoute
   '/settings': typeof FramedSettingsIndexRoute
+  '/maps/$mapId/edit': typeof FramedMapsMapIdEditRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -149,6 +157,7 @@ export interface FileRoutesById {
   '/_framed/history/': typeof FramedHistoryIndexRoute
   '/_framed/maps/': typeof FramedMapsIndexRoute
   '/_framed/settings/': typeof FramedSettingsIndexRoute
+  '/_framed/maps/$mapId_/edit': typeof FramedMapsMapIdEditRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -167,6 +176,7 @@ export interface FileRouteTypes {
     | '/history/'
     | '/maps/'
     | '/settings/'
+    | '/maps/$mapId/edit'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/login-failed'
@@ -182,6 +192,7 @@ export interface FileRouteTypes {
     | '/history'
     | '/maps'
     | '/settings'
+    | '/maps/$mapId/edit'
   id:
     | '__root__'
     | '/_framed'
@@ -199,6 +210,7 @@ export interface FileRouteTypes {
     | '/_framed/history/'
     | '/_framed/maps/'
     | '/_framed/settings/'
+    | '/_framed/maps/$mapId_/edit'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -313,6 +325,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof FramedSettingsUsageRouteImport
       parentRoute: typeof FramedSettingsRouteRoute
     }
+    '/_framed/maps/$mapId_/edit': {
+      id: '/_framed/maps/$mapId_/edit'
+      path: '/maps/$mapId/edit'
+      fullPath: '/maps/$mapId/edit'
+      preLoaderRoute: typeof FramedMapsMapIdEditRouteImport
+      parentRoute: typeof FramedRouteRoute
+    }
   }
 }
 
@@ -343,6 +362,7 @@ interface FramedRouteRouteChildren {
   FramedMapsMapIdRoute: typeof FramedMapsMapIdRoute
   FramedHistoryIndexRoute: typeof FramedHistoryIndexRoute
   FramedMapsIndexRoute: typeof FramedMapsIndexRoute
+  FramedMapsMapIdEditRoute: typeof FramedMapsMapIdEditRoute
 }
 
 const FramedRouteRouteChildren: FramedRouteRouteChildren = {
@@ -355,6 +375,7 @@ const FramedRouteRouteChildren: FramedRouteRouteChildren = {
   FramedMapsMapIdRoute: FramedMapsMapIdRoute,
   FramedHistoryIndexRoute: FramedHistoryIndexRoute,
   FramedMapsIndexRoute: FramedMapsIndexRoute,
+  FramedMapsMapIdEditRoute: FramedMapsMapIdEditRoute,
 }
 
 const FramedRouteRouteWithChildren = FramedRouteRoute._addFileChildren(

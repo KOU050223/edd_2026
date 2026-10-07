@@ -1,14 +1,105 @@
-import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate, useRouter } from "@tanstack/react-router";
 import { useRef, useState } from "react";
 import { ApiError, createSubmitGuard } from "../../api.js";
 import { toErrorText } from "../../errors.js";
-import { deleteLearningMap, fetchLearningMaps, MAP_LIMITS } from "../../learning-maps.js";
+import {
+  createLearningMap,
+  deleteLearningMap,
+  fetchLearningMaps,
+  MAP_LIMITS,
+  MapInputError,
+  MapLimitError,
+} from "../../learning-maps.js";
 import { takeLoginRetry } from "../../session.js";
+
+/** マップを作る。作るのは題名と説明だけで、ノードは作ったあとの編集画面で足す。 */
+function CreateMapForm({ full }: { full: boolean }) {
+  const navigate = useNavigate();
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState<string>();
+  const guard = useRef(createSubmitGuard());
+
+  const create = () => {
+    // 送信中は入口で弾く（RULE-007）。
+    if (guard.current.isRunning("create") || title.trim() === "") return;
+    setError(undefined);
+    setCreating(true);
+    void guard.current
+      .run("create", async () => {
+        try {
+          const { map } = await createLearningMap({
+            title: title.trim(),
+            description: description.trim(),
+          });
+          await navigate({ to: "/maps/$mapId/edit", params: { mapId: map.id } });
+        } catch (value: unknown) {
+          if (value instanceof ApiError && value.kind === "session_expired") {
+            window.location.href = "/login";
+            return;
+          }
+          setError(
+            value instanceof MapLimitError
+              ? `マップは ${String(MAP_LIMITS.maps)} 個までです。使っていないマップを消してから作ってください。`
+              : value instanceof MapInputError
+                ? `入力を受け付けられませんでした（${value.message}）。`
+                : toErrorText(value),
+          );
+        }
+      })
+      .finally(() => setCreating(false));
+  };
+
+  return (
+    <form
+      className="map-create"
+      onSubmit={(event) => {
+        event.preventDefault();
+        create();
+      }}
+    >
+      <h2>マップを作る</h2>
+      <label>
+        題名
+        <input
+          value={title}
+          maxLength={MAP_LIMITS.title}
+          required
+          disabled={creating || full}
+          onChange={(event) => setTitle(event.target.value)}
+        />
+      </label>
+      <label>
+        説明（任意）
+        <textarea
+          value={description}
+          maxLength={MAP_LIMITS.description}
+          rows={2}
+          disabled={creating || full}
+          onChange={(event) => setDescription(event.target.value)}
+        />
+      </label>
+      <button type="submit" disabled={creating || full || title.trim() === ""}>
+        {creating ? "作成中…" : "作ってノードを足す"}
+      </button>
+      {full && (
+        <p className="muted">
+          マップは {MAP_LIMITS.maps} 個までです。使っていないマップを消すと作れます。
+        </p>
+      )}
+      {error && (
+        <p className="error-text" role="alert">
+          {error}
+        </p>
+      )}
+    </form>
+  );
+}
 
 /**
  * 自分が手で作った学習マップの一覧（Issue #242）。マップは最初は作成者だけのもの。
- *
- * 作成と編集は編集画面で行う（#242 の後続）。ここでは一覧・表示への導線・削除を持つ。
+ * 作成・表示への導線・削除を持つ。
  */
 function MapList() {
   const { maps } = Route.useLoaderData();
@@ -62,6 +153,7 @@ function MapList() {
           <p>マップの削除に失敗しました：{deleteError}</p>
         </section>
       )}
+      <CreateMapForm full={maps.length >= MAP_LIMITS.maps} />
       {maps.length === 0 ? (
         <p className="hint">まだマップがありません。</p>
       ) : (

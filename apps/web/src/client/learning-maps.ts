@@ -164,23 +164,27 @@ export class MapLimitError extends Error {
   }
 }
 
+/** 入力が API の検証で拒まれた。`message` は API の定型文（入力値を含まない）。 */
+export class MapInputError extends Error {}
+
 /**
- * 題名と説明だけでマップを作る。ノードは編集画面で足す。
- *
- * 上限の 409 は、汎用の失敗（「取得に失敗」）では理由が伝わらないので、
- * 本文を読んで {@link MapLimitError} に分ける（確認問題の生成と同じく `writeErrorOf` を使う）。
+ * マップの書き込み。失敗の本文を読み、上限（409）と入力の誤り（400）を汎用の失敗と分ける。
+ * 汎用の失敗（「取得に失敗」）では、利用者が何を直せばよいか分からないため。
+ * それ以外は既存の書き込みと同じ規則（`writeErrorOf`）で分ける。
  */
-export async function createLearningMap(
-  input: { title: string; description: string },
-  fetcher: typeof fetch = fetch,
-  timeoutMs = 10_000,
-): Promise<{ map: LearningMapView }> {
+async function sendMapRequest<T>(
+  method: "POST" | "PUT",
+  path: string,
+  payload: unknown,
+  fetcher: typeof fetch,
+  timeoutMs: number,
+): Promise<T> {
   let response: Response;
   try {
-    response = await fetcher(LEARNING_MAPS_PATH, {
-      method: "POST",
+    response = await fetcher(path, {
+      method,
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(input),
+      body: JSON.stringify(payload),
       cache: "no-store",
       signal: AbortSignal.timeout(timeoutMs),
     });
@@ -188,18 +192,90 @@ export async function createLearningMap(
     throw new ApiError("unavailable");
   }
   if (!response.ok) {
+    // API の 4xx は Worker の onError で `{ error }` の JSON になる。読めなければ空として扱う。
     const body = (await response.json().catch(() => ({}))) as { error?: unknown };
     if (response.status === 409 && body.error === "learning_map_limit_reached") {
       throw new MapLimitError();
     }
+    if (response.status === 400 && typeof body.error === "string") {
+      throw new MapInputError(body.error);
+    }
     throw writeErrorOf(response.status, body);
   }
   try {
-    return (await response.json()) as { map: LearningMapView };
+    return (await response.json()) as T;
   } catch {
     // 2xx でも本文が読めなければ失敗として扱う（RULE-004）。
     throw new ApiError("unavailable");
   }
+}
+
+/** 題名と説明だけでマップを作る。ノードは編集画面で足す。 */
+export function createLearningMap(
+  input: { title: string; description: string },
+  fetcher: typeof fetch = fetch,
+  timeoutMs = 10_000,
+): Promise<{ map: LearningMapView }> {
+  return sendMapRequest("POST", LEARNING_MAPS_PATH, input, fetcher, timeoutMs);
+}
+
+/**
+ * マップの題名・説明・ノード・線をまとめて置き換える。送らなかったノードは消える。
+ * 応答の `assigned` は新しいノードの仮の番号と、振った Concept ID の対応。
+ */
+export function saveLearningMap(
+  mapId: string,
+  content: unknown,
+  fetcher: typeof fetch = fetch,
+  timeoutMs = 10_000,
+): Promise<{ map: LearningMapView; assigned: Record<string, string> }> {
+  return sendMapRequest(
+    "PUT",
+    `${LEARNING_MAPS_PATH}/${encodeURIComponent(mapId)}`,
+    content,
+    fetcher,
+    timeoutMs,
+  );
+}
+
+/**
+ * 1ノードの「理解すること」をまとめて置き換える。既存の項目は `id` を付けて送り、
+ * 新しい項目は省く（API が振る）。送らなかった項目と、その項目を狙った確認問題は消える。
+ */
+export function saveObjectives(
+  mapId: string,
+  conceptId: string,
+  objectives: readonly { id?: string; label: string }[],
+  fetcher: typeof fetch = fetch,
+  timeoutMs = 10_000,
+): Promise<{ objectives: LearningObjectiveView[] }> {
+  return sendMapRequest(
+    "PUT",
+    `${LEARNING_MAPS_PATH}/${encodeURIComponent(mapId)}/nodes/${encodeURIComponent(conceptId)}/objectives`,
+    { objectives },
+    fetcher,
+    timeoutMs,
+  );
+}
+
+/** 自分のマップのノード（参照ではないもの）。参照で足す候補に使う。 */
+export interface OwnMapConcept {
+  id: string;
+  label: string;
+  summary: string;
+  mapId: string;
+  mapTitle: string;
+}
+
+/**
+ * 自分のマップのノードを、更新の新しいマップから最大 100 件。
+ * VS Code 向けの一覧（`GET /v1/learning-maps:concepts`）を、参照の候補にも使う。
+ */
+export function fetchOwnMapConcepts(
+  fetcher: typeof fetch = fetch,
+  retry: boolean | number = false,
+): Promise<{ concepts: OwnMapConcept[] }> {
+  return requestJson(`${LEARNING_MAPS_PATH}:concepts`, fetcher, retry);
 }
 
 /** マップを消す。ノード・線・項目と、そのノードの確認問題も消える（#242）。 */
