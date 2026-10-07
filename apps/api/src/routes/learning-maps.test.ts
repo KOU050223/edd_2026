@@ -184,6 +184,24 @@ test("他の利用者のマップは取得・編集・削除とも 404 になる
   );
 });
 
+test("前提を2つ持つノードは保存しない（#242、前提は1つまで）", async () => {
+  const response = await send("POST", "/v1/learning-maps", "token-a", {
+    title: "t",
+    nodes: [
+      { kind: "own", ref: "new:a", label: "a", summary: "s" },
+      { kind: "own", ref: "new:b", label: "b", summary: "s" },
+      { kind: "own", ref: "new:c", label: "c", summary: "s" },
+    ],
+    edges: [
+      { from: "new:a", to: "new:c" },
+      { from: "new:b", to: "new:c" },
+    ],
+  });
+  expect(response.status).toBe(400);
+  expect(await response.text()).toBe("a node must have at most one prerequisite: new:c");
+  expect(store.learningMaps.size).toBe(0);
+});
+
 test("線が循環すると保存しない", async () => {
   const response = await send("POST", "/v1/learning-maps", "token-a", {
     ...TWO_NODES,
@@ -248,8 +266,9 @@ test("既存の Concept を参照で置くと、元の表示名・概要・項�
       { kind: "reference", conceptId: otherNodeId },
       { kind: "own", ref: "new:x", label: "後片付け", summary: "資源を閉じる。" },
     ],
+    // 参照のノードどうし・参照から手で作ったノードへも線を引ける（前提は1つまで）。
     edges: [
-      { from: "go.defer", to: "new:x" },
+      { from: "go.defer", to: otherNodeId },
       { from: otherNodeId, to: "new:x" },
     ],
   });

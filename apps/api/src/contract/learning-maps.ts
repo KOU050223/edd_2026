@@ -15,10 +15,10 @@ export const MAX_MAPS_PER_USER = 20;
 /** 1マップのノード数。 */
 export const MAX_NODES_PER_MAP = 50;
 /**
- * 1マップの線の数。木の形なら線はノード数より少し多い程度だが、
- * 合流（前提が複数あるノード）を許すので、ノード数の4倍を上限にする。
+ * 1マップの線の数（入力の大きさの上限）。前提は1つのノードにつき1つまで（#242 の
+ * 2026-10-07 の決定）なので、実際に保存できる線はノード数 − 1 本までになる。
  */
-export const MAX_EDGES_PER_MAP = MAX_NODES_PER_MAP * 4;
+export const MAX_EDGES_PER_MAP = MAX_NODES_PER_MAP;
 export const MAX_MAP_TITLE_LENGTH = 80;
 export const MAX_MAP_DESCRIPTION_LENGTH = 400;
 export const MAX_NODE_LABEL_LENGTH = 40;

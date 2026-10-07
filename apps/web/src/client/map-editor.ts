@@ -4,8 +4,12 @@
  * 画面は下書きを state に持ち、ここの関数で作り直す。保存のときに API の形
  * （`PUT /v1/learning-maps/:id`）へ変える。描画に依存しないので単体テストできる。
  *
- * 線は持たず、ノードごとの「前提」で持つ。画面は前提をチェックボックスで選ぶので、
+ * 線は持たず、ノードごとの「前提」で持つ。画面はノードごとに前提を選ぶので、
  * この形のほうが扱いやすい。保存のときに「前提 → このノード」の線へ直す。
+ *
+ * 前提は1つのノードにつき1つまで（親が1つの純粋な木。固定の言語別マップと同じ形。
+ * #242 の 2026-10-07 の決定）。配列で持つのは、API の線と、前提を複数持つ古い保存を
+ * そのまま読めるようにするため。
  */
 
 import type { Concept as DomainConcept } from "@gakushu-sochi/domain";
@@ -16,8 +20,6 @@ export const EDITOR_LIMITS = {
   title: 80,
   description: 400,
   nodes: 50,
-  /** 線（前提のつながり）の数。合流を許すので、ノード数の4倍（API と同じ）。 */
-  edges: 200,
   label: 40,
   summary: 200,
   objectives: 8,
@@ -144,14 +146,17 @@ function descendantsOf(draft: MapDraft, ref: string): Set<string> {
 }
 
 /**
- * 前提を付け外しする。循環する組み合わせは付けない（候補にも出さないが、入口でも弾く）。
+ * 前提を1つに決める。`undefined` なら前提なし（木の根）。
+ * 循環する組み合わせは付けない（候補にも出さないが、入口でも弾く）。
  */
-export function togglePrerequisite(draft: MapDraft, ref: string, prerequisite: string): MapDraft {
-  const node = draft.nodes.find((candidate) => candidate.ref === ref);
-  if (node === undefined) return draft;
-  const has = node.prerequisites.includes(prerequisite);
+export function setPrerequisite(
+  draft: MapDraft,
+  ref: string,
+  prerequisite: string | undefined,
+): MapDraft {
+  if (!draft.nodes.some((candidate) => candidate.ref === ref)) return draft;
   if (
-    !has &&
+    prerequisite !== undefined &&
     !prerequisiteCandidates(draft, ref).some((candidate) => candidate.ref === prerequisite)
   ) {
     return draft;
@@ -160,12 +165,7 @@ export function togglePrerequisite(draft: MapDraft, ref: string, prerequisite: s
     ...draft,
     nodes: draft.nodes.map((candidate) =>
       candidate.ref === ref
-        ? {
-            ...candidate,
-            prerequisites: has
-              ? candidate.prerequisites.filter((value) => value !== prerequisite)
-              : [...candidate.prerequisites, prerequisite],
-          }
+        ? { ...candidate, prerequisites: prerequisite === undefined ? [] : [prerequisite] }
         : candidate,
     ),
   };
@@ -184,15 +184,13 @@ export function draftProblems(draft: MapDraft): string[] {
   if (draft.nodes.length > EDITOR_LIMITS.nodes) {
     problems.push(`ノードは ${String(EDITOR_LIMITS.nodes)} 個までです。`);
   }
-  const edges = draft.nodes.reduce((total, node) => total + node.prerequisites.length, 0);
-  if (edges > EDITOR_LIMITS.edges) {
-    problems.push(
-      `前提のつながりは ${String(EDITOR_LIMITS.edges)} 本までです（今は ${String(edges)} 本）。`,
-    );
-  }
   draft.nodes.forEach((node, index) => {
-    if (node.kind !== "own") return;
     const name = node.label.trim() || `${String(index + 1)} 番目のノード`;
+    // 前提を複数持つのは、決定（前提は1つまで）より前に保存したマップだけ。
+    if (node.prerequisites.length > 1) {
+      problems.push(`${name}：前提は1つまでです。1つ選び直してください。`);
+    }
+    if (node.kind !== "own") return;
     if (node.label.trim() === "") problems.push(`${name}：表示名を入力してください。`);
     if (node.label.trim().length > EDITOR_LIMITS.label) {
       problems.push(`${name}：表示名は ${String(EDITOR_LIMITS.label)} 文字までです。`);

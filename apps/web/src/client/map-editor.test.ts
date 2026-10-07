@@ -18,7 +18,7 @@ import {
   removeNode,
   toContentRequest,
   toObjectivesRequest,
-  togglePrerequisite,
+  setPrerequisite,
   updateOwnNode,
   type MapDraft,
 } from "./map-editor.js";
@@ -111,23 +111,34 @@ test("前提の候補から、自分と、自分を前提に辿れるノード�
   // 変数 → 所有権。所有権 → 借用 を足す。
   let draft = draftFromMap(MAP);
   const added = addOwnNode(draft);
-  draft = togglePrerequisite(added.draft, added.ref, OWNER);
+  draft = setPrerequisite(added.draft, added.ref, OWNER);
 
   // 変数の前提に、所有権・借用（どちらも変数を前提に辿れる）は選べない。
   expect(prerequisiteCandidates(draft, BINDING).map((node) => node.ref)).toEqual([DEFER]);
   // 候補に無い組み合わせは、入口でも付けない。
-  expect(togglePrerequisite(draft, BINDING, added.ref)).toBe(draft);
-  // 付けてある前提は外せる。
+  expect(setPrerequisite(draft, BINDING, added.ref)).toBe(draft);
+  // 前提を外す（木の根にする）。
   expect(
-    togglePrerequisite(draft, OWNER, BINDING).nodes.find((node) => node.ref === OWNER)
+    setPrerequisite(draft, OWNER, undefined).nodes.find((node) => node.ref === OWNER)
       ?.prerequisites,
   ).toEqual([]);
 });
 
-test("合流（前提を2つ持つ）は付けられる", () => {
-  const draft = togglePrerequisite(draftFromMap(MAP), OWNER, DEFER);
-  expect(draft.nodes.find((node) => node.ref === OWNER)?.prerequisites).toEqual([BINDING, DEFER]);
+test("前提は1つに決める。選び直すと前の前提は外れる", () => {
+  const draft = setPrerequisite(draftFromMap(MAP), OWNER, DEFER);
+  expect(draft.nodes.find((node) => node.ref === OWNER)?.prerequisites).toEqual([DEFER]);
+  expect(toContentRequest(draft).edges).toEqual([{ from: DEFER, to: OWNER }]);
   expect(layoutTrees(previewDefinitions(draft))).toHaveLength(1);
+});
+
+test("前提を2つ以上持つ古い保存は、選び直すまで保存できない", () => {
+  const legacy: LearningMapView = {
+    ...MAP,
+    edges: [...MAP.edges, { from: DEFER, to: OWNER }],
+  };
+  const draft = draftFromMap(legacy);
+  expect(draftProblems(draft)).toEqual(["所有権：前提は1つまでです。1つ選び直してください。"]);
+  expect(draftProblems(setPrerequisite(draft, OWNER, DEFER))).toEqual([]);
 });
 
 test("保存できない理由を挙げる（空の題名・表示名・概要、上限）", () => {
@@ -171,22 +182,6 @@ test("保存する本文では、前後の空白を落とす", () => {
 test("プレビューは空の表示名を「（無題）」で出す", () => {
   const added = addOwnNode(draftFromMap(MAP));
   expect(previewDefinitions(added.draft).at(-1)?.label).toBe("（無題）");
-});
-
-test("前提のつながりが API の上限（200 本）を超えたら保存できない", () => {
-  // 21 ノードで、前のノードすべてを前提にする（循環はしない）。21 * 20 / 2 = 210 本。
-  let draft: MapDraft = { title: "t", description: "", nodes: [] };
-  for (let i = 0; i < 21; i++) {
-    const added = addOwnNode(draft);
-    draft = updateOwnNode(added.draft, added.ref, { label: `n${String(i)}`, summary: "s" });
-    for (const before of draft.nodes.slice(0, -1)) {
-      draft = togglePrerequisite(draft, added.ref, before.ref);
-    }
-  }
-  expect(toContentRequest(draft).edges).toHaveLength(210);
-  expect(draftProblems(draft)).toEqual([
-    `前提のつながりは ${String(EDITOR_LIMITS.edges)} 本までです（今は 210 本）。`,
-  ]);
 });
 
 test("「理解すること」の下書きの変更・消える項目・保存できない理由・本文", () => {

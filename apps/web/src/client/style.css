@@ -1384,7 +1384,8 @@ button.link.danger {
 }
 .map-create input,
 .map-create textarea,
-.editor input:not([type="checkbox"]),
+.editor input,
+.editor select,
 .editor textarea {
   padding: 8px 10px;
   border: 1px solid #cbd5e1;
@@ -1473,11 +1474,6 @@ button.link.danger {
   font-weight: 600;
   padding: 0;
   margin-bottom: 4px;
-}
-.editor-check {
-  display: flex;
-  align-items: center;
-  gap: 6px;
 }
 .editor-objectives ol {
   padding-left: 20px;

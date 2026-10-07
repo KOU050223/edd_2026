@@ -37,7 +37,7 @@ test("識別子が既存のノードと重なったら引き直す", () => {
   expect(result).toMatchObject({ ok: true, assigned: { "new:b": "m1.bbbbbbbb" } });
 });
 
-test("合流（前提が複数）は循環ではない", () => {
+test("1つのノードから枝分かれする木は保存できる", () => {
   const result = resolveMapContent(
     "m1",
     {
@@ -45,9 +45,8 @@ test("合流（前提が複数）は循環ではない", () => {
       description: "",
       nodes: [own("new:a"), own("new:b"), own("new:c")],
       edges: [
-        { from: "new:a", to: "new:c" },
-        { from: "new:b", to: "new:c" },
         { from: "new:a", to: "new:b" },
+        { from: "new:a", to: "new:c" },
       ],
     },
     new Set(),
@@ -81,6 +80,15 @@ test.each([
       { from: "new:a", to: "new:b" },
     ],
     "duplicate edge: new:a -> new:b",
+  ],
+  [
+    "前提が2つあるノード",
+    [own("new:a"), own("new:b"), own("new:c")],
+    [
+      { from: "new:a", to: "new:c" },
+      { from: "new:b", to: "new:c" },
+    ],
+    "a node must have at most one prerequisite: new:c",
   ],
   ["重複したノード", [own("new:a"), own("new:a")], [], "duplicate node: new:a"],
 ])("%s は拒否する", (_name, nodes, edges, error) => {

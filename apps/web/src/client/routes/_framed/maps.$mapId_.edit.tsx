@@ -27,7 +27,7 @@ import {
   removedSavedNodes,
   removeNode,
   toContentRequest,
-  togglePrerequisite,
+  setPrerequisite,
   updateOwnNode,
   objectiveItemsFrom,
   objectiveProblems,
@@ -275,24 +275,32 @@ function NodeEditor({
               ここでは書き換えません。理解度も元の Concept のものが出ます。
             </p>
           )}
-          <fieldset>
-            <legend>前提（先に学ぶノード）</legend>
-            {candidates.length === 0 ? (
-              <p className="muted">前提にできるノードがありません。</p>
-            ) : (
-              candidates.map((candidate) => (
-                <label key={candidate.ref} className="editor-check">
-                  <input
-                    type="checkbox"
-                    checked={node.prerequisites.includes(candidate.ref)}
-                    disabled={disabled}
-                    onChange={() => onChange(togglePrerequisite(draft, node.ref, candidate.ref))}
-                  />
+          <label>
+            前提（先に学ぶノード。1つまで）
+            <select
+              // 前提を複数持つ古い保存は、選び直すまで「選び直す」を出す。
+              value={node.prerequisites.length === 1 ? node.prerequisites[0] : ""}
+              disabled={disabled}
+              onChange={(event) =>
+                onChange(setPrerequisite(draft, node.ref, event.target.value || undefined))
+              }
+            >
+              <option value="">
+                {node.prerequisites.length > 1 ? "（1つ選び直す）" : "なし（最初に学ぶ）"}
+              </option>
+              {candidates.map((candidate) => (
+                <option key={candidate.ref} value={candidate.ref}>
                   {nameOfRef(candidate.ref)}
-                </label>
-              ))
-            )}
-          </fieldset>
+                </option>
+              ))}
+            </select>
+          </label>
+          {node.prerequisites.length > 1 && (
+            <p className="muted">
+              前提が {node.prerequisites.length} 個あります（
+              {node.prerequisites.map(nameOfRef).join("・")}）。1つ選び直してください。
+            </p>
+          )}
           {node.kind === "own" &&
             (objectives === undefined ? (
               <p className="muted">「理解すること」は、マップを保存すると書けるようになります。</p>
