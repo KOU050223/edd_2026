@@ -130,6 +130,36 @@ test("ネットワークエラーなら例外を投げず失敗を返す", async
   expect((outcome as { reason: string }).reason).toContain("fetch failed");
 });
 
+test("同意の確認が例外を投げても、例外にせず失敗を返す", async () => {
+  // 同期の失敗が質問フローを止めてはならない（このファイル冒頭の約束）。
+  const fetchMock = vi.fn();
+  vi.stubGlobal("fetch", fetchMock);
+
+  const outcome = await syncEvent(EVENT, {
+    ...CONFIG,
+    canSend: () => {
+      throw new Error("consent store is broken");
+    },
+  });
+
+  expect(outcome).toEqual({
+    ok: false,
+    reason: expect.stringContaining("consent store is broken"),
+  });
+  expect(fetchMock).not.toHaveBeenCalled();
+});
+
+test("イベントを JSON にできなくても、例外にせず失敗を返す", async () => {
+  const fetchMock = vi.fn();
+  vi.stubGlobal("fetch", fetchMock);
+  const unserializable = { ...EVENT, extra: 1n } as unknown as LearningEvent;
+
+  const outcome = await syncEvent(unserializable, CONFIG);
+
+  expect(outcome).toEqual({ ok: false, reason: expect.stringContaining("BigInt") });
+  expect(fetchMock).not.toHaveBeenCalled();
+});
+
 test("認証エラーならネットワークエラーではなく再ログインを案内する", async () => {
   const outcome = await syncEvent(EVENT, {
     ...CONFIG,

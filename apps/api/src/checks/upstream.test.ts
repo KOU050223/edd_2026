@@ -249,7 +249,12 @@ describe("requestCheckGeneration", () => {
       expect(result).toMatchObject({
         ok: false,
         reason: "upstream-timeout",
-        trace: { attempts: 1, statuses: [] },
+        trace: {
+          attempts: 1,
+          statuses: [],
+          // fetch の `AbortSignal.timeout` で切れたときと同じ書式にする。
+          cause: "TimeoutError: no response within 150000 ms",
+        },
       });
       expect(signals[0]?.aborted).toBe(true);
     });

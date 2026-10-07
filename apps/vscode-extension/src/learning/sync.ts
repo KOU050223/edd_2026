@@ -227,6 +227,25 @@ const requestJson = Effect.fnUntraced(function* (
 });
 
 /**
+ * Effect を、例外を投げない Promise にする（このファイル冒頭の約束）。
+ *
+ * 型付きの失敗は理由の文にする。想定外の例外（`canSend` や本文の組み立てが投げた、など）も
+ * 「ネットワークエラー」として返す。書き直し前は関数全体を try/catch で包み、同じ扱いをしていた。
+ */
+function runToOutcome<A>(
+  program: Effect.Effect<A, RequestFailure>,
+): Promise<A | { ok: false; reason: string }> {
+  return Effect.runPromise(
+    program.pipe(
+      Effect.catch((failure) => Effect.succeed({ ok: false as const, reason: reasonOf(failure) })),
+      Effect.catchDefect((defect) =>
+        Effect.succeed({ ok: false as const, reason: `ネットワークエラー: ${String(defect)}` }),
+      ),
+    ),
+  );
+}
+
+/**
  * 1件の学習イベントをAPIサーバーへ送る。
  *
  * `POST /v1/learning-events:sync` は複数件をまとめて送れるバッチAPIだが、
@@ -234,45 +253,46 @@ const requestJson = Effect.fnUntraced(function* (
  * まとめ送りは、送信頻度が実際に問題になってから最適化する。
  */
 export function syncEvent(event: LearningEvent, config: SyncConfig): Promise<SyncOutcome> {
-  const program = requestJson(config, "/v1/learning-events:sync", {
-    method: "POST",
-    body: JSON.stringify({ clientId: config.clientId, events: [event] }),
-  }).pipe(
-    Effect.flatMap((json) => {
-      const body = json as Partial<SyncResponseBody> | null;
-      if (!Array.isArray(body?.results)) {
-        return Effect.fail(new MalformedResponse({ detail: "results が配列ではありません" }));
-      }
-      // あるのに数値でも null でもない値は、サーバー応答の形が契約と違うという
-      // ことなので黙って無視しない（RULE-004）。フィールド自体が無い古い
-      // サーバーとの後方互換だけは残す。
-      const resetAt = body.historyResetAtMs;
-      if (resetAt !== undefined && resetAt !== null && typeof resetAt !== "number") {
-        return Effect.fail(
-          new MalformedResponse({ detail: "historyResetAtMs が数値ではありません" }),
-        );
-      }
-      const result = body.results[0];
-      if (!result) {
-        // 件数が合わない応答はサーバー側のバグである。黙って「成功」扱いにしない。
-        return Effect.fail(
-          new MalformedResponse({ detail: "このイベントの結果が含まれていません" }),
-        );
-      }
-      return Effect.succeed<SyncOutcome>({
-        ok: true,
-        status: result.status,
-        reason: result.reason,
-        historyResetAtMs: resetAt ?? null,
-        droppedByReset: result.droppedByReset === true,
-      });
+  // 本文の組み立て（JSON.stringify）も Effect の内側で行い、投げても失敗として返す。
+  const request = Effect.suspend(() =>
+    requestJson(config, "/v1/learning-events:sync", {
+      method: "POST",
+      body: JSON.stringify({ clientId: config.clientId, events: [event] }),
     }),
-    // 例外を投げない約束（このファイル冒頭）を、失敗の型を全部ここで受けて守る。
-    Effect.catch((failure) =>
-      Effect.succeed<SyncOutcome>({ ok: false, reason: reasonOf(failure) }),
+  );
+  return runToOutcome(
+    request.pipe(
+      Effect.flatMap((json) => {
+        const body = json as Partial<SyncResponseBody> | null;
+        if (!Array.isArray(body?.results)) {
+          return Effect.fail(new MalformedResponse({ detail: "results が配列ではありません" }));
+        }
+        // あるのに数値でも null でもない値は、サーバー応答の形が契約と違うという
+        // ことなので黙って無視しない（RULE-004）。フィールド自体が無い古い
+        // サーバーとの後方互換だけは残す。
+        const resetAt = body.historyResetAtMs;
+        if (resetAt !== undefined && resetAt !== null && typeof resetAt !== "number") {
+          return Effect.fail(
+            new MalformedResponse({ detail: "historyResetAtMs が数値ではありません" }),
+          );
+        }
+        const result = body.results[0];
+        if (!result) {
+          // 件数が合わない応答はサーバー側のバグである。黙って「成功」扱いにしない。
+          return Effect.fail(
+            new MalformedResponse({ detail: "このイベントの結果が含まれていません" }),
+          );
+        }
+        return Effect.succeed<SyncOutcome>({
+          ok: true,
+          status: result.status,
+          reason: result.reason,
+          historyResetAtMs: resetAt ?? null,
+          droppedByReset: result.droppedByReset === true,
+        });
+      }),
     ),
   );
-  return Effect.runPromise(program);
 }
 
 /** `DELETE /v1/learning-events` の応答（apps/api/src/routes/learning-data.ts の DeleteLearningEventsResponse と対応）。 */
@@ -297,21 +317,19 @@ export type DeleteOutcome =
 export function deleteServerLearningData(
   config: Pick<SyncConfig, "apiBaseUrl" | "apiToken">,
 ): Promise<DeleteOutcome> {
-  const program = requestJson(config, "/v1/learning-events", { method: "DELETE" }).pipe(
-    Effect.flatMap((json) => {
-      const body = json as Partial<DeleteResponseBody> | null;
-      if (typeof body?.deletedCount !== "number" || typeof body?.resetAtMs !== "number") {
-        return Effect.fail(new MalformedResponse({}));
-      }
-      return Effect.succeed<DeleteOutcome>({
-        ok: true,
-        deletedCount: body.deletedCount,
-        resetAtMs: body.resetAtMs,
-      });
-    }),
-    Effect.catch((failure) =>
-      Effect.succeed<DeleteOutcome>({ ok: false, reason: reasonOf(failure) }),
+  return runToOutcome(
+    requestJson(config, "/v1/learning-events", { method: "DELETE" }).pipe(
+      Effect.flatMap((json) => {
+        const body = json as Partial<DeleteResponseBody> | null;
+        if (typeof body?.deletedCount !== "number" || typeof body?.resetAtMs !== "number") {
+          return Effect.fail(new MalformedResponse({}));
+        }
+        return Effect.succeed<DeleteOutcome>({
+          ok: true,
+          deletedCount: body.deletedCount,
+          resetAtMs: body.resetAtMs,
+        });
+      }),
     ),
   );
-  return Effect.runPromise(program);
 }

@@ -217,6 +217,14 @@ class UpstreamUnreadable extends Data.TaggedError("UpstreamUnreadable")<{
   readonly cause: unknown;
 }> {}
 
+/**
+ * 捨てる・エラーとして読むだけの本文が読めなかった。ログに残して先へ進むためのもので、外へは出ない。
+ * 元のエラーを `cause` に持つ。`tryPromise` の `catch` を省くと `UnknownError` に包まれ、ログが読みにくくなる。
+ */
+class UpstreamBodyFailed extends Data.TaggedError("UpstreamBodyFailed")<{
+  readonly cause: unknown;
+}> {}
+
 /** 1回の送信が失敗する理由。状態コードを受け取れなかった場合に限る。 */
 type SendError = UpstreamUnreachable | UpstreamTimedOut;
 
@@ -322,10 +330,13 @@ export function requestCheckGeneration(request: UpstreamRequest): Promise<Upstre
       status,
       attempt: sentModels.length,
     });
-    yield* Effect.tryPromise(async () => sent.response.body?.cancel()).pipe(
+    yield* Effect.tryPromise({
+      try: async () => sent.response.body?.cancel(),
+      catch: (cause) => new UpstreamBodyFailed({ cause }),
+    }).pipe(
       // 捨てる本文の読み込みが壊れていても、送り直しの判断（状態コード）は変わらない。
       // 失敗として流すと「接続できなかった」になり、送り直さずに終わる。
-      Effect.catch((cause) =>
+      Effect.catchTag("UpstreamBodyFailed", ({ cause }) =>
         Effect.sync(() =>
           console.warn("check generation could not discard an upstream body", {
             conceptId,
@@ -353,9 +364,12 @@ export function requestCheckGeneration(request: UpstreamRequest): Promise<Upstre
 
   /** 2xx 以外の応答を、エラー本文の要点つきの失敗にする（#253）。 */
   const reject = ({ response, model }: Sent): Effect.Effect<never, UpstreamRejected> =>
-    Effect.tryPromise(() => response.text()).pipe(
+    Effect.tryPromise({
+      try: () => response.text(),
+      catch: (cause) => new UpstreamBodyFailed({ cause }),
+    }).pipe(
       // 本文が読めなくても、状態コードで失敗は伝えられるので続ける。
-      Effect.catch((cause) =>
+      Effect.catchTag("UpstreamBodyFailed", ({ cause }) =>
         Effect.sync(() => {
           console.warn("check generation could not read an upstream error body", {
             conceptId,
@@ -403,7 +417,11 @@ export function requestCheckGeneration(request: UpstreamRequest): Promise<Upstre
       orElse: () =>
         Effect.fail(
           new UpstreamTimedOut({
-            cause: new Error(`no response within ${String(UPSTREAM_TIMEOUT_MS)} ms`),
+            // fetch の `AbortSignal.timeout` と同じ名前にし、経過（`trace.cause`）の書式を揃える。
+            cause: new DOMException(
+              `no response within ${String(UPSTREAM_TIMEOUT_MS)} ms`,
+              "TimeoutError",
+            ),
           }),
         ),
     }),

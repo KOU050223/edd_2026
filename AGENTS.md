@@ -24,8 +24,10 @@ HTTP 2xx でも本文の解析に失敗したならそれは失敗として扱�
 
 **Effect のコードを書く前に、`node_modules/effect/AGENTS.md` を最後まで読むこと。**
 必要に応じてそこからのリンクも辿る。その案内に無い API や概念は、
-`node_modules/effect/src` のソースを検索して確かめる。v3 の書き方（`catchAll`・`Data.TaggedError` など）を
+`node_modules/effect/src` のソースを検索して確かめる。v3 で消えた API（`catchAll`・`zipRight`・`timeoutFail` など）を
 記憶で書かない。外部のドキュメントや古い Effect のコピーも当てにしない。
+スキル `effect-ts` の手順 1（`pnpm add effect@rc`）には従わない。このリポジトリは npm で、
+`effect` は使うワークスペースの `dependencies` に置いている。
 
 このリポジトリの約束は次のとおり。**`node_modules/effect/AGENTS.md` と食い違うときは、こちらを優先する。**
 
@@ -36,12 +38,15 @@ HTTP 2xx でも本文の解析に失敗したならそれは失敗として扱�
   実測では、Workers のバンドル（gzip）が `Data` なら 88 → 110 KiB、`Schema` なら 88 → 232 KiB になった。
   どちらも eslint の `no-restricted-imports` で禁止している。検証に `Schema` を使いたくなったら、
   サイズを測ったうえで方針として決めてから外すこと。
-
 - **外へ見せる関数は Promise を返す。** 呼び出し側（Hono のルート、VS Code の API）は
   Effect を知らない。`Effect.runPromise` は境界で一度だけ呼ぶ。
-- **`fetch(...)` は直接呼び、`signal` などはその場で書く。** `tryPromise` が渡す `signal` を使えば、
-  期限による中断が送信まで届く。`HttpClient` に包むと、`test/project-rules.test.mjs` の
-  RULE-001/002 の検査が `fetch` を見つけられず、**何も検出しないまま緑になる。**
+- **`fetch(...)` は直接呼び、`signal` などはその場で書く。** `HttpClient` に包むと、
+  `test/project-rules.test.mjs` の RULE-001/002 の検査が `fetch` を見つけられず、
+  **何も検出しないまま緑になる。**
+- **fetch には自前の `AbortController` の signal を渡し、期限で中断されたら abort する**
+  （`Effect.onInterrupt(() => Effect.sync(() => controller.abort()))` を期限の内側に置く）。
+  `tryPromise` が渡す signal は、fetch が応答を返した時点で役目を終える。それを渡すと、
+  本文の読み込み中に期限が来ても止まらず、接続が残る（PR #275 のレビューで見つかった）。
 
 Effect 固有の誤り（`yield*` の付け忘れ、捨てられた Effect など）は型検査を通ってしまう。
 `@effect/language-service` が検出し、エディタでは tsconfig の `plugins` から読まれる。
