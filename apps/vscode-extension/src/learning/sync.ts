@@ -104,25 +104,19 @@ export function isSafeApiBaseUrl(value: string): boolean {
   }
 }
 
+// 失敗の種類。呼び出し側へは `reasonOf` で理由の文にして返す。
 /** 再ログインが必要（トークンが取れない、401）。 */
 class NeedsLogin extends Data.TaggedError("NeedsLogin") {}
-
 /** トークン取得の待機中に、送信の同意が取り消された。 */
 class ConsentWithdrawn extends Data.TaggedError("ConsentWithdrawn") {}
-
 /** 送信先が安全ではない（RULE-003）。トークンを載せる前に弾く。 */
-class UnsafeApiBaseUrl extends Data.TaggedError("UnsafeApiBaseUrl")<{ readonly url: string }> {}
-
+class UnsafeApiBaseUrl extends Data.TaggedError("UnsafeApiBaseUrl")<{ url: string }> {}
 /** 届かなかった・時間切れ・トークン取得の失敗。 */
-class NetworkFailure extends Data.TaggedError("NetworkFailure")<{ readonly cause: unknown }> {}
-
+class NetworkFailure extends Data.TaggedError("NetworkFailure")<{ cause: unknown }> {}
 /** 2xx 以外が返った（401 を除く）。 */
-class HttpFailure extends Data.TaggedError("HttpFailure")<{ readonly status: number }> {}
-
+class HttpFailure extends Data.TaggedError("HttpFailure")<{ status: number }> {}
 /** 2xx だが本文が契約と違う。成功として扱わない（RULE-004）。 */
-class MalformedResponse extends Data.TaggedError("MalformedResponse")<{
-  readonly detail?: string;
-}> {}
+class MalformedResponse extends Data.TaggedError("MalformedResponse")<{ detail?: string }> {}
 
 type RequestFailure =
   | NeedsLogin

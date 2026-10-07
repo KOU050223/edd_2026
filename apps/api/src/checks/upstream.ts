@@ -191,39 +191,26 @@ interface Sent {
   model: AllowedModel;
 }
 
-/** 混雑などの一時的な失敗。次のモデルか次の巡へ送り直す合図で、この関数の外へは出ない。 */
+// 失敗の種類。最後に `catchTags` で種類ごとの応答にする。種類を足して扱い忘れると型が合わなくなる。
+/** 混雑などの一時的な失敗。次のモデルか次の巡へ送り直す合図で、外へは出ない。 */
 class UpstreamBusy extends Data.TaggedError("UpstreamBusy") {}
-
 /** 上流へ届かなかった（ネットワーク断など）。 */
-class UpstreamUnreachable extends Data.TaggedError("UpstreamUnreachable")<{
-  readonly cause: unknown;
-}> {}
-
+class UpstreamUnreachable extends Data.TaggedError("UpstreamUnreachable")<{ cause: unknown }> {}
 /** 期限（{@link UPSTREAM_TIMEOUT_MS}）までに終わらなかった。 */
-class UpstreamTimedOut extends Data.TaggedError("UpstreamTimedOut")<{
-  readonly cause: unknown;
-}> {}
-
+class UpstreamTimedOut extends Data.TaggedError("UpstreamTimedOut")<{ cause: unknown }> {}
 /** 2xx 以外が返った。送り直しを使い切った一時的な失敗と、3xx・4xx を含む。 */
 class UpstreamRejected extends Data.TaggedError("UpstreamRejected")<{
-  readonly status: number;
-  readonly model: AllowedModel;
-  readonly detail: UpstreamErrorDetail;
+  status: number;
+  model: AllowedModel;
+  detail: UpstreamErrorDetail;
 }> {}
-
 /** 2xx だが本文が読めなかった。成功の状態コードで失敗を隠さない（RULE-004）。 */
 class UpstreamUnreadable extends Data.TaggedError("UpstreamUnreadable")<{
-  readonly model: AllowedModel;
-  readonly cause: unknown;
+  model: AllowedModel;
+  cause: unknown;
 }> {}
-
-/**
- * 捨てる・エラーとして読むだけの本文が読めなかった。ログに残して先へ進むためのもので、外へは出ない。
- * 元のエラーを `cause` に持つ。`tryPromise` の `catch` を省くと `UnknownError` に包まれ、ログが読みにくくなる。
- */
-class UpstreamBodyFailed extends Data.TaggedError("UpstreamBodyFailed")<{
-  readonly cause: unknown;
-}> {}
+/** 捨てる・エラーとして読むだけの本文が読めなかった。ログに残して先へ進むためのもので、外へは出ない。 */
+class UpstreamBodyFailed extends Data.TaggedError("UpstreamBodyFailed")<{ cause: unknown }> {}
 
 /** 1回の送信が失敗する理由。状態コードを受け取れなかった場合に限る。 */
 type SendError = UpstreamUnreachable | UpstreamTimedOut;
