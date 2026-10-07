@@ -4,7 +4,6 @@ import {
   clipboard,
   dialog,
   globalShortcut,
-  ipcMain,
   Menu,
   nativeImage,
   safeStorage,
@@ -69,7 +68,14 @@ import {
   createSpawnRunner,
   parseAnalysisOutput,
 } from "./history/providers.js";
-import { mergePastedAnalysis, runImportPipeline, type ImportPreview } from "./history/pipeline.js";
+import {
+  mergePastedAnalysis,
+  runImportPipeline,
+  type ImportPreview,
+  type ImportProgress,
+} from "./history/pipeline.js";
+import { handle, send } from "./ipc.js";
+import { EVENT_CHANNELS, INVOKE_CHANNELS, type HistoryAnalyzeRequest } from "../shared/ipc.js";
 import {
   createImportSession,
   deleteEvidenceByProvider,
@@ -322,7 +328,7 @@ async function logout(): Promise<void> {
     readRefreshToken: () => store.get(),
     clearRefreshToken: () => store.clear(),
     revoke: (refreshToken) => revokeRefreshToken(OAUTH_CONFIG, refreshToken),
-    notify: (state) => popup?.webContents.send("auth:state", state),
+    notify: (state) => send(popup?.webContents, EVENT_CHANNELS.authState, state),
     logError: (message, detail) => console.error(message, detail),
   });
 }
@@ -478,7 +484,8 @@ function createPopup(): BrowserWindow {
 function showPopup(selection: string, error?: string): void {
   popup ??= createPopup();
   activatePopup(app, popup);
-  const sendSelection = () => popup?.webContents.send("selection", { selection, error });
+  const sendSelection = () =>
+    send(popup?.webContents, EVENT_CHANNELS.selection, { selection, error });
   if (popup.webContents.isLoading()) popup.webContents.once("did-finish-load", sendSelection);
   else sendSelection();
 }
@@ -643,7 +650,7 @@ async function refreshAccessTokenOrClearOnInvalidGrant(refreshToken: string, gen
       }
       refreshTokenStore().clear();
       // 消したことを画面へ伝える。伝えないと設定を開き直すまで「ログイン済み」のままになる。
-      popup?.webContents.send("auth:state", { hasRefreshToken: false });
+      send(popup?.webContents, EVENT_CHANNELS.authState, { hasRefreshToken: false });
       throw new Error("ログインの有効期限が切れました。設定から再ログインしてください。", {
         cause: error,
       });
@@ -684,14 +691,6 @@ const historyFs: ScanFs = {
 
 /** Managed AI へ回す分析の1回のインポートあたりの予算。 */
 const IMPORT_BUDGET = { managedAiMaxCalls: 10 };
-
-interface HistoryAnalyzeRequest {
-  providers?: HistoryProviderId[];
-  filePath?: string;
-  fileProvider?: HistoryProviderId;
-  mode?: AnalysisMode;
-  sinceMs?: number;
-}
 
 /**
  * 分析済みだが未適用の Import。renderer には本文を渡さないため、
@@ -750,7 +749,7 @@ async function detectHistorySources() {
 
 async function analyzeHistory(
   request: HistoryAnalyzeRequest,
-  onProgress: (progress: unknown) => void,
+  onProgress: (progress: ImportProgress) => void,
 ) {
   // 履歴本文が AI（CLI / Managed）へ出る経路なので、同意の記録があるときだけ走らせる。
   if (!(await ensureConsent())) {
@@ -866,11 +865,11 @@ app
     await guideAccessibilityPermission();
     createTray();
     registerShortcut(settings.shortcut);
-    ipcMain.handle("settings:get", async () => ({
+    handle(INVOKE_CHANNELS.settingsGet, async () => ({
       ...settings,
       hasRefreshToken: Boolean(refreshTokenStore().get()),
     }));
-    ipcMain.handle("settings:save", async (_event, next: DesktopSettings) => {
+    handle(INVOKE_CHANNELS.settingsSave, async (_event, next: DesktopSettings) => {
       const candidate = next;
       const valid = normalizeSettings(candidate);
       if (
@@ -886,10 +885,10 @@ app
       }
       await saveSettings(valid);
     });
-    ipcMain.handle("auth:login", loginWithBrowser);
-    ipcMain.handle("auth:logout", logout);
-    ipcMain.handle("selection:retry", openForSelection);
-    ipcMain.handle("answer:ask", async (event, selection: string, question: string) => {
+    handle(INVOKE_CHANNELS.authLogin, loginWithBrowser);
+    handle(INVOKE_CHANNELS.authLogout, logout);
+    handle(INVOKE_CHANNELS.selectionRetry, openForSelection);
+    handle(INVOKE_CHANNELS.answerAsk, async (event, selection: string, question: string) => {
       if (!selection.trim()) throw new Error("選択テキストを取得できませんでした。");
       // #174: 同意の記録があるときだけ送る。選択テキストと質問文が
       // Managed AI 経由で端末の外へ出る唯一の経路なので、ここで止める。
@@ -905,7 +904,7 @@ app
       try {
         await askManagedAI(selection, normalizedQuestion, (delta) => {
           answerText += delta;
-          event.sender.send("answer:delta", delta);
+          send(event.sender, EVENT_CHANNELS.answerDelta, delta);
         });
       } catch (error) {
         askError = error;
@@ -950,14 +949,14 @@ app
               error instanceof Error ? error.message : String(error)
             }`;
           }
-          event.sender.send("history:save-failed", message);
+          send(event.sender, EVENT_CHANNELS.historySaveFailed, message);
         }
       }
       if (askError !== undefined) throw askError;
     });
     // 「質問履歴の保存」オプトイン（Issue #204）。表示はサーバーの値を正とし、
     // 読めたらローカルキャッシュ（settings.json）も揃える。
-    ipcMain.handle("conversation-history:get", async () => {
+    handle(INVOKE_CHANNELS.conversationHistoryGet, async () => {
       const remote = await getUserSettings(historyApiDeps());
       if (remote.saveConversationHistory !== settings.saveConversationHistory) {
         // キャッシュの同期失敗で表示自体を止めない。読めた値は確実なので
@@ -973,7 +972,7 @@ app
       }
       return { saveConversationHistory: remote.saveConversationHistory };
     });
-    ipcMain.handle("conversation-history:set", async (_event, enabled: unknown) => {
+    handle(INVOKE_CHANNELS.conversationHistorySet, async (_event, enabled: unknown) => {
       if (typeof enabled !== "boolean") {
         throw new Error("質問履歴の保存は真偽値で指定してください。");
       }
@@ -1013,37 +1012,37 @@ app
       }
       return { saveConversationHistory: saved.saveConversationHistory };
     });
-    ipcMain.handle("consent:status", () => {
+    handle(INVOKE_CHANNELS.consentStatus, () => {
       const store = consentStore();
       return { granted: store.has(), grantedAt: store.grantedAt() };
     });
-    ipcMain.handle("consent:review", async () => {
+    handle(INVOKE_CHANNELS.consentReview, async () => {
       await reviewConsent();
       const store = consentStore();
       return { granted: store.has(), grantedAt: store.grantedAt() };
     });
     // 質問履歴（Issue #199）。サイドバーの一覧と詳細表示に使う。
     // 値の正はサーバーで、本文はこの端末へ永続化しない。
-    ipcMain.handle("conversations:list", (_event, cursor: unknown) => {
+    handle(INVOKE_CHANNELS.conversationsList, (_event, cursor: unknown) => {
       if (cursor !== undefined && typeof cursor !== "string") {
         throw new Error("カーソルは文字列で指定してください。");
       }
       return listConversations(historyApiDeps(), cursor);
     });
-    ipcMain.handle("conversations:get", (_event, id: unknown) => {
+    handle(INVOKE_CHANNELS.conversationsGet, (_event, id: unknown) => {
       if (typeof id !== "string" || id.length === 0) {
         throw new Error("履歴の ID が指定されていません。");
       }
       return getConversation(historyApiDeps(), id);
     });
-    ipcMain.handle("conversations:delete", (_event, id: unknown) => {
+    handle(INVOKE_CHANNELS.conversationsDelete, (_event, id: unknown) => {
       if (typeof id !== "string" || id.length === 0) {
         throw new Error("削除する履歴の ID が指定されていません。");
       }
       return deleteConversation(historyApiDeps(), id);
     });
-    ipcMain.handle("history:detect", detectHistorySources);
-    ipcMain.handle("history:pick-file", async () => {
+    handle(INVOKE_CHANNELS.historyDetect, detectHistorySources);
+    handle(INVOKE_CHANNELS.historyPickFile, async () => {
       const options = {
         filters: [{ name: "AI エクスポート (JSON)", extensions: ["json"] }],
         properties: ["openFile" as const],
@@ -1053,12 +1052,12 @@ app
         : await dialog.showOpenDialog(options);
       return result.canceled ? null : (result.filePaths[0] ?? null);
     });
-    ipcMain.handle("history:analyze", async (event, request: HistoryAnalyzeRequest) =>
+    handle(INVOKE_CHANNELS.historyAnalyze, async (event, request: HistoryAnalyzeRequest) =>
       analyzeHistory(request, (progress) => {
-        event.sender.send("history:progress", progress);
+        send(event.sender, EVENT_CHANNELS.historyProgress, progress);
       }),
     );
-    ipcMain.handle("history:build-prompt", () => {
+    handle(INVOKE_CHANNELS.historyBuildPrompt, () => {
       if (pendingImport === undefined) {
         throw new Error("先に履歴の分析を実行してください。");
       }
@@ -1072,7 +1071,7 @@ app
         knownConceptIds: CONCEPTS.map((concept) => concept.id),
       });
     });
-    ipcMain.handle("history:paste-analysis", (_event, text: unknown) => {
+    handle(INVOKE_CHANNELS.historyPasteAnalysis, (_event, text: unknown) => {
       if (pendingImport === undefined) {
         throw new Error("先に履歴の分析を実行してください。");
       }
@@ -1090,50 +1089,47 @@ app
         canCopyPrompt: [...merged.remaining.values()].some((list) => list.length > 0),
       };
     });
-    ipcMain.handle(
-      "history:apply",
-      async (_event, payload: { excludeConceptIds?: unknown } | undefined) => {
-        if (pendingImport === undefined) {
-          throw new Error("適用できる分析結果がありません。先に履歴の分析を実行してください。");
-        }
-        const excluded = new Set(
-          Array.isArray(payload?.excludeConceptIds)
-            ? payload.excludeConceptIds.filter((id): id is string => typeof id === "string")
-            : [],
+    handle(INVOKE_CHANNELS.historyApply, async (_event, payload) => {
+      if (pendingImport === undefined) {
+        throw new Error("適用できる分析結果がありません。先に履歴の分析を実行してください。");
+      }
+      const excluded = new Set(
+        Array.isArray(payload?.excludeConceptIds)
+          ? payload.excludeConceptIds.filter((id): id is string => typeof id === "string")
+          : [],
+      );
+      // プレビューで利用者が外した Concept を Evidence から除く。
+      const evidence = pendingImport.preview.evidence
+        .map((item) => ({
+          ...item,
+          conceptIds: item.conceptIds.filter((id) => !excluded.has(id)),
+        }))
+        .filter((item) => item.conceptIds.length > 0);
+      // API の1回あたりの Evidence 上限（apps/api MAX_EVIDENCE_PER_IMPORT）。
+      // 超えたまま送ると 400 で握りつぶされるため、理由が分かる形で止める。
+      const MAX_EVIDENCE_PER_IMPORT = 5_000;
+      if (evidence.length > MAX_EVIDENCE_PER_IMPORT) {
+        throw new Error(
+          `取り込む観測が ${MAX_EVIDENCE_PER_IMPORT.toLocaleString()} 件の上限を超えています（${evidence.length.toLocaleString()} 件）。対象のソースを減らすか、Concept を外してから適用してください。`,
         );
-        // プレビューで利用者が外した Concept を Evidence から除く。
-        const evidence = pendingImport.preview.evidence
-          .map((item) => ({
-            ...item,
-            conceptIds: item.conceptIds.filter((id) => !excluded.has(id)),
-          }))
-          .filter((item) => item.conceptIds.length > 0);
-        // API の1回あたりの Evidence 上限（apps/api MAX_EVIDENCE_PER_IMPORT）。
-        // 超えたまま送ると 400 で握りつぶされるため、理由が分かる形で止める。
-        const MAX_EVIDENCE_PER_IMPORT = 5_000;
-        if (evidence.length > MAX_EVIDENCE_PER_IMPORT) {
-          throw new Error(
-            `取り込む観測が ${MAX_EVIDENCE_PER_IMPORT.toLocaleString()} 件の上限を超えています（${evidence.length.toLocaleString()} 件）。対象のソースを減らすか、Concept を外してから適用してください。`,
-          );
-        }
-        const result = await createImportSession(historyApiDeps(), {
-          id: pendingImport.preview.sessionId,
-          importedBy: pendingImport.preview.importedBy,
-          providers: pendingImport.preview.providers,
-          conversationCount: pendingImport.preview.conversationCount,
-          ignoredCount: pendingImport.preview.ignoredCount,
-          // サーバー側の上限（apps/api MAX_UNMAPPED_CANDIDATES=200）と揃える。
-          unmappedCandidates: pendingImport.preview.unmapped.slice(0, 200),
-          evidence,
-        });
-        // 適用後に残しておくと、同じ preview の二重適用や stale な
-        // prompt への貼り戻しが起きる。適用したら破棄する。
-        pendingImport = undefined;
-        return result;
-      },
-    );
-    ipcMain.handle("history:list", () => listImportSessions(historyApiDeps()));
-    ipcMain.handle("history:undo", (_event, id: unknown) => {
+      }
+      const result = await createImportSession(historyApiDeps(), {
+        id: pendingImport.preview.sessionId,
+        importedBy: pendingImport.preview.importedBy,
+        providers: pendingImport.preview.providers,
+        conversationCount: pendingImport.preview.conversationCount,
+        ignoredCount: pendingImport.preview.ignoredCount,
+        // サーバー側の上限（apps/api MAX_UNMAPPED_CANDIDATES=200）と揃える。
+        unmappedCandidates: pendingImport.preview.unmapped.slice(0, 200),
+        evidence,
+      });
+      // 適用後に残しておくと、同じ preview の二重適用や stale な
+      // prompt への貼り戻しが起きる。適用したら破棄する。
+      pendingImport = undefined;
+      return result;
+    });
+    handle(INVOKE_CHANNELS.historyList, () => listImportSessions(historyApiDeps()));
+    handle(INVOKE_CHANNELS.historyUndo, (_event, id: unknown) => {
       if (typeof id !== "string" || id.length === 0) {
         throw new Error("取り消す Import の ID が指定されていません。");
       }
@@ -1149,21 +1145,21 @@ app
       "gemini",
       "vscode",
     ];
-    ipcMain.handle("history:delete-provider", (_event, provider: unknown) => {
+    handle(INVOKE_CHANNELS.historyDeleteProvider, (_event, provider: unknown) => {
       if (typeof provider !== "string" || !HISTORY_PROVIDERS.includes(provider)) {
         throw new Error("削除する履歴ソースが不正です。");
       }
       return deleteEvidenceByProvider(historyApiDeps(), provider as HistoryProviderId);
     });
-    ipcMain.handle("window:close", () => popup?.hide());
-    ipcMain.handle("window:minimize", () => popup?.minimize());
-    ipcMain.handle("external-link:open", async (_event, url: unknown) => {
+    handle(INVOKE_CHANNELS.windowClose, () => popup?.hide());
+    handle(INVOKE_CHANNELS.windowMinimize, () => popup?.minimize());
+    handle(INVOKE_CHANNELS.externalLinkOpen, async (_event, url: unknown) => {
       if (typeof url !== "string" || !isSafeExternalUrl(url)) {
         throw new Error("このリンクは開けません。");
       }
       await shell.openExternal(url);
     });
-    ipcMain.handle("system:accessibility", async () => {
+    handle(INVOKE_CHANNELS.systemAccessibility, async () => {
       await openAccessibilitySettings();
     });
     if (shouldShowStartupWindow(app.isPackaged)) showPopup("");

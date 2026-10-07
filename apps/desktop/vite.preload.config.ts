@@ -7,7 +7,7 @@ export default defineConfig({
   build: {
     outDir: "out/preload",
     lib: {
-      entry: "src/preload/index.cts",
+      entry: "src/preload/index.ts",
       formats: ["cjs"],
       fileName: () => "index.cjs",
     },
