@@ -153,13 +153,14 @@
     "test:watch": "npm run compile --workspace=@gakushu-sochi/domain && vitest src",
     "test": "npm run test:unit",
     "watch": "npm run compile --workspace=@gakushu-sochi/domain && npm run bundle -- --watch=forever",
-    "lint": "eslint src",
+    "lint": "eslint src && effect-language-service diagnostics --project tsconfig.json --strict --format text",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "prepare": "lefthook install"
   },
   "dependencies": {
-    "@gakushu-sochi/domain": "file:../../packages/domain"
+    "@gakushu-sochi/domain": "file:../../packages/domain",
+    "effect": "^4.0.1"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

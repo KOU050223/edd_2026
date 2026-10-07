@@ -130,6 +130,36 @@ test("ネットワークエラーなら例外を投げず失敗を返す", async
   expect((outcome as { reason: string }).reason).toContain("fetch failed");
 });
 
+test("同意の確認が例外を投げても、例外にせず失敗を返す", async () => {
+  // 同期の失敗が質問フローを止めてはならない（このファイル冒頭の約束）。
+  const fetchMock = vi.fn();
+  vi.stubGlobal("fetch", fetchMock);
+
+  const outcome = await syncEvent(EVENT, {
+    ...CONFIG,
+    canSend: () => {
+      throw new Error("consent store is broken");
+    },
+  });
+
+  expect(outcome).toEqual({
+    ok: false,
+    reason: expect.stringContaining("consent store is broken"),
+  });
+  expect(fetchMock).not.toHaveBeenCalled();
+});
+
+test("イベントを JSON にできなくても、例外にせず失敗を返す", async () => {
+  const fetchMock = vi.fn();
+  vi.stubGlobal("fetch", fetchMock);
+  const unserializable = { ...EVENT, extra: 1n } as unknown as LearningEvent;
+
+  const outcome = await syncEvent(unserializable, CONFIG);
+
+  expect(outcome).toEqual({ ok: false, reason: expect.stringContaining("BigInt") });
+  expect(fetchMock).not.toHaveBeenCalled();
+});
+
 test("認証エラーならネットワークエラーではなく再ログインを案内する", async () => {
   const outcome = await syncEvent(EVENT, {
     ...CONFIG,
@@ -258,6 +288,34 @@ test("fetchがハングしてもタイムアウトで解決する", async () => 
 
   expect(outcome.ok).toBe(false);
 }, 20_000);
+
+test("ヘッダーのあと本文が止まれば、タイムアウトで本文の読み込みも中断する", async () => {
+  // 本文の読み込みも期限の内側（RULE-001）。中断しないと、失敗を返したあとも接続が残る。
+  vi.useFakeTimers();
+  const signals: AbortSignal[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockImplementation((_url: string, init: RequestInit) => {
+      const signal = init.signal!;
+      signals.push(signal);
+      // 本物の fetch と同じく、signal の中断で本文のストリームを失敗させる。
+      const body = new ReadableStream({
+        start(controller) {
+          signal.addEventListener("abort", () => controller.error(signal.reason));
+        },
+      });
+      return Promise.resolve(new Response(body, { status: 200 }));
+    }),
+  );
+
+  const pending = syncEvent(EVENT, CONFIG);
+  await vi.advanceTimersByTimeAsync(10_000);
+  const outcome = await pending;
+  vi.useRealTimers();
+
+  expect(outcome.ok).toBe(false);
+  expect(signals[0]?.aborted).toBe(true);
+});
 
 // --- #124: サーバー側の削除への追従 -------------------------------------------
 

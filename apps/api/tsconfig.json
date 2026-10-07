@@ -11,7 +11,10 @@
     "noImplicitReturns": true,
     "noFallthroughCasesInSwitch": true,
     "skipLibCheck": true,
-    "noEmit": true
+    "noEmit": true,
+    // Effect 固有の診断（yield* の付け忘れ、捨てられた Effect など）をエディタに出す。
+    // tsc はプラグインを読まないので、CI では `effect-language-service diagnostics` で回す。
+    "plugins": [{ "name": "@effect/language-service" }]
   },
   "include": ["src"]
 }

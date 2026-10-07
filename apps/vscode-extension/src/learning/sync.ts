@@ -15,6 +15,9 @@
  */
 
 import type { LearningEvent } from "@gakushu-sochi/domain";
+import * as Data from "effect/Data";
+import * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
 
 /** 同期に使う設定。VS Codeの設定（package.jsonのcontributes.configuration）から読む値をここへ集約する。 */
 export interface SyncConfig {
@@ -101,6 +104,141 @@ export function isSafeApiBaseUrl(value: string): boolean {
   }
 }
 
+// 失敗の種類。呼び出し側へは `reasonOf` で理由の文にして返す。
+/** 再ログインが必要（トークンが取れない、401）。 */
+class NeedsLogin extends Data.TaggedError("NeedsLogin") {}
+/** トークン取得の待機中に、送信の同意が取り消された。 */
+class ConsentWithdrawn extends Data.TaggedError("ConsentWithdrawn") {}
+/** 送信先が安全ではない（RULE-003）。トークンを載せる前に弾く。 */
+class UnsafeApiBaseUrl extends Data.TaggedError("UnsafeApiBaseUrl")<{ url: string }> {}
+/** 届かなかった・時間切れ・トークン取得の失敗。 */
+class NetworkFailure extends Data.TaggedError("NetworkFailure")<{ cause: unknown }> {}
+/** 2xx 以外が返った（401 を除く）。 */
+class HttpFailure extends Data.TaggedError("HttpFailure")<{ status: number }> {}
+/** 2xx だが本文が契約と違う。成功として扱わない（RULE-004）。 */
+class MalformedResponse extends Data.TaggedError("MalformedResponse")<{ detail?: string }> {}
+
+type RequestFailure =
+  | NeedsLogin
+  | ConsentWithdrawn
+  | UnsafeApiBaseUrl
+  | NetworkFailure
+  | HttpFailure
+  | MalformedResponse;
+
+/** 失敗を、呼び出し側がログへ残す理由の文にする。 */
+function reasonOf(failure: RequestFailure): string {
+  switch (failure._tag) {
+    case "NeedsLogin":
+      return "再ログインが必要です";
+    case "ConsentWithdrawn":
+      return "送信の同意が取り消されました";
+    case "UnsafeApiBaseUrl":
+      return `APIのURLが安全ではありません（https、またはローカル開発のみ許可）: ${failure.url}`;
+    case "NetworkFailure":
+      return `ネットワークエラー: ${String(failure.cause)}`;
+    case "HttpFailure":
+      return `HTTP ${failure.status}`;
+    case "MalformedResponse":
+      return failure.detail === undefined
+        ? "サーバー応答の形式が不正です"
+        : `サーバー応答の形式が不正です（${failure.detail}）`;
+  }
+}
+
+/**
+ * トークンを付けて API を呼び、2xx の本文を JSON として返す。
+ *
+ * `canSend` はトークン取得の後、送信の直前に確認する。トークン取得中に同意が
+ * 取り消されることがあり、取り消し後に Authorization ヘッダー付きで送らないため。
+ */
+const requestJson = Effect.fnUntraced(function* (
+  config: Pick<SyncConfig, "apiBaseUrl" | "apiToken" | "canSend">,
+  path: string,
+  init: { method: string; body?: string },
+): Effect.fn.Return<unknown, RequestFailure> {
+  if (!isSafeApiBaseUrl(config.apiBaseUrl)) {
+    // ワークスペース設定で書き換えられた不正なURLへ送ってしまうと、
+    // トークンと学習イベントが第三者へ渡る。
+    return yield* new UnsafeApiBaseUrl({ url: config.apiBaseUrl });
+  }
+  const url = `${config.apiBaseUrl.replace(/\/+$/, "")}${path}`;
+
+  const apiToken = yield* Effect.tryPromise({
+    try: () => config.apiToken(),
+    catch: (cause) =>
+      cause instanceof Error && cause.message === "再ログインが必要です"
+        ? new NeedsLogin()
+        : new NetworkFailure({ cause }),
+  });
+  if (!apiToken) return yield* new NeedsLogin();
+  if (config.canSend && !config.canSend()) return yield* new ConsentWithdrawn();
+
+  // 応答が返らない場合に待ち続けない（RULE-001）。期限は送信と本文の読み込みに掛け、
+  // トークン取得には掛けない。
+  //
+  // `tryPromise` が渡す signal は fetch が応答を返した時点で役目を終え、そのあとの本文の
+  // 読み込みを止められない。送信と本文の両方を止められるよう、自前の signal を渡す。
+  const deadline = new AbortController();
+  return yield* Effect.gen(function* () {
+    const response = yield* Effect.tryPromise({
+      try: () =>
+        fetch(url, {
+          method: init.method,
+          headers: {
+            ...(init.body === undefined ? {} : { "content-type": "application/json" }),
+            authorization: `Bearer ${apiToken}`,
+          },
+          body: init.body,
+          // リダイレクトを自動追跡しない。転送先へ Authorization ヘッダごと
+          // 送られると、トークンが意図しない相手に渡る（RULE-002）。
+          redirect: "error",
+          // 下の `timeoutOrElse` で中断されたら abort する。
+          signal: deadline.signal,
+        }),
+      catch: (cause) => new NetworkFailure({ cause }),
+    });
+    if (!response.ok) {
+      return yield* response.status === 401
+        ? new NeedsLogin()
+        : new HttpFailure({ status: response.status });
+    }
+    return yield* Effect.tryPromise({
+      try: () => response.json() as Promise<unknown>,
+      catch: () => new MalformedResponse({ detail: "JSON ではありません" }),
+    });
+  }).pipe(
+    // 期限で中断されたら、送信中の fetch も読み込み中の本文も止める。
+    Effect.onInterrupt(() => Effect.sync(() => deadline.abort())),
+    Effect.timeoutOrElse({
+      duration: Duration.millis(TIMEOUT_MS),
+      orElse: () =>
+        Effect.fail(
+          new NetworkFailure({ cause: `${String(TIMEOUT_MS)} ms 以内に応答がありませんでした` }),
+        ),
+    }),
+  );
+});
+
+/**
+ * Effect を、例外を投げない Promise にする（このファイル冒頭の約束）。
+ *
+ * 型付きの失敗は理由の文にする。想定外の例外（`canSend` や本文の組み立てが投げた、など）も
+ * 「ネットワークエラー」として返す。書き直し前は関数全体を try/catch で包み、同じ扱いをしていた。
+ */
+function runToOutcome<A>(
+  program: Effect.Effect<A, RequestFailure>,
+): Promise<A | { ok: false; reason: string }> {
+  return Effect.runPromise(
+    program.pipe(
+      Effect.catch((failure) => Effect.succeed({ ok: false as const, reason: reasonOf(failure) })),
+      Effect.catchDefect((defect) =>
+        Effect.succeed({ ok: false as const, reason: `ネットワークエラー: ${String(defect)}` }),
+      ),
+    ),
+  );
+}
+
 /**
  * 1件の学習イベントをAPIサーバーへ送る。
  *
@@ -108,86 +246,47 @@ export function isSafeApiBaseUrl(value: string): boolean {
  * persistEvent がイベントを1件ずつ確定させるのに合わせて、ここでも1件ずつ送る。
  * まとめ送りは、送信頻度が実際に問題になってから最適化する。
  */
-export async function syncEvent(event: LearningEvent, config: SyncConfig): Promise<SyncOutcome> {
-  if (!isSafeApiBaseUrl(config.apiBaseUrl)) {
-    // トークンを載せる前に弾く。ワークスペース設定で書き換えられた不正なURLへ
-    // 送ってしまうと、トークンと学習イベントが第三者へ渡る。
-    return {
-      ok: false,
-      reason: `APIのURLが安全ではありません（https、またはローカル開発のみ許可）: ${config.apiBaseUrl}`,
-    };
-  }
-
-  const url = `${config.apiBaseUrl.replace(/\/+$/, "")}/v1/learning-events:sync`;
-
-  let result: SyncResponseBody["results"][number] | undefined;
-  let historyResetAtMs: number | null;
-  try {
-    const apiToken = await config.apiToken();
-    if (!apiToken) return { ok: false, reason: "再ログインが必要です" };
-    // トークン取得中に同意が取り消されることがある。Authorization ヘッダーを
-    // 付けた fetch の直前で再確認し、取り消し後の送信を防ぐ。
-    if (config.canSend && !config.canSend()) {
-      return { ok: false, reason: "送信の同意が取り消されました" };
-    }
-    const response = await fetch(url, {
+export function syncEvent(event: LearningEvent, config: SyncConfig): Promise<SyncOutcome> {
+  // 本文の組み立て（JSON.stringify）も Effect の内側で行い、投げても失敗として返す。
+  const request = Effect.suspend(() =>
+    requestJson(config, "/v1/learning-events:sync", {
       method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${apiToken}`,
-      },
       body: JSON.stringify({ clientId: config.clientId, events: [event] }),
-      // リダイレクトを自動追跡しない。転送先へ Authorization ヘッダごと
-      // 送られると、トークンが意図しない相手に渡る。
-      redirect: "error",
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-    });
-
-    if (!response.ok) {
-      if (response.status === 401) return { ok: false, reason: "再ログインが必要です" };
-      return { ok: false, reason: `HTTP ${response.status}` };
-    }
-
-    // 応答本文の解析も try の中に置く。空・壊れたJSONで reject すると、
-    // 例外を投げない約束（このファイル冒頭）を破って質問フローまで伝播する。
-    const body = (await response.json()) as SyncResponseBody;
-    if (!Array.isArray(body?.results)) {
-      return { ok: false, reason: "サーバー応答の形式が不正です（results が配列ではありません）" };
-    }
-    // あるのに数値でも null でもない値は、サーバー応答の形が契約と違うという
-    // ことなので黙って無視しない（RULE-004）。フィールド自体が無い古い
-    // サーバーとの後方互換だけは残す。
-    if (
-      body.historyResetAtMs !== undefined &&
-      body.historyResetAtMs !== null &&
-      typeof body.historyResetAtMs !== "number"
-    ) {
-      return {
-        ok: false,
-        reason: "サーバー応答の形式が不正です（historyResetAtMs が数値ではありません）",
-      };
-    }
-    historyResetAtMs = body.historyResetAtMs ?? null;
-    result = body.results[0];
-  } catch (error) {
-    if (error instanceof Error && error.message === "再ログインが必要です") {
-      return { ok: false, reason: "再ログインが必要です" };
-    }
-    return { ok: false, reason: `ネットワークエラー: ${String(error)}` };
-  }
-
-  if (!result) {
-    // 件数が合わない応答はサーバー側のバグである。黙って「成功」扱いにしない。
-    return { ok: false, reason: "サーバー応答にこのイベントの結果が含まれていません" };
-  }
-
-  return {
-    ok: true,
-    status: result.status,
-    reason: result.reason,
-    historyResetAtMs,
-    droppedByReset: result.droppedByReset === true,
-  };
+    }),
+  );
+  return runToOutcome(
+    request.pipe(
+      Effect.flatMap((json) => {
+        const body = json as Partial<SyncResponseBody> | null;
+        if (!Array.isArray(body?.results)) {
+          return Effect.fail(new MalformedResponse({ detail: "results が配列ではありません" }));
+        }
+        // あるのに数値でも null でもない値は、サーバー応答の形が契約と違うという
+        // ことなので黙って無視しない（RULE-004）。フィールド自体が無い古い
+        // サーバーとの後方互換だけは残す。
+        const resetAt = body.historyResetAtMs;
+        if (resetAt !== undefined && resetAt !== null && typeof resetAt !== "number") {
+          return Effect.fail(
+            new MalformedResponse({ detail: "historyResetAtMs が数値ではありません" }),
+          );
+        }
+        const result = body.results[0];
+        if (!result) {
+          // 件数が合わない応答はサーバー側のバグである。黙って「成功」扱いにしない。
+          return Effect.fail(
+            new MalformedResponse({ detail: "このイベントの結果が含まれていません" }),
+          );
+        }
+        return Effect.succeed<SyncOutcome>({
+          ok: true,
+          status: result.status,
+          reason: result.reason,
+          historyResetAtMs: resetAt ?? null,
+          droppedByReset: result.droppedByReset === true,
+        });
+      }),
+    ),
+  );
 }
 
 /** `DELETE /v1/learning-events` の応答（apps/api/src/routes/learning-data.ts の DeleteLearningEventsResponse と対応）。 */
@@ -209,44 +308,22 @@ export type DeleteOutcome =
  * 「消えたように見える」状態を作らないためである（docs/data-privacy.md
  * 「クライアント側に残るコピー」）。
  */
-export async function deleteServerLearningData(
+export function deleteServerLearningData(
   config: Pick<SyncConfig, "apiBaseUrl" | "apiToken">,
 ): Promise<DeleteOutcome> {
-  if (!isSafeApiBaseUrl(config.apiBaseUrl)) {
-    return {
-      ok: false,
-      reason: `APIのURLが安全ではありません（https、またはローカル開発のみ許可）: ${config.apiBaseUrl}`,
-    };
-  }
-
-  const url = `${config.apiBaseUrl.replace(/\/+$/, "")}/v1/learning-events`;
-
-  try {
-    const apiToken = await config.apiToken();
-    if (!apiToken) return { ok: false, reason: "再ログインが必要です" };
-    const response = await fetch(url, {
-      method: "DELETE",
-      headers: { authorization: `Bearer ${apiToken}` },
-      // 資格情報を載せるのでリダイレクトを追跡しない（RULE-002）。
-      redirect: "error",
-      // 単発の外向きリクエスト。応答が返らないまま待ち続けない（RULE-001）。
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-    });
-
-    if (!response.ok) {
-      if (response.status === 401) return { ok: false, reason: "再ログインが必要です" };
-      return { ok: false, reason: `HTTP ${response.status}` };
-    }
-
-    const body = (await response.json()) as Partial<DeleteResponseBody>;
-    if (typeof body?.deletedCount !== "number" || typeof body?.resetAtMs !== "number") {
-      return { ok: false, reason: "サーバー応答の形式が不正です" };
-    }
-    return { ok: true, deletedCount: body.deletedCount, resetAtMs: body.resetAtMs };
-  } catch (error) {
-    if (error instanceof Error && error.message === "再ログインが必要です") {
-      return { ok: false, reason: "再ログインが必要です" };
-    }
-    return { ok: false, reason: `ネットワークエラー: ${String(error)}` };
-  }
+  return runToOutcome(
+    requestJson(config, "/v1/learning-events", { method: "DELETE" }).pipe(
+      Effect.flatMap((json) => {
+        const body = json as Partial<DeleteResponseBody> | null;
+        if (typeof body?.deletedCount !== "number" || typeof body?.resetAtMs !== "number") {
+          return Effect.fail(new MalformedResponse({}));
+        }
+        return Effect.succeed<DeleteOutcome>({
+          ok: true,
+          deletedCount: body.deletedCount,
+          resetAtMs: body.resetAtMs,
+        });
+      }),
+    ),
+  );
 }

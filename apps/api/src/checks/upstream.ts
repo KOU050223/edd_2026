@@ -5,6 +5,9 @@
  * 失敗は {@link UpstreamResult} の理由と経過で返し、本文は `checks/errors.ts` が作る。
  */
 
+import * as Data from "effect/Data";
+import * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
 import { AI_USAGE_LIMITS, type AllowedModel } from "../contract/ai-usage.js";
 
 /**
@@ -44,25 +47,6 @@ const RETRYABLE_UPSTREAM_STATUSES: ReadonlySet<number> = new Set([500, 503]);
  * 作り直したときに同じ問題へ寄りすぎないよう、0 にはしない。
  */
 const TEMPERATURE = 0.5;
-
-/** `ms` 待つ。`signal` が先に中断されたら、その理由で拒否する。 */
-function sleep(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal.aborted) {
-      reject(signal.reason as Error);
-      return;
-    }
-    const timer = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    function onAbort() {
-      clearTimeout(timer);
-      reject(signal.reason as Error);
-    }
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
-}
 
 /** 上流（Gemini）への呼び出しが失敗した理由。応答の中身ではなく、届き方の問題。 */
 export type UpstreamFailure =
@@ -174,11 +158,6 @@ export function describeTrace(trace: UpstreamTrace): string {
   return `［詳細: ${parts.join("・")}］`;
 }
 
-/** `AbortSignal.timeout` による打ち切りか。 */
-function isTimeout(cause: unknown): boolean {
-  return cause instanceof Error && (cause.name === "TimeoutError" || cause.name === "AbortError");
-}
-
 export interface UpstreamRequest {
   fetch: typeof fetch;
   apiKey: string;
@@ -206,6 +185,59 @@ export type UpstreamResult =
       status?: number;
     };
 
+/** 送って状態コードまで受け取れた応答と、送ったモデル。 */
+interface Sent {
+  response: Response;
+  model: AllowedModel;
+}
+
+// 失敗の種類。最後に `catchTags` で種類ごとの応答にする。種類を足して扱い忘れると型が合わなくなる。
+/** 混雑などの一時的な失敗。次のモデルか次の巡へ送り直す合図で、外へは出ない。 */
+class UpstreamBusy extends Data.TaggedError("UpstreamBusy") {}
+/** 上流へ届かなかった（ネットワーク断など）。 */
+class UpstreamUnreachable extends Data.TaggedError("UpstreamUnreachable")<{ cause: unknown }> {}
+/** 期限（{@link UPSTREAM_TIMEOUT_MS}）までに終わらなかった。 */
+class UpstreamTimedOut extends Data.TaggedError("UpstreamTimedOut")<{ cause: unknown }> {}
+/** 2xx 以外が返った。送り直しを使い切った一時的な失敗と、3xx・4xx を含む。 */
+class UpstreamRejected extends Data.TaggedError("UpstreamRejected")<{
+  status: number;
+  model: AllowedModel;
+  detail: UpstreamErrorDetail;
+}> {}
+/** 2xx だが本文が読めなかった。成功の状態コードで失敗を隠さない（RULE-004）。 */
+class UpstreamUnreadable extends Data.TaggedError("UpstreamUnreadable")<{
+  model: AllowedModel;
+  cause: unknown;
+}> {}
+/** 捨てる・エラーとして読むだけの本文が読めなかった。ログに残して先へ進むためのもので、外へは出ない。 */
+class UpstreamBodyFailed extends Data.TaggedError("UpstreamBodyFailed")<{ cause: unknown }> {}
+
+/** 1回の送信が失敗する理由。状態コードを受け取れなかった場合に限る。 */
+type SendError = UpstreamUnreachable | UpstreamTimedOut;
+
+/** fetch の拒否が時間切れによるものか。 */
+function isTimeout(cause: unknown): boolean {
+  return cause instanceof Error && (cause.name === "TimeoutError" || cause.name === "AbortError");
+}
+
+function describeCause(cause: unknown): string {
+  return cause instanceof Error ? `${cause.name}: ${cause.message}` : String(cause);
+}
+
+/**
+ * `tries` を先頭から順に試し、混雑なら次へ回す。最後に `last` を試す。
+ * 混雑以外の失敗（届かない・時間切れ）は次へ回さずにそのまま返す。
+ */
+function inTurn<E>(
+  tries: readonly Effect.Effect<Sent, SendError | UpstreamBusy>[],
+  last: Effect.Effect<Sent, E>,
+): Effect.Effect<Sent, SendError | E> {
+  return tries.reduceRight<Effect.Effect<Sent, SendError | E>>(
+    (next, current) => current.pipe(Effect.catchTag("UpstreamBusy", () => next)),
+    last,
+  );
+}
+
 /**
  * 上流へ生成を頼み、2xx の本文を返す。
  *
@@ -213,43 +245,74 @@ export type UpstreamResult =
  * 少し待って次の巡へ。巡の数は待ち時間の要素の数 + 1（#259・#268）。
  * 失敗は例外にせず、理由と経過を返す。ログはここで残す。
  */
-export async function requestCheckGeneration(request: UpstreamRequest): Promise<UpstreamResult> {
+export function requestCheckGeneration(request: UpstreamRequest): Promise<UpstreamResult> {
   const { conceptId, models, retryDelaysMs } = request;
-  let upstream: Response;
-  // 最後に送ったモデル。成功したらこれが問題を作ったモデルになる。
-  let model: AllowedModel = models[0];
-  // 再送をまたいで1つの期限を使う。再送のたびに延ばすと、利用者を待たせる上限が決まらない（RULE-001）。
-  const deadline = AbortSignal.timeout(UPSTREAM_TIMEOUT_MS);
-  // 失敗したときに原因を切り分けられるよう、送った回数・モデル・状態コード・時間を残す（#253）。
+  // 失敗したときに原因を切り分けられるよう、送ったモデル・状態コード・時間を残す（#253）。
   const startedAt = Date.now();
+  const sentModels: AllowedModel[] = [];
   const statuses: number[] = [];
-  const sentModels: string[] = [];
-  let attempts = 0;
   const trace = (detail: Partial<UpstreamTrace> = {}): UpstreamTrace => ({
-    attempts,
+    attempts: sentModels.length,
     models: [...sentModels],
     statuses: [...statuses],
     elapsedMs: Date.now() - startedAt,
     ...detail,
   });
-  try {
-    rounds: for (let round = 0; ; round += 1) {
-      for (const [index, candidate] of models.entries()) {
-        model = candidate;
-        attempts += 1;
-        sentModels.push(model);
-        upstream = await request.fetch(
+  // 送信と本文の読み込みの両方を、期限で中断するためのもの。`tryPromise` が渡す signal は
+  // fetch が応答を返した時点で役目を終えるので、そのあとの本文の読み込みを止められない。
+  // 本物の fetch は、この signal の中断で本文のストリームも失敗させる。
+  const deadline = new AbortController();
+  // 再送の待ちと本文の読み込みまで含めて1つの期限にする。再送のたびに延ばすと、
+  // 利用者を待たせる上限が決まらない（RULE-001）。
+  const deadlineAt = startedAt + UPSTREAM_TIMEOUT_MS;
+
+  /**
+   * 期限の残りで切る。切れたら送信中の fetch も読み込み中の本文も abort し、`onTimeout` で失敗にする。
+   * 期限が来たときの扱いは段ごとに違うので、呼ぶ側が決める。
+   */
+  const withinDeadline = <A, E, E2>(
+    effect: Effect.Effect<A, E>,
+    onTimeout: (cause: DOMException) => E2,
+  ): Effect.Effect<A, E | E2> =>
+    Effect.suspend(() =>
+      effect.pipe(
+        Effect.onInterrupt(() => Effect.sync(() => deadline.abort())),
+        Effect.timeoutOrElse({
+          duration: Duration.millis(Math.max(0, deadlineAt - Date.now())),
+          orElse: () =>
+            Effect.fail(
+              onTimeout(
+                // fetch の `AbortSignal.timeout` と同じ名前にし、経過（`trace.cause`）の書式を揃える。
+                new DOMException(
+                  `no response within ${String(UPSTREAM_TIMEOUT_MS)} ms`,
+                  "TimeoutError",
+                ),
+              ),
+            ),
+        }),
+      ),
+    );
+
+  /** 1回送る。状態コードを受け取れたら、それが何であっても成功とする。 */
+  const send = Effect.fnUntraced(function* (
+    model: AllowedModel,
+  ): Effect.fn.Return<Sent, SendError> {
+    sentModels.push(model);
+    const response = yield* Effect.tryPromise({
+      try: () =>
+        request.fetch(
           `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
           {
             method: "POST",
             headers: { "x-goog-api-key": request.apiKey, "Content-Type": "application/json" },
             // リダイレクトを自動追跡しない。転送先へ API キーごと送られると、
             // 資格情報が意図しない相手に渡る（RULE-002）。Workers は `redirect: "error"` を
-            // 実装しておらず送信前に例外を投げるので `manual` にし、3xx は下の
-            // `!upstream.ok` で失敗として扱う（#253）。
+            // 実装しておらず送信前に例外を投げるので `manual` にし、3xx は
+            // `UpstreamRejected` として扱う（#253）。
             redirect: "manual",
             // 応答を一括で受け取る単発のリクエストなので、壁時計で必ず切る（RULE-001）。
-            signal: deadline,
+            // 期限は再送をまたいで1つで、`withinDeadline` で切れたら `deadline` を abort する。
+            signal: deadline.signal,
             body: JSON.stringify({
               contents: [{ parts: [{ text: request.prompt }] }],
               generationConfig: {
@@ -262,86 +325,149 @@ export async function requestCheckGeneration(request: UpstreamRequest): Promise<
               },
             }),
           },
-        );
-        statuses.push(upstream.status);
-        if (!RETRYABLE_UPSTREAM_STATUSES.has(upstream.status)) break rounds;
-        const lastInRound = index === models.length - 1;
-        if (lastInRound && retryDelaysMs[round] === undefined) break rounds;
-        // 混雑（503）などの一時的な失敗は、次のモデルか次の巡で送り直す。上流は失敗した
-        // 呼び出しを課金しないので、利用量の予約（1回）はそのままにする。本文は読まずに捨てる。
-        console.warn("check generation upstream is unavailable; retrying", {
-          conceptId,
-          model,
-          status: upstream.status,
-          attempt: attempts,
-        });
-        try {
-          await upstream.body?.cancel();
-        } catch (cause) {
-          // 捨てる本文の読み込みが壊れていても、送り直しの判断（状態コード）は変わらない。
-          // 外側の catch へ流すと「接続できなかった」になり、送り直さずに終わる。
+        ),
+      catch: (cause) =>
+        isTimeout(cause) ? new UpstreamTimedOut({ cause }) : new UpstreamUnreachable({ cause }),
+    });
+    statuses.push(response.status);
+    return { response, model };
+  });
+
+  /** 1回送り、一時的な失敗なら本文を捨てて {@link UpstreamBusy} にする。 */
+  const sendOrBusy = Effect.fnUntraced(function* (
+    model: AllowedModel,
+  ): Effect.fn.Return<Sent, SendError | UpstreamBusy> {
+    const sent = yield* send(model);
+    const { status } = sent.response;
+    if (!RETRYABLE_UPSTREAM_STATUSES.has(status)) return sent;
+    // 上流は失敗した呼び出しを課金しないので、利用量の予約（1回）はそのままにする。
+    console.warn("check generation upstream is unavailable; retrying", {
+      conceptId,
+      model,
+      status,
+      attempt: sentModels.length,
+    });
+    yield* Effect.tryPromise({
+      try: async () => sent.response.body?.cancel(),
+      catch: (cause) => new UpstreamBodyFailed({ cause }),
+    }).pipe(
+      // 捨てる本文の読み込みが壊れていても、送り直しの判断（状態コード）は変わらない。
+      // 失敗として流すと「接続できなかった」になり、送り直さずに終わる。
+      Effect.catchTag("UpstreamBodyFailed", ({ cause }) =>
+        Effect.sync(() =>
           console.warn("check generation could not discard an upstream body", {
             conceptId,
             model,
             cause,
-          });
-        }
-      }
-      await sleep(retryDelaysMs[round] ?? 0, deadline);
-    }
-  } catch (cause) {
-    // fetch の拒否（ネットワーク断、タイムアウト）は
-    // 下の !ok 分岐に届かない。失敗として数えられるよう応答の前に記録する。
-    const failed = trace({
-      cause: clipUpstreamText(
-        cause instanceof Error ? `${cause.name}: ${cause.message}` : String(cause),
+          }),
+        ),
       ),
-    });
+    );
+    return yield* new UpstreamBusy();
+  });
+
+  /** `index` 巡目。最後の巡の最後のモデルだけは、混雑でもそのまま返して状態コードで失敗を伝える。 */
+  const round = (index: number): Effect.Effect<Sent, SendError> => {
+    const delay = retryDelaysMs[index];
+    const head = models.slice(0, -1).map((model) => sendOrBusy(model));
+    const tail = models[models.length - 1];
+    if (delay === undefined) return inTurn(head, send(tail));
+    return inTurn(head, sendOrBusy(tail)).pipe(
+      Effect.catchTag("UpstreamBusy", () =>
+        Effect.sleep(Duration.millis(delay)).pipe(Effect.andThen(round(index + 1))),
+      ),
+    );
+  };
+
+  /** 2xx 以外の応答を、エラー本文の要点つきの失敗にする（#253）。 */
+  const reject = ({ response, model }: Sent): Effect.Effect<never, UpstreamRejected> =>
+    withinDeadline(
+      Effect.tryPromise({
+        try: () => response.text(),
+        catch: (cause) => new UpstreamBodyFailed({ cause }),
+      }),
+      // 期限が来ても状態コードはもう分かっている。時間切れで上書きすると、原因を切り分ける
+      // 手がかり（400 か 403 か、など）が消える（#253）。本文が読めなかったとして扱う。
+      (cause) => new UpstreamBodyFailed({ cause }),
+    ).pipe(
+      // 本文が読めなくても、状態コードで失敗は伝えられるので続ける。
+      Effect.catchTag("UpstreamBodyFailed", ({ cause }) =>
+        Effect.sync(() => {
+          console.warn("check generation could not read an upstream error body", {
+            conceptId,
+            model,
+            cause,
+          });
+          return "";
+        }),
+      ),
+      Effect.flatMap((body) =>
+        Effect.fail(
+          new UpstreamRejected({ status: response.status, model, detail: readUpstreamError(body) }),
+        ),
+      ),
+    );
+
+  const read = ({ response, model }: Sent) =>
+    withinDeadline(
+      Effect.tryPromise({
+        try: () => response.text(),
+        catch: (cause) => new UpstreamUnreadable({ model, cause }),
+      }),
+      (cause) => new UpstreamTimedOut({ cause }),
+    ).pipe(Effect.map((raw): UpstreamResult => ({ ok: true, raw, model })));
+
+  /** 届かなかった・時間切れを、例外の名前と文つきの失敗にする。 */
+  const unsent = (reason: UpstreamFailure, cause: unknown): UpstreamResult => {
+    const failed = trace({ cause: clipUpstreamText(describeCause(cause)) });
     console.error("check generation upstream request failed", {
       conceptId,
-      model,
+      model: sentModels.at(-1) ?? models[0],
       cause,
       trace: failed,
     });
-    return {
-      ok: false,
-      reason: isTimeout(cause) ? "upstream-timeout" : "upstream-unreachable",
-      trace: failed,
-    };
-  }
+    return { ok: false, reason, trace: failed };
+  };
 
-  if (!upstream.ok) {
-    // 上流のエラー本文から、原因の切り分けに使う要点だけを取り出して添える（#253）。
-    // 本文が読めなくても、状態コードで失敗は伝えられるので続ける。
-    let errorBody = "";
-    try {
-      errorBody = await upstream.text();
-    } catch (cause) {
-      console.warn("check generation could not read an upstream error body", {
-        conceptId,
-        model,
-        cause,
-      });
-    }
-    const failed = trace(readUpstreamError(errorBody));
-    console.error("check generation upstream request failed", {
-      conceptId,
-      model,
-      status: upstream.status,
-      trace: failed,
-    });
-    return { ok: false, reason: "upstream-status", trace: failed, status: upstream.status };
-  }
-
-  try {
-    return { ok: true, raw: await upstream.text(), model };
-  } catch (cause) {
-    // 2xx でも本文が読めなければ失敗である（RULE-004）。
-    console.error("check generation upstream body could not be read", {
-      conceptId,
-      model,
-      cause,
-    });
-    return { ok: false, reason: "upstream-unreadable", trace: trace() };
-  }
+  const program = withinDeadline(round(0), (cause) => new UpstreamTimedOut({ cause })).pipe(
+    Effect.flatMap(
+      (
+        sent,
+      ): Effect.Effect<UpstreamResult, UpstreamRejected | UpstreamUnreadable | UpstreamTimedOut> =>
+        sent.response.ok ? read(sent) : reject(sent),
+    ),
+    // 失敗の種類ごとに応答を作る。種類を足して扱い忘れると、ここで型が合わなくなる。
+    Effect.catchTags({
+      UpstreamUnreachable: ({ cause }) => Effect.succeed(unsent("upstream-unreachable", cause)),
+      UpstreamTimedOut: ({ cause }) => Effect.succeed(unsent("upstream-timeout", cause)),
+      UpstreamRejected: ({ status, model, detail }) => {
+        const failed = trace(detail);
+        console.error("check generation upstream request failed", {
+          conceptId,
+          model,
+          status,
+          trace: failed,
+        });
+        return Effect.succeed<UpstreamResult>({
+          ok: false,
+          reason: "upstream-status",
+          trace: failed,
+          status,
+        });
+      },
+      UpstreamUnreadable: ({ model, cause }) => {
+        console.error("check generation upstream body could not be read", {
+          conceptId,
+          model,
+          cause,
+        });
+        return Effect.succeed<UpstreamResult>({
+          ok: false,
+          reason: "upstream-unreadable",
+          trace: trace(),
+        });
+      },
+    }),
+  );
+  return Effect.runPromise(program);
 }

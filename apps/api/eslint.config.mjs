@@ -18,4 +18,31 @@ export default [
   js.configs.recommended,
   ...tseslint.configs.recommended,
   prettier,
+  {
+    // Effect はバンドルへの取り込み方で大きさが桁で変わる（実測、minify 後）。
+    // - `from "effect"` のまとめ import は tree-shaking が効ききらない。サブパスなら 82 → 24 KiB。
+    // - `Schema` は 1 つ使うだけで約 200 KiB を引き込む。エラーは `Data.TaggedError` で定義する。
+    // 詳細はルートの AGENTS.md「Effect」。
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "effect",
+              message:
+                'Effect はサブパスから import する（例: import * as Effect from "effect/Effect"）。まとめ import はバンドルが膨らむ。',
+            },
+          ],
+          patterns: [
+            {
+              group: ["effect/Schema", "effect/SchemaAST"],
+              message:
+                "Schema は約 200 KiB を引き込む。エラーは Data.TaggedError で定義する。検証に Schema を使うなら、サイズを測ったうえで方針として決めてから外すこと。",
+            },
+          ],
+        },
+      ],
+    },
+  },
 ];
