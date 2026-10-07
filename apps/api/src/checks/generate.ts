@@ -88,7 +88,7 @@ export async function generateCheck(
 
   const target = await resolveTarget(deps, userId, input);
   if (!target.ok) return target.outcome;
-  const { promptInput, objective } = target.value;
+  const { promptInput, objective, mapId } = target.value;
 
   const consent = await checkConsent(deps, userId, input.consentVersion);
   if (!consent.ok) return consent.outcome;
@@ -177,8 +177,25 @@ export async function generateCheck(
   };
   // 保存に失敗したら例外のまま 500 にする。問題だけ返して保存の失敗を飲み込むと、
   // 次に開いたときに問題が無く、回数だけが減っている（RULE-004）。
-  const { saved } = await deps.checks.put(userId, check, startedAtMs);
-  if (!saved) {
+  const stored = await deps.checks.put(
+    userId,
+    check,
+    startedAtMs,
+    mapId === undefined ? undefined : { mapId },
+  );
+  if (!stored.saved && stored.reason === "target-removed") {
+    // 生成中に、手で作ったマップ・ノード・狙った項目が消された（#242）。消したものの問題は残さない。
+    console.info("generated check was discarded because its map node was removed", { conceptId });
+    return {
+      status: 409,
+      body: {
+        error: "check discarded by map change",
+        message:
+          "生成中にマップ・ノード・「理解すること」が削除されたため、作った問題は保存しませんでした。",
+      },
+    };
+  }
+  if (!stored.saved) {
     // 生成中に学習データが削除された。削除を優先し、作った問題は返さない。
     console.info("generated check was discarded by a learning data reset", { conceptId });
     return {
@@ -211,7 +228,14 @@ async function resolveTarget(
   deps: ChecksDeps,
   userId: string,
   { conceptId, scope, objectiveId }: GenerateCheckInput,
-): Promise<Step<{ promptInput: CheckPromptInput; objective: LearningObjective | undefined }>> {
+): Promise<
+  Step<{
+    promptInput: CheckPromptInput;
+    objective: LearningObjective | undefined;
+    /** 手で作ったマップのノードなら、そのマップの ID。保存の直前にノードがまだあるか確かめる。 */
+    mapId: string | undefined;
+  }>
+> {
   const catalog = await loadUserConceptCatalog(deps.maps, userId, {
     ...(deps.objectives === undefined ? {} : { objectives: deps.objectives }),
   });
@@ -279,7 +303,8 @@ async function resolveTarget(
   const areaLabel = catalog.areaLabelOf(resolved.input.language);
   const promptInput =
     areaLabel === undefined ? resolved.input : { ...resolved.input, language: areaLabel };
-  return { ok: true, value: { promptInput, objective } };
+  const mapId = fixed ? undefined : resolved.input.language;
+  return { ok: true, value: { promptInput, objective, mapId } };
 }
 
 /** 送る前に同意を確かめる。その場の同意か、「今後表示しない」の記録のどちらか。 */

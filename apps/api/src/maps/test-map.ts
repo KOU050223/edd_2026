@@ -5,6 +5,7 @@
  * 次のノードにだけ「理解すること」を2つ持たせる。
  */
 
+import type { PersonalConceptCheck } from "@gakushu-sochi/domain";
 import type { LearningMapRepository } from "../repository/types.js";
 
 export const TEST_MAP_ID = "mrust0001";
@@ -57,4 +58,24 @@ export async function seedTestMap(maps: LearningMapRepository, userId: string): 
     nowMs: 0,
   });
   if (!created || !saved) throw new Error("test map could not be seeded");
+}
+
+/** 保存済みの確認問題1組。`objectiveId` を渡すとその項目を狙った組になる。 */
+export function personalCheck(conceptId: string, objectiveId?: string): PersonalConceptCheck {
+  const question = {
+    prompt: "設問",
+    choices: ["a", "b", "c", "d"],
+    answerIndex: 0,
+    explanation: "解説",
+  };
+  return {
+    conceptId,
+    overview: question,
+    practice: { ...question, code: "let x = 1;" },
+    scope: objectiveId === undefined ? "concept" : "objective",
+    ...(objectiveId === undefined ? {} : { objectiveId }),
+    level: "basic",
+    model: "test-model",
+    generatedAt: "2026-09-02T00:00:00.000Z",
+  };
 }

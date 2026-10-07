@@ -628,11 +628,25 @@ export class InMemoryPersonalCheckRepository implements PersonalCheckRepository 
     userId: string,
     check: PersonalConceptCheck,
     startedAtMs: number,
-  ): Promise<{ saved: boolean }> {
+    target?: { mapId: string },
+  ): Promise<{ saved: true } | { saved: false; reason: "reset" | "target-removed" }> {
     // D1 実装と同じく、生成を始めたあとに学習データが削除されていたら書かない。
     const resetAtMs = this.store.historyResets.get(userId);
     if (resetAtMs !== undefined && resetAtMs >= startedAtMs) {
-      return Promise.resolve({ saved: false });
+      return Promise.resolve({ saved: false, reason: "reset" });
+    }
+    // 手で作ったマップのノードなら、ノードと狙った項目がまだあるときだけ書く（#242）。
+    if (target !== undefined) {
+      const map = this.store.learningMaps.get(target.mapId);
+      const node = map?.nodes.find((candidate) => candidate.conceptId === check.conceptId);
+      const objectiveKept =
+        check.objectiveId === undefined ||
+        (map?.objectives.get(check.conceptId) ?? []).some(
+          (objective) => objective.id === check.objectiveId,
+        );
+      if (map?.ownerUserId !== userId || node?.kind !== "own" || !objectiveKept) {
+        return Promise.resolve({ saved: false, reason: "target-removed" });
+      }
     }
     let checks = this.store.personalChecksByUser.get(userId);
     if (checks === undefined) {
@@ -640,7 +654,7 @@ export class InMemoryPersonalCheckRepository implements PersonalCheckRepository 
       this.store.personalChecksByUser.set(userId, checks);
     }
     checks.set(JSON.stringify([check.conceptId, checkTargetOf(check)]), structuredClone(check));
-    return Promise.resolve({ saved: true });
+    return Promise.resolve({ saved: true as const });
   }
 
   listAllByUser(userId: string): Promise<PersonalConceptCheck[]> {
@@ -759,6 +773,13 @@ export class InMemoryLearningMapRepository implements LearningMapRepository {
     for (const conceptId of map.objectives.keys()) {
       if (!kept.has(conceptId)) map.objectives.delete(conceptId);
     }
+    // 外したノードの確認問題も消す（#242、2026-10-07 の決定）。
+    const removed = new Set(
+      map.nodes
+        .filter((node) => node.kind === "own" && !kept.has(node.conceptId))
+        .map((node) => node.conceptId),
+    );
+    this.dropChecks(ownerUserId, (check) => removed.has(check.conceptId));
     Object.assign(map, {
       title,
       description,
@@ -771,7 +792,13 @@ export class InMemoryLearningMapRepository implements LearningMapRepository {
   }
 
   delete(ownerUserId: string, mapId: string): Promise<boolean> {
-    if (this.owned(ownerUserId, mapId) === undefined) return Promise.resolve(false);
+    const map = this.owned(ownerUserId, mapId);
+    if (map === undefined) return Promise.resolve(false);
+    // そのマップのノードの確認問題も消す（#242、2026-10-07 の決定）。
+    const own = new Set(
+      map.nodes.filter((node) => node.kind === "own").map((node) => node.conceptId),
+    );
+    this.dropChecks(ownerUserId, (check) => own.has(check.conceptId));
     this.store.learningMaps.delete(mapId);
     return Promise.resolve(true);
   }
@@ -789,6 +816,15 @@ export class InMemoryLearningMapRepository implements LearningMapRepository {
     const map = this.owned(ownerUserId, params.mapId);
     const node = map?.nodes.find((candidate) => candidate.conceptId === params.conceptId);
     if (map === undefined || node?.kind !== "own") return Promise.resolve(false);
+    // 外す項目を狙った確認問題を消す（#242、2026-10-07 の決定）。
+    const keptIds = new Set(params.objectives.map((objective) => objective.id));
+    this.dropChecks(
+      ownerUserId,
+      (check) =>
+        check.conceptId === params.conceptId &&
+        check.objectiveId !== undefined &&
+        !keptIds.has(check.objectiveId),
+    );
     if (params.objectives.length === 0) map.objectives.delete(params.conceptId);
     else
       map.objectives.set(
@@ -809,6 +845,15 @@ export class InMemoryLearningMapRepository implements LearningMapRepository {
 
   listOwnNodes(ownerUserId: string, limit: number): Promise<StoredOwnMapNode[]> {
     return Promise.resolve(this.allOwnNodes(ownerUserId).slice(0, limit));
+  }
+
+  /** D1 の user_concept_checks から、条件に合う行を消す。 */
+  private dropChecks(userId: string, matches: (check: PersonalConceptCheck) => boolean): void {
+    const checks = this.store.personalChecksByUser.get(userId);
+    if (checks === undefined) return;
+    for (const [key, check] of checks) {
+      if (matches(check)) checks.delete(key);
+    }
   }
 
   private owned(ownerUserId: string, mapId: string): InMemoryLearningMap | undefined {

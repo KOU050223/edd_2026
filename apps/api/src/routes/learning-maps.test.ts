@@ -1,4 +1,4 @@
-import { beforeEach, expect, test } from "vitest";
+import { beforeEach, describe, expect, test } from "vitest";
 import { Hono } from "hono";
 import type { Concept, LearningObjective } from "@gakushu-sochi/domain";
 import type { AuthVariables } from "../auth/middleware.js";
@@ -15,8 +15,10 @@ import {
   createInMemoryRepositoryStore,
   InMemoryIdentityRepository,
   InMemoryLearningMapRepository,
+  InMemoryPersonalCheckRepository,
   type InMemoryRepositoryStore,
 } from "../repository/memory.js";
+import { personalCheck } from "../maps/test-map.js";
 import { createLearningMapsRoute } from "./learning-maps.js";
 
 // 応答の JSON 化は本番 app の onError が担う。エラーは本文の種別（平文）で確かめる。
@@ -489,6 +491,86 @@ test("マップを消すとノード・線・項目が残らず、退会でも�
   await create(TWO_NODES, "token-b");
   await identity.deleteUser("user-a");
   expect([...store.learningMaps.values()].map((stored) => stored.ownerUserId)).toEqual(["user-b"]);
+});
+
+describe("消したものの確認問題を消す（#242、2026-10-07 の決定）", () => {
+  /** 保存済みの確認問題の (Concept, 狙い) の一覧。 */
+  async function savedChecks(userId = "user-a") {
+    const all = await new InMemoryPersonalCheckRepository(store).listAllByUser(userId);
+    return all.map((check) => [check.conceptId, check.objectiveId ?? "concept"]);
+  }
+
+  async function putCheck(conceptId: string, objectiveId?: string, userId = "user-a") {
+    await new InMemoryPersonalCheckRepository(store).put(
+      userId,
+      personalCheck(conceptId, objectiveId),
+      0,
+    );
+  }
+
+  test("マップを消すと、そのマップのノードの確認問題だけを消す", async () => {
+    const other = await create();
+    const { map } = await create({
+      title: "t",
+      nodes: [
+        { kind: "own", ref: "new:x", label: "x", summary: "s" },
+        { kind: "reference", conceptId: "go.defer" },
+        { kind: "reference", conceptId: other.map.nodes[0]!.conceptId },
+      ],
+    });
+    const x = map.nodes[0]!.conceptId;
+    await putCheck(x);
+    // 参照のノードの問題は元の Concept のもの。消さない。
+    await putCheck("go.defer");
+    await putCheck(other.map.nodes[0]!.conceptId);
+
+    await send("DELETE", `/v1/learning-maps/${map.id}`, "token-a");
+
+    expect(await savedChecks()).toEqual([
+      ["go.defer", "concept"],
+      [other.map.nodes[0]!.conceptId, "concept"],
+    ]);
+  });
+
+  test("置き換えでノードを外すと、そのノードの確認問題を消す", async () => {
+    const { map } = await create();
+    const [a, b] = map.nodes.map((node) => node.conceptId) as [string, string];
+    await putCheck(a);
+    await putCheck(b);
+
+    await send("PUT", `/v1/learning-maps/${map.id}`, "token-a", {
+      title: "t",
+      nodes: [{ kind: "own", ref: a, label: "a", summary: "s" }],
+    });
+
+    expect(await savedChecks()).toEqual([[a, "concept"]]);
+  });
+
+  test("項目を外すと、その項目を狙った組だけを消す", async () => {
+    const { map } = await create();
+    const node = map.nodes[0]!.conceptId;
+    const path = `/v1/learning-maps/${map.id}/nodes/${node}/objectives`;
+    const created = (await (
+      await send("PUT", path, "token-a", { objectives: [{ label: "let" }, { label: "mut" }] })
+    ).json()) as PutLearningObjectivesResponse;
+    const [keep, drop] = created.objectives.map((objective) => objective.id) as [string, string];
+    await putCheck(node, keep);
+    await putCheck(node, drop);
+
+    await send("PUT", path, "token-a", { objectives: [{ id: keep, label: "let" }] });
+
+    expect(await savedChecks()).toEqual([[node, keep]]);
+  });
+
+  test("他の利用者の確認問題は消さない", async () => {
+    const { map } = await create();
+    const node = map.nodes[0]!.conceptId;
+    await putCheck(node, undefined, "user-b");
+
+    await send("DELETE", `/v1/learning-maps/${map.id}`, "token-a");
+
+    expect(await savedChecks("user-b")).toEqual([[node, "concept"]]);
+  });
 });
 
 test("VS Code 向けの一覧は、参照ではないノードを更新の新しいマップから返す", async () => {

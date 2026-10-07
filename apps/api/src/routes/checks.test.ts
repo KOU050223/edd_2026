@@ -27,6 +27,7 @@ import { createAiRoute } from "./ai.js";
 import { createChecksRoute, parseModelList } from "./checks.js";
 import {
   seedTestMap,
+  TEST_MAP_ID,
   TEST_MAP_BASE,
   TEST_MAP_NODE,
   TEST_MAP_OBJECTIVES,
@@ -852,6 +853,40 @@ describe("手で作ったマップのノード（#242）", () => {
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toMatchObject({ error: "unknown concept" });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["マップ", (harness: Harness) => harness.maps.delete(USER_A, TEST_MAP_ID)],
+    [
+      "狙った項目",
+      (harness: Harness) =>
+        harness.maps.replaceObjectives(USER_A, {
+          mapId: TEST_MAP_ID,
+          conceptId: TEST_MAP_NODE.id,
+          objectives: [{ ...TEST_MAP_OBJECTIVES[1]!, source: "manual" }],
+          nowIso: NOW.toISOString(),
+          nowMs: NOW.getTime(),
+        }),
+    ],
+  ])("生成中に%sが消されたら、作った問題を保存しない", async (_name, remove) => {
+    const fetchMock = stubUpstream(generatedCheck({ conceptId: TEST_MAP_NODE.id }));
+    silenceInfo();
+    const harness = buildApp();
+    await seedTestMap(harness.maps, USER_A);
+    // 上流が答える前に、別の端末で消された状態を作る。
+    const respond = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (...args: unknown[]) => {
+      await remove(harness);
+      return respond(...args);
+    });
+
+    const response = await generate(harness, MAP_OBJECTIVE);
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "check discarded by map change",
+    });
+    await expect(harness.checks.listByConcept(USER_A, TEST_MAP_NODE.id)).resolves.toEqual([]);
   });
 
   it("別のノードの項目は狙えない", async () => {
