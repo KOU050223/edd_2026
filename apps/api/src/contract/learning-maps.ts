@@ -8,7 +8,7 @@
  */
 
 import * as v from "valibot";
-import { CHECK_LEVELS, CONCEPT_ID_PATTERN } from "@gakushu-sochi/domain";
+import { CHECK_LEVELS, CONCEPT_ID_PATTERN, type PersonalConceptCheck } from "@gakushu-sochi/domain";
 
 /** 1人が持てるマップの数。 */
 export const MAX_MAPS_PER_USER = 20;
@@ -178,10 +178,21 @@ export interface LearningMapSummary {
   updatedAt: string;
 }
 
+/**
+ * 作成時の確認問題の状態（#247）。
+ *
+ * - `pending`: まだ作っていない（または1回失敗した）。`checks:generate` で作れる。
+ * - `done`: 作成済み。
+ * - `exhausted`: 頼める回数を使い切った（全部失敗した）。
+ */
+export type CreationChecksStatus = "pending" | "done" | "exhausted";
+
 /** `GET /v1/learning-maps/:id` の応答。ノードは保存した順（学習の順）に並ぶ。 */
 export interface LearningMapView extends Omit<LearningMapSummary, "nodeCount"> {
   nodes: LearningMapNodeView[];
   edges: LearningMapEdge[];
+  /** AI で作るときに「確認問題も作る」を選んだマップだけが持つ（#247）。 */
+  creationChecks?: { status: CreationChecksStatus };
 }
 
 /** `GET /v1/learning-maps` の応答。更新の新しい順。 */
@@ -252,6 +263,11 @@ export const generateLearningMapSchema = v.pipe(
     theme: text(MAX_GENERATION_THEME_LENGTH),
     goal: v.optional(text(MAX_GENERATION_GOAL_LENGTH)),
     level: v.picklist(CHECK_LEVELS),
+    /**
+     * 作ったあとに確認問題も作るか（#247）。既定は作る。`true` なら、マップを保存したあと
+     * `POST /v1/learning-maps/:id/checks:generate` で作れる（回数はさらに 5 回分）。
+     */
+    checks: v.optional(v.boolean(), true),
     /** 生成の画面でその場で同意した文面の版。「今後表示しない」の記録があれば省略できる。 */
     consentVersion: v.optional(v.pipe(v.number(), v.integer())),
   }),
@@ -275,4 +291,10 @@ export interface MapGenerationConsentBody {
   /** 今の版で「今後表示しない」を選んでいるか。古い版の記録は false。 */
   granted: boolean;
   grantedAt?: string;
+}
+
+/** `POST /v1/learning-maps/:id/checks:generate` の応答（#247）。保存できた組と、作れなかった組の数。 */
+export interface GenerateCreationChecksResponse {
+  checks: PersonalConceptCheck[];
+  failedCount: number;
 }

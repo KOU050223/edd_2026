@@ -61,8 +61,10 @@ import type {
   LearningMapRepository,
   MasteryOverride,
   MasteryOverrideRepository,
+  CheckOrigin,
   PersonalCheckRepository,
   StoredConceptCheck,
+  StoredCreationChecks,
   StoredEventInput,
   StoredImportSessionInput,
   StoredLearningMap,
@@ -1537,7 +1539,7 @@ export class D1PersonalCheckRepository implements PersonalCheckRepository {
     userId: string,
     check: PersonalConceptCheck,
     startedAtMs: number,
-    target?: { mapId: string },
+    target?: { mapId: string; origin?: CheckOrigin },
   ): Promise<{ saved: true } | { saved: false; reason: "reset" | "target-removed" }> {
     const { conceptId, overview, practice } = check;
     // 本文は生成時の JSON と同じ形で持つ。読み出しで `parseConceptCheck` をそのまま通せる。
@@ -1558,9 +1560,9 @@ export class D1PersonalCheckRepository implements PersonalCheckRepository {
     const result = await this.db
       .prepare(
         `INSERT INTO user_concept_checks (
-           user_id, concept_id, target, scope, objective_id, level, body, model, generated_at
+           user_id, concept_id, target, scope, objective_id, level, body, model, generated_at, origin
          )
-         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
          -- 生成を始めたあとに学習データが削除されていたら書かない。同じ文の中で判定する。
          WHERE NOT EXISTS (
            SELECT 1 FROM learning_history_resets
@@ -1573,7 +1575,8 @@ export class D1PersonalCheckRepository implements PersonalCheckRepository {
            level = excluded.level,
            body = excluded.body,
            model = excluded.model,
-           generated_at = excluded.generated_at`,
+           generated_at = excluded.generated_at,
+           origin = excluded.origin`,
       )
       .bind(
         userId,
@@ -1585,6 +1588,7 @@ export class D1PersonalCheckRepository implements PersonalCheckRepository {
         body,
         check.model,
         check.generatedAt,
+        target?.origin ?? "on_demand",
         userId,
         startedAtMs,
         ...targetBindings,
@@ -1603,6 +1607,19 @@ export class D1PersonalCheckRepository implements PersonalCheckRepository {
       .bind(...targetBindings)
       .first<{ found: number }>();
     return { saved: false, reason: exists === null ? "target-removed" : "reset" };
+  }
+
+  async listMapCreationChecks(userId: string): Promise<PersonalConceptCheck[]> {
+    const { results } = await this.db
+      .prepare(
+        `SELECT ${PERSONAL_CHECK_COLUMNS}
+         FROM user_concept_checks
+         WHERE user_id = ? AND origin = 'map_creation'
+         ORDER BY concept_id ASC, target ASC`,
+      )
+      .bind(userId)
+      .all<PersonalCheckRow>();
+    return results.map(toPersonalCheck);
   }
 
   async listAllByUser(userId: string): Promise<PersonalConceptCheck[]> {
@@ -1681,6 +1698,26 @@ export class D1MapGenerationConsentRepository extends D1GenerationConsentReposit
   }
 }
 
+/** 作成時の確認問題の技術レベル。表の CHECK で守られているので、外れていたら壊れている。 */
+function toCheckLevel(value: string): CheckLevel {
+  if (!(CHECK_LEVELS as readonly string[]).includes(value)) {
+    throw new Error(`learning_maps.creation_checks_level is invalid: ${value}`);
+  }
+  return value as CheckLevel;
+}
+
+function toCreationChecks(row: LearningMapRow): StoredCreationChecks | null {
+  if (row.creation_checks_level === undefined || row.creation_checks_level === null) return null;
+  if (typeof row.creation_checks_attempts !== "number") {
+    throw new Error(`learning_maps.creation_checks_attempts is missing: ${row.id}`);
+  }
+  return {
+    level: toCheckLevel(row.creation_checks_level),
+    attempts: row.creation_checks_attempts,
+    doneAt: row.creation_checks_done_at ?? null,
+  };
+}
+
 /** learning_maps の1行。 */
 interface LearningMapRow {
   id: string;
@@ -1690,6 +1727,10 @@ interface LearningMapRow {
   created_at: string;
   updated_at: string;
   node_count: number;
+  /** `get` だけが読む（作成時の確認問題の状態、#247）。 */
+  creation_checks_level?: string | null;
+  creation_checks_attempts?: number;
+  creation_checks_done_at?: string | null;
 }
 
 interface LearningMapNodeRow {
@@ -1818,6 +1859,7 @@ export class D1LearningMapRepository implements LearningMapRepository {
       id: string;
       content: StoredMapContent;
       objectives?: readonly StoredLearningObjective[];
+      creationChecksLevel?: CheckLevel;
       nowIso: string;
       nowMs: number;
       maxMaps: number;
@@ -1837,8 +1879,9 @@ export class D1LearningMapRepository implements LearningMapRepository {
       this.db
         .prepare(
           `INSERT INTO learning_maps
-             (id, owner_user_id, title, description, visibility, created_at, updated_at, updated_at_ms)
-           SELECT ?, ?, ?, ?, 'private', ?, ?, ?
+             (id, owner_user_id, title, description, visibility, created_at, updated_at, updated_at_ms,
+              creation_checks_level)
+           SELECT ?, ?, ?, ?, 'private', ?, ?, ?, ?
            WHERE (SELECT COUNT(*) FROM learning_maps WHERE owner_user_id = ?) < ?`,
         )
         .bind(
@@ -1849,6 +1892,7 @@ export class D1LearningMapRepository implements LearningMapRepository {
           params.nowIso,
           params.nowIso,
           params.nowMs,
+          params.creationChecksLevel ?? null,
           ownerUserId,
           params.maxMaps,
         ),
@@ -1897,7 +1941,8 @@ export class D1LearningMapRepository implements LearningMapRepository {
     const [map, nodes, edges, objectives] = await this.db.batch([
       this.db
         .prepare(
-          `SELECT id, title, description, visibility, created_at, updated_at, 0 AS node_count
+          `SELECT id, title, description, visibility, created_at, updated_at, 0 AS node_count,
+                  creation_checks_level, creation_checks_attempts, creation_checks_done_at
            FROM learning_maps WHERE id = ? AND owner_user_id = ?`,
         )
         .bind(mapId, ownerUserId),
@@ -1936,7 +1981,44 @@ export class D1LearningMapRepository implements LearningMapRepository {
         to: edge.to_concept_id,
       })),
       objectives: groupByConcept(rowsOf<LearningObjectiveRow>(objectives).map(toLearningObjective)),
+      creationChecks: toCreationChecks(row),
     };
+  }
+
+  async claimCreationChecks(
+    ownerUserId: string,
+    mapId: string,
+    maxAttempts: number,
+  ): Promise<CheckLevel | null> {
+    // 判定と加算を1文で行う。読んでから足すと、同時に2回頼まれたときに両方が通る。
+    const row = await this.db
+      .prepare(
+        `UPDATE learning_maps SET creation_checks_attempts = creation_checks_attempts + 1
+         WHERE id = ? AND owner_user_id = ?
+           AND creation_checks_level IS NOT NULL
+           AND creation_checks_done_at IS NULL
+           AND creation_checks_attempts < ?
+         RETURNING creation_checks_level`,
+      )
+      .bind(mapId, ownerUserId, maxAttempts)
+      .first<{ creation_checks_level: string }>();
+    if (row === null) return null;
+    return toCheckLevel(row.creation_checks_level);
+  }
+
+  async completeCreationChecks(
+    ownerUserId: string,
+    mapId: string,
+    nowIso: string,
+  ): Promise<boolean> {
+    const result = await this.db
+      .prepare(
+        `UPDATE learning_maps SET creation_checks_done_at = ?
+         WHERE id = ? AND owner_user_id = ?`,
+      )
+      .bind(nowIso, mapId, ownerUserId)
+      .run();
+    return changesOf(result) === 1;
   }
 
   async replace(

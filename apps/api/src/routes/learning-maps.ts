@@ -25,6 +25,7 @@ import {
   generateLearningMapSchema,
   learningMapContentSchema,
   learningObjectivesInputSchema,
+  type GenerateCreationChecksResponse,
   type GenerateLearningMapResponse,
   type LearningMapView,
   type LearningObjectiveSource,
@@ -38,6 +39,7 @@ import {
 } from "../contract/learning-maps.js";
 import { newMapId, resolveMapContent } from "../maps/content.js";
 import { generateLearningMap, type MapGenerationDeps } from "../maps/generate.js";
+import { generateCreationChecks, MAX_CREATION_CHECK_ATTEMPTS } from "../maps/creation-checks.js";
 import type {
   IdentityRepository,
   LearningMapRepository,
@@ -186,6 +188,18 @@ export function createLearningMapsRoute(resolve: LearningMapsDepsResolver) {
             },
       ),
       edges: map.edges,
+      ...(map.creationChecks === null
+        ? {}
+        : {
+            creationChecks: {
+              status:
+                map.creationChecks.doneAt !== null
+                  ? "done"
+                  : map.creationChecks.attempts >= MAX_CREATION_CHECK_ATTEMPTS
+                    ? "exhausted"
+                    : "pending",
+            },
+          }),
     };
   }
 
@@ -259,6 +273,28 @@ export function createLearningMapsRoute(resolve: LearningMapsDepsResolver) {
     "/map-generation-consent",
     rateLimit((env) => env.PROFILE_RATE_LIMITER),
   );
+  app.use(
+    "/learning-maps/:id/checks:generate",
+    rateLimit((env) => env.PROFILE_RATE_LIMITER),
+  );
+
+  // 作成時の確認問題（#247）。AI で作ったマップを保存したあと、Web が続けて呼ぶ。
+  app.post("/learning-maps/:id/checks:generate", async (c) => {
+    const userId = c.get("user").userId;
+    const deps = resolve(c.env);
+    const generation = deps.generation ?? generationNotConfigured();
+    const outcome = await generateCreationChecks(
+      { ...deps, generation },
+      userId,
+      c.req.param("id"),
+      c.req.path,
+    );
+    if (outcome.status === 200) {
+      const body: GenerateCreationChecksResponse = outcome.body;
+      return c.json(body, 200, { "cache-control": "no-store" });
+    }
+    return c.json(outcome.body, outcome.status);
+  });
 
   app.post("/learning-maps:generate", async (c) => {
     const userId = c.get("user").userId;

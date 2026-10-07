@@ -235,3 +235,78 @@ export function buildCheckPrompt(input: CheckPromptInput, request: CheckRequest)
       `例示コード ${String(CHECK_LIMITS.codeMaxLength)}、解説 ${String(CHECK_LIMITS.explanationMaxLength)}。`,
   ].join("\n");
 }
+
+/** マップを作るときの問題で、1組が狙う Concept と「理解すること」（#247）。 */
+export interface CreationCheckTarget {
+  input: CheckPromptInput;
+  objective: { id: string; label: string };
+}
+
+/**
+ * マップを作るときに、複数の組（今は2組）を1回で作らせるプロンプト（#247）。
+ *
+ * 材料はマップの定義（表示名・概要・前後の概念・「理解すること」）だけで、本人の質問は載せない。
+ * ここで作った組だけが共有の側へ上げられる（個人のデータを含まないため）。
+ * 1組ごとの方針と形は {@link buildCheckPrompt} と同じにし、組をまたいで混ぜさせない。
+ */
+export function buildCreationChecksPrompt(
+  targets: readonly CreationCheckTarget[],
+  level: CheckLevel,
+): string {
+  return [
+    "あなたは Gakushu Sochi の確認問題を作る出題者です。",
+    `次の ${String(targets.length)} 個の概念それぞれについて、利用者がその「理解すること」を理解できたかを測る4択問題を、概要問題と実践問題の2問1組で作ってください。`,
+    ...targets.flatMap((target, index) => [
+      "",
+      `--- 概念${String(index + 1)} ---`,
+      `ID: ${target.input.id}`,
+      `表示名: ${target.input.label}`,
+      `領域: ${target.input.language}`,
+      `概要: ${target.input.summary}`,
+      `前提の概念: ${listOrNone(target.input.prerequisiteLabels)}`,
+      `次に接続する概念: ${listOrNone(target.input.nextLabels)}`,
+      `出題の的にする「理解すること」: ${target.objective.label}`,
+    ]),
+    "",
+    "--- 出題の方針 ---",
+    `技術レベル: ${CHECK_LEVEL_LABELS[level]}。${LEVEL_GUIDE[level]}`,
+    "各組は、その概念の「理解すること」1項目だけを的にし、他の概念へ話を広げない。",
+    "概要問題: この概念が何であり、どう振る舞うかを問う。コードは載せない。",
+    `実践問題: 短い例示コードを自分で書き、そのコードについて問う。コードは ${CODE_MAX_LINES} 行以内にする。`,
+    "例示コードは領域に合わせて書く。プログラミング言語でない領域では、その領域で実際に書くもの（コマンド、SQL、リクエストなど）を例示にする。",
+    "前提の概念は既に理解しているものとして扱い、次に接続する概念は出題しない。",
+    "誤答の選択肢には、この概念でありがちな誤解を書く。明らかに無関係な選択肢で埋めない。",
+    "「上記のすべて」「いずれでもない」のような選択肢は作らない。",
+    "設問文と選択肢に答えを書かない。解説には、なぜその選択肢が正解なのかを書く。",
+    "すべて日本語で書く。",
+    "",
+    "--- 出力形式 ---",
+    "次の形の JSON を1つだけ出力する。前後に説明文やコードブロックの囲みを付けない。",
+    JSON.stringify({
+      checks: [
+        {
+          conceptId: "概念1の ID",
+          overview: {
+            prompt: "概要問題の設問文",
+            choices: ["選択肢1", "選択肢2", "選択肢3", "選択肢4"],
+            answerIndex: 0,
+            explanation: "概要問題の解説",
+          },
+          practice: {
+            prompt: "実践問題の設問文",
+            code: "例示コード",
+            choices: ["選択肢1", "選択肢2", "選択肢3", "選択肢4"],
+            answerIndex: 0,
+            explanation: "実践問題の解説",
+          },
+        },
+      ],
+    }),
+    `checks は概念1から順にちょうど ${String(targets.length)} 組。各組の conceptId はその概念の ID をそのまま入れる。`,
+    `choices はちょうど ${String(CHECK_LIMITS.choiceCount)} 個で、正解はちょうど1つにする。`,
+    "answerIndex は choices の添字（0 始まり）で、正解の位置を指す。",
+    "文字数の上限: 設問文 " +
+      `${String(CHECK_LIMITS.promptMaxLength)}、選択肢 ${String(CHECK_LIMITS.choiceMaxLength)}、` +
+      `例示コード ${String(CHECK_LIMITS.codeMaxLength)}、解説 ${String(CHECK_LIMITS.explanationMaxLength)}。`,
+  ].join("\n");
+}

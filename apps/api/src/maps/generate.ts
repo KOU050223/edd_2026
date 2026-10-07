@@ -55,6 +55,7 @@ import type {
   LearningEventRepository,
   LearningMapRepository,
   MasteryOverrideRepository,
+  PersonalCheckRepository,
   StoredLearningObjective,
 } from "../repository/types.js";
 import { loadUserConceptCatalog } from "./catalog.js";
@@ -96,6 +97,8 @@ export interface MapGenerationDeps {
   models?: readonly string[];
   fetch: typeof fetch;
   usage: AiUsageRepository;
+  /** 作成時の確認問題の保存先（#247）。解くときに作る問題と同じ表。 */
+  checks: PersonalCheckRepository;
   /** 「今後表示しない」の記録（migrations/0014_map_generation_consents.sql）。 */
   consents: CheckGenerationConsentRepository;
   /** 本人の理解度を導出するために読む。 */
@@ -273,7 +276,7 @@ export async function generateLearningMap(
     for (const [key, labels] of parsed.value) objectivesByKey.set(key, labels);
   }
 
-  return save(deps, userId, skeleton, objectivesByKey, now, request);
+  return save(deps, userId, skeleton, objectivesByKey, now, request, input.checks);
 }
 
 /** 骨組みのプロンプトの材料（参照の候補と、本人が学んでいる Concept）を読む。 */
@@ -416,6 +419,8 @@ async function save(
   objectivesByKey: ReadonlyMap<string, readonly string[]>,
   now: Date,
   request: MapGenerationRequest,
+  /** 確認問題も作るか（#247）。作るなら技術レベルをマップに残し、作成時の問題の口を開ける。 */
+  withChecks: boolean,
 ): Promise<GenerateLearningMapOutcome> {
   const refOf = new Map(
     skeleton.nodes.map((node) => [
@@ -481,6 +486,7 @@ async function save(
     id: mapId,
     content: resolved.content,
     objectives,
+    ...(withChecks ? { creationChecksLevel: request.level } : {}),
     nowIso,
     nowMs: now.getTime(),
     maxMaps: MAX_MAPS_PER_USER,
@@ -546,7 +552,7 @@ async function checkConsent(
 }
 
 /** API キーと、送ってよいモデルの並びを確かめる（`checks/generate.ts` と同じ規則）。 */
-function resolveUpstreamConfig(
+export function resolveUpstreamConfig(
   generation: MapGenerationDeps,
   path: string,
 ): Step<{ apiKey: string; models: AllowedModel[] }> {
@@ -658,7 +664,7 @@ function mapLimitBody() {
   };
 }
 
-function notConfiguredBody() {
+export function notConfiguredBody() {
   return {
     error: "AI service is not configured" as const,
     message:
@@ -666,17 +672,29 @@ function notConfiguredBody() {
   };
 }
 
-/** 上限到達時の応答。形は `POST /v1/ai/responses` と同じ（`AiUsageLimitBody`）。 */
-function limitReached(kind: AiUsageLimitKind, now: Date): AiUsageLimitBody {
+/**
+ * 上限到達時の応答。形は `POST /v1/ai/responses` と同じ（`AiUsageLimitBody`）。
+ * `what` はマップそのものか、作成時の確認問題か（#247）。どちらも 5 回分を使う。
+ */
+export function limitReached(
+  kind: AiUsageLimitKind,
+  now: Date,
+  what: "map" | "checks" = "map",
+): AiUsageLimitBody {
   const resetAt = kind === "daily" ? nextUtcDay(now) : nextUtcMonth(now);
   const when = kind === "daily" ? "明日 UTC 0時" : "翌月 UTC 1日 0時";
   const scope = kind === "daily" ? "今日" : "今月";
+  const action = what === "map" ? "マップを1つ作る" : "マップの確認問題を作る";
+  const alternative =
+    what === "map"
+      ? "手でマップを作るのは回数を使いません。"
+      : "確認問題は、あとから確認問題の画面で1組ずつ作れます。";
   return {
     error: "ai usage limit reached",
     limit: kind,
     resetAt: resetAt.toISOString(),
     message:
-      `マップを1つ作るには AI の利用回数を ${String(MAP_GENERATION_USAGE_COST)} 回使いますが、` +
-      `${scope}の残りが足りません。${when}に回復します。手でマップを作るのは回数を使いません。`,
+      `${action}には AI の利用回数を ${String(MAP_GENERATION_USAGE_COST)} 回使いますが、` +
+      `${scope}の残りが足りません。${when}に回復します。${alternative}`,
   };
 }

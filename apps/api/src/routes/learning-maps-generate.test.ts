@@ -11,7 +11,9 @@ import { AI_USAGE_LIMITS, utcDayKey, utcMonthKey } from "../contract/ai-usage.js
 import {
   MAP_GENERATION_USAGE_COST,
   MAX_MAPS_PER_USER,
+  type GenerateCreationChecksResponse,
   type GenerateLearningMapResponse,
+  type LearningMapView,
   type MapGenerationConsentBody,
 } from "../contract/learning-maps.js";
 import { InMemoryAiUsageRepository } from "../repository/ai-usage.js";
@@ -22,6 +24,7 @@ import {
   InMemoryLearningEventRepository,
   InMemoryLearningMapRepository,
   InMemoryMapGenerationConsentRepository,
+  InMemoryPersonalCheckRepository,
 } from "../repository/memory.js";
 import { createLearningMapsRoute } from "./learning-maps.js";
 
@@ -59,6 +62,9 @@ const FIXED_OBJECTIVES: LearningObjective[] = [
 let maps: InMemoryLearningMapRepository;
 let usage: InMemoryAiUsageRepository;
 let consents: InMemoryMapGenerationConsentRepository;
+let checks: InMemoryPersonalCheckRepository;
+/** 作成時の確認問題の本文を、頼まれた Concept ID の並びから作る。テストごとに差し替える。 */
+let creationChecksFor: (conceptIds: string[]) => string;
 let fetchMock: ReturnType<typeof vi.fn>;
 let app: Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>;
 let keys: number;
@@ -93,6 +99,17 @@ function keysInPrompt(prompt: string): string[] {
   return [...prompt.matchAll(/^(n\d+)\|/gm)].map((match) => match[1]!);
 }
 
+/** 1組の確認問題（概要問題と実践問題）。 */
+function generatedCheck(conceptId: string) {
+  const question = {
+    prompt: "設問",
+    choices: ["a", "b", "c", "d"],
+    answerIndex: 0,
+    explanation: "解説",
+  };
+  return { conceptId, overview: question, practice: { ...question, code: "x := 1" } };
+}
+
 function ownNodes(count: number, from = 1) {
   return Array.from({ length: count }, (_, index) => {
     const n = from + index;
@@ -110,6 +127,9 @@ beforeEach(() => {
   maps = new InMemoryLearningMapRepository(store);
   usage = new InMemoryAiUsageRepository();
   consents = new InMemoryMapGenerationConsentRepository(store);
+  checks = new InMemoryPersonalCheckRepository(store);
+  creationChecksFor = (conceptIds) =>
+    JSON.stringify({ checks: conceptIds.map((conceptId) => generatedCheck(conceptId)) });
   keys = 0;
   skeletonText = JSON.stringify({
     title: "Go で Web API",
@@ -126,9 +146,11 @@ beforeEach(() => {
     });
   fetchMock = vi.fn((_url: string, init?: RequestInit) => {
     const prompt = promptOf(init);
-    const text = prompt.includes("「理解すること」を作ってください")
-      ? objectivesFor(keysInPrompt(prompt))
-      : skeletonText;
+    const text = prompt.includes("確認問題を作る出題者")
+      ? creationChecksFor([...prompt.matchAll(/^ID: (\S+)$/gm)].map((match) => match[1]!))
+      : prompt.includes("「理解すること」を作ってください")
+        ? objectivesFor(keysInPrompt(prompt))
+        : skeletonText;
     return Promise.resolve(new Response(upstreamBody(text), { status: 200 }));
   });
   const identity = new InMemoryIdentityRepository(store);
@@ -149,6 +171,7 @@ beforeEach(() => {
         model: "gemini-3.6-flash",
         fetch: fetchMock as unknown as typeof fetch,
         usage,
+        checks,
         consents,
         events: new InMemoryLearningEventRepository(store),
         overrides: new InMemoryMasteryOverrideRepository(),
@@ -399,5 +422,134 @@ describe("/v1/map-generation-consent", () => {
       granted: false,
     });
     expect(await consents.get("user-a")).toBeNull();
+  });
+});
+
+describe("POST /v1/learning-maps/:id/checks:generate（#247）", () => {
+  /** 確認問題も作る設定で、n ノードのマップを AI で作る。 */
+  async function generatedMap(nodeCount: number, body: Record<string, unknown> = GOAL_REQUEST) {
+    skeletonText = JSON.stringify({ title: "大きなマップ", nodes: ownNodes(nodeCount) });
+    const res = await send("POST", "/learning-maps:generate", body);
+    expect(res.status).toBe(201);
+    fetchMock.mockClear();
+    return ((await res.json()) as GenerateLearningMapResponse).map;
+  }
+
+  it("手前の 10 ノードの1項目目を、1回2組・5回で作り、作成時の組として保存する", async () => {
+    const map = await generatedMap(25);
+    expect(map.creationChecks).toEqual({ status: "pending" });
+
+    const res = await send("POST", `/learning-maps/${map.id}/checks:generate`);
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as GenerateCreationChecksResponse;
+    expect(body.failedCount).toBe(0);
+    const firstTen = map.nodes.slice(0, 10);
+    expect(body.checks.map((check) => check.objectiveId)).toEqual(
+      firstTen.map((node) => (node.kind === "own" ? node.objectives[0]!.id : undefined)),
+    );
+    expect(body.checks.every((check) => check.level === "basic")).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+    // 本人の質問は載せない。
+    expect(promptOf(fetchMock.mock.calls[0]![1] as RequestInit)).not.toContain(
+      "自力で解決した質問",
+    );
+    expect(await checks.listMapCreationChecks("user-a")).toHaveLength(10);
+    // マップの生成で 5 回、作成時の問題で 5 回。
+    expect(await usedRequests()).toBe(MAP_GENERATION_USAGE_COST * 2);
+
+    const after = (await (await send("GET", `/learning-maps/${map.id}`)).json()) as LearningMapView;
+    expect(after.creationChecks).toEqual({ status: "done" });
+    // 作成済みなら、もう頼めない。
+    expect((await send("POST", `/learning-maps/${map.id}/checks:generate`)).status).toBe(409);
+  });
+
+  it("一部の組が作れなくても、作れた組は保存して作成済みにする", async () => {
+    const map = await generatedMap(4);
+    const firstNode = map.nodes[0]!.conceptId;
+    // 1組目だけ選択肢が3つしかない。
+    creationChecksFor = (conceptIds) =>
+      JSON.stringify({
+        checks: conceptIds.map((conceptId) =>
+          conceptId === firstNode
+            ? {
+                ...generatedCheck(conceptId),
+                overview: { ...generatedCheck(conceptId).overview, choices: ["a", "b", "c"] },
+              }
+            : generatedCheck(conceptId),
+        ),
+      });
+
+    const res = await send("POST", `/learning-maps/${map.id}/checks:generate`);
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as GenerateCreationChecksResponse;
+    expect(body.checks).toHaveLength(3);
+    expect(body.failedCount).toBe(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("全部失敗したら、もう一度だけ頼める", async () => {
+    const map = await generatedMap(4);
+    fetchMock.mockImplementation(() => Promise.resolve(new Response("{}", { status: 400 })));
+
+    const first = await send("POST", `/learning-maps/${map.id}/checks:generate`);
+    expect(first.status).toBe(502);
+    expect(await first.json()).toMatchObject({ error: "creation checks failed", retryable: true });
+
+    const second = await send("POST", `/learning-maps/${map.id}/checks:generate`);
+    expect(second.status).toBe(502);
+    expect(await second.json()).toMatchObject({ retryable: false });
+
+    const after = (await (await send("GET", `/learning-maps/${map.id}`)).json()) as LearningMapView;
+    expect(after.creationChecks).toEqual({ status: "exhausted" });
+    expect((await send("POST", `/learning-maps/${map.id}/checks:generate`)).status).toBe(409);
+    expect(await checks.listMapCreationChecks("user-a")).toEqual([]);
+  });
+
+  it("確認問題を断ったマップと、手で作ったマップでは作れない", async () => {
+    const declined = await generatedMap(3, { ...GOAL_REQUEST, checks: false });
+    expect(declined.creationChecks).toBeUndefined();
+    expect((await send("POST", `/learning-maps/${declined.id}/checks:generate`)).status).toBe(409);
+
+    const manual = (await (await send("POST", "/learning-maps", { title: "手作り" })).json()) as {
+      map: LearningMapView;
+    };
+    expect((await send("POST", `/learning-maps/${manual.map.id}/checks:generate`)).status).toBe(
+      409,
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(await usedRequests()).toBe(MAP_GENERATION_USAGE_COST);
+  });
+
+  it("5 回分の枠が残っていなければ、上流を叩かず、頼んだ回数にも数えない", async () => {
+    const map = await generatedMap(3);
+    for (let i = 0; i < AI_USAGE_LIMITS.dailyRequests - MAP_GENERATION_USAGE_COST * 2 + 1; i++) {
+      await usage.reserve({
+        userId: "user-a",
+        ...USAGE_KEYS,
+        updatedAt: NOW.toISOString(),
+        limits: { dailyRequests: 100, monthlyRequests: 1_000 },
+      });
+    }
+
+    const res = await send("POST", `/learning-maps/${map.id}/checks:generate`);
+
+    expect(res.status).toBe(429);
+    expect(fetchMock).not.toHaveBeenCalled();
+    const after = (await (await send("GET", `/learning-maps/${map.id}`)).json()) as LearningMapView;
+    expect(after.creationChecks).toEqual({ status: "pending" });
+  });
+
+  it("作成時の組を解くときに作り直すと、作成時の組ではなくなる", async () => {
+    const map = await generatedMap(1);
+    await send("POST", `/learning-maps/${map.id}/checks:generate`);
+    const [created] = await checks.listMapCreationChecks("user-a");
+    expect(created).toBeDefined();
+
+    // 解くときの生成（`checks/generate.ts`）は origin を渡さずに上書きする。
+    await checks.put("user-a", created!, NOW.getTime(), { mapId: map.id });
+
+    expect(await checks.listMapCreationChecks("user-a")).toEqual([]);
   });
 });

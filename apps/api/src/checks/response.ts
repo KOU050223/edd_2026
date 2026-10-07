@@ -213,7 +213,45 @@ export function parseConceptCheck(text: string, expectedConceptId: ConceptId): C
   } catch (cause) {
     return { ok: false, reason: "not-json", detail: messageOf(cause) };
   }
+  return readConceptCheck(payload, expectedConceptId);
+}
 
+/**
+ * マップを作るときの問題（#247）。1回で頼んだ複数の組を、頼んだ順に1組ずつ読む。
+ *
+ * 組ごとに受理か拒否かを返す（#247 の決定 L4: 作れた組は保存する）。並びの数が頼んだ数と
+ * 違うときや、全体が JSON でないときは、どの組がどれか分からないので全部を拒否する。
+ */
+export function parseCreationChecks(
+  text: string,
+  expectedConceptIds: readonly ConceptId[],
+):
+  | { ok: true; results: CheckParseResult[] }
+  | { ok: false; reason: CheckParseFailure; detail?: string } {
+  let payload: unknown;
+  try {
+    payload = JSON.parse(text);
+  } catch (cause) {
+    return { ok: false, reason: "not-json", detail: messageOf(cause) };
+  }
+  const checks = (payload as { checks?: unknown } | null)?.checks;
+  if (!Array.isArray(checks) || checks.length !== expectedConceptIds.length) {
+    return {
+      ok: false,
+      reason: "shape",
+      detail: `checks must be an array of ${String(expectedConceptIds.length)}`,
+    };
+  }
+  return {
+    ok: true,
+    results: expectedConceptIds.map((conceptId, index) =>
+      readConceptCheck(checks[index] as unknown, conceptId),
+    ),
+  };
+}
+
+/** JSON として読んだ1組を検証する。 */
+function readConceptCheck(payload: unknown, expectedConceptId: ConceptId): CheckParseResult {
   const result = v.safeParse(generatedCheckSchema, payload);
   if (!result.success) {
     return { ok: false, reason: "shape", detail: summarizeIssues(result.issues) };
