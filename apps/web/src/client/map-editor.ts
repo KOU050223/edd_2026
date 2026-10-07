@@ -16,6 +16,8 @@ export const EDITOR_LIMITS = {
   title: 80,
   description: 400,
   nodes: 50,
+  /** 線（前提のつながり）の数。合流を許すので、ノード数の4倍（API と同じ）。 */
+  edges: 200,
   label: 40,
   summary: 200,
   objectives: 8,
@@ -182,6 +184,12 @@ export function draftProblems(draft: MapDraft): string[] {
   if (draft.nodes.length > EDITOR_LIMITS.nodes) {
     problems.push(`ノードは ${String(EDITOR_LIMITS.nodes)} 個までです。`);
   }
+  const edges = draft.nodes.reduce((total, node) => total + node.prerequisites.length, 0);
+  if (edges > EDITOR_LIMITS.edges) {
+    problems.push(
+      `前提のつながりは ${String(EDITOR_LIMITS.edges)} 本までです（今は ${String(edges)} 本）。`,
+    );
+  }
   draft.nodes.forEach((node, index) => {
     if (node.kind !== "own") return;
     const name = node.label.trim() || `${String(index + 1)} 番目のノード`;
@@ -250,5 +258,59 @@ export function previewDefinitions(draft: MapDraft): DomainConcept[] {
     language: "draft",
     prerequisites: node.prerequisites,
     source: { kind: "manual" },
+  }));
+}
+
+/** 「理解すること」の下書きの1項目。保存済みの項目は `id` を持つ。 */
+export interface ObjectiveItem {
+  id?: string;
+  label: string;
+}
+
+export function objectiveItemsFrom(
+  saved: readonly { id: string; label: string }[],
+): ObjectiveItem[] {
+  return saved.map(({ id, label }) => ({ id, label }));
+}
+
+/** 下書きが保存済みの項目と違うか（前後の空白は数えない）。 */
+export function objectivesChanged(
+  saved: readonly { id: string; label: string }[],
+  items: readonly ObjectiveItem[],
+): boolean {
+  return (
+    JSON.stringify(items.map((item) => [item.id, item.label.trim()])) !==
+    JSON.stringify(saved.map((item) => [item.id, item.label]))
+  );
+}
+
+/** 保存すると消える項目。その項目を狙った確認問題も消えるので、保存の前に確かめる。 */
+export function removedObjectives<T extends { id: string }>(
+  saved: readonly T[],
+  items: readonly ObjectiveItem[],
+): T[] {
+  return saved.filter((objective) => !items.some((item) => item.id === objective.id));
+}
+
+/** 保存できない理由。空なら保存できる。 */
+export function objectiveProblems(items: readonly ObjectiveItem[]): string[] {
+  const problems: string[] = [];
+  if (items.some((item) => item.label.trim() === "")) {
+    problems.push("空の項目があります。入力するか外してください。");
+  }
+  if (items.some((item) => item.label.trim().length > EDITOR_LIMITS.objectiveLabel)) {
+    problems.push(`項目は ${String(EDITOR_LIMITS.objectiveLabel)} 文字までです。`);
+  }
+  if (items.length > EDITOR_LIMITS.objectives) {
+    problems.push(`項目は ${String(EDITOR_LIMITS.objectives)} 個までです。`);
+  }
+  return problems;
+}
+
+/** `PUT .../objectives` の本文。新しい項目は `id` を省く。 */
+export function toObjectivesRequest(items: readonly ObjectiveItem[]): ObjectiveItem[] {
+  return items.map((item) => ({
+    ...(item.id === undefined ? {} : { id: item.id }),
+    label: item.label.trim(),
   }));
 }

@@ -611,3 +611,25 @@ test("VS Code 向けの一覧は、参照ではないノードを更新の新し
   ).json()) as ListClientMapConceptsResponse;
   expect(empty.concepts).toEqual([]);
 });
+
+test("VS Code 向けの一覧は既定で 100 件、`limit` で自分のノードを全部まで読める", async () => {
+  await create({
+    title: "多い",
+    nodes: Array.from({ length: 3 }, (_, i) => ({
+      kind: "own",
+      ref: `new:${String(i)}`,
+      label: `n${String(i)}`,
+      summary: "s",
+    })),
+  });
+  const limited = (await (
+    await send("GET", "/v1/learning-maps:concepts?limit=2", "token-a")
+  ).json()) as ListClientMapConceptsResponse;
+  expect(limited.concepts).toHaveLength(2);
+
+  for (const limit of ["0", "1001", "abc", "1.5"]) {
+    const response = await send("GET", `/v1/learning-maps:concepts?limit=${limit}`, "token-a");
+    expect(response.status).toBe(400);
+  }
+  expect((await send("GET", "/v1/learning-maps:concepts?limit=1000", "token-a")).status).toBe(200);
+});

@@ -4,6 +4,7 @@ import { layoutTrees } from "./learning-map.js";
 import {
   createLearningMap,
   deleteLearningMap,
+  fetchOwnMapConcepts,
   isMapId,
   isOnExistingMap,
   MapInputError,
@@ -178,4 +179,18 @@ test("「理解すること」は、ノードの ID をパスに入れて置き�
   expect(JSON.parse(String(sent?.body))).toEqual({
     objectives: [{ id: "mrust0001.owner001:move", label: "move" }, { label: "drop" }],
   });
+});
+
+test("参照の候補は、件数を指定すると自分のノードを全部まで読む", async () => {
+  const urls: string[] = [];
+  const fetcher = async (input: RequestInfo | URL) => {
+    urls.push(String(input));
+    return Response.json({ concepts: [] });
+  };
+  await fetchOwnMapConcepts(fetcher);
+  await fetchOwnMapConcepts(fetcher, false, 1000);
+  expect(urls).toEqual([
+    "/api/v1/learning-maps:concepts",
+    "/api/v1/learning-maps:concepts?limit=1000",
+  ]);
 });

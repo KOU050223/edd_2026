@@ -28,9 +28,14 @@ export const MAX_OBJECTIVES_PER_NODE = 8;
 export const MAX_OBJECTIVE_LABEL_LENGTH = 80;
 /**
  * VS Code へ渡すノードの合計。AI へ渡す「既知の概念一覧」に入るので、
- * プロンプトの長さを抑えるために絞る。
+ * プロンプトの長さを抑えるために絞る。`GET /v1/learning-maps:concepts` の既定の件数。
  */
 export const MAX_CLIENT_CONCEPTS = 100;
+/**
+ * 1人が持てるノード（参照ではないもの）の最大数。`:concepts` の `limit` の上限。
+ * Web の編集画面は参照で足す候補として全部読む（100 件で切ると古いマップのノードを足せない）。
+ */
+export const MAX_OWN_NODES = MAX_MAPS_PER_USER * MAX_NODES_PER_MAP;
 
 /**
  * 新しいノードの仮の番号。`new:` で始める。

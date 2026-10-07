@@ -267,15 +267,20 @@ export interface OwnMapConcept {
   mapTitle: string;
 }
 
+/** 1人が持てるノードの最大数（20 マップ × 50 ノード）。API の `limit` の上限と同じ。 */
+export const OWN_NODES_LIMIT = 1_000;
+
 /**
- * 自分のマップのノードを、更新の新しいマップから最大 100 件。
+ * 自分のマップのノードを、更新の新しいマップから `limit` 件まで（省略すると API の既定の 100 件）。
  * VS Code 向けの一覧（`GET /v1/learning-maps:concepts`）を、参照の候補にも使う。
  */
 export function fetchOwnMapConcepts(
   fetcher: typeof fetch = fetch,
   retry: boolean | number = false,
+  limit?: number,
 ): Promise<{ concepts: OwnMapConcept[] }> {
-  return requestJson(`${LEARNING_MAPS_PATH}:concepts`, fetcher, retry);
+  const query = limit === undefined ? "" : `?limit=${String(limit)}`;
+  return requestJson(`${LEARNING_MAPS_PATH}:concepts${query}`, fetcher, retry);
 }
 
 /** マップを消す。ノード・線・項目と、そのノードの確認問題も消える（#242）。 */

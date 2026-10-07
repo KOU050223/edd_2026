@@ -12,6 +12,7 @@ import type { Concept, LearningObjective } from "@gakushu-sochi/domain";
 import type { AuthVariables } from "../auth/middleware.js";
 import {
   MAX_CLIENT_CONCEPTS,
+  MAX_OWN_NODES,
   MAX_MAPS_PER_USER,
   learningMapContentSchema,
   learningObjectivesInputSchema,
@@ -188,11 +189,19 @@ export function createLearningMapsRoute(resolve: LearningMapsDepsResolver) {
   }
 
   // VS Code が AI へ渡す「既知の概念一覧」に加える。参照のノードは元の Concept が
-  // 一覧に入っているので返さない。
+  // 一覧に入っているので返さない。Web の編集画面は参照の候補として `?limit=` で全部読む。
   app.get("/learning-maps:concepts", async (c) => {
     const userId = c.get("user").userId;
+    const raw = c.req.query("limit");
+    const limit = raw === undefined ? MAX_CLIENT_CONCEPTS : Number(raw);
+    // 解釈できない値は既定へ丸めず 400 にする（routes/conversations.ts と同じ）。
+    if (!Number.isInteger(limit) || limit < 1 || limit > MAX_OWN_NODES) {
+      throw new HTTPException(400, {
+        message: `limit must be an integer between 1 and ${String(MAX_OWN_NODES)}`,
+      });
+    }
     const deps = resolve(c.env);
-    const nodes = await deps.maps.listOwnNodes(userId, MAX_CLIENT_CONCEPTS);
+    const nodes = await deps.maps.listOwnNodes(userId, limit);
     const body: ListClientMapConceptsResponse = {
       concepts: nodes.map((node) => ({
         id: node.conceptId,

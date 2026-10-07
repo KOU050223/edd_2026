@@ -8,11 +8,16 @@ import {
   draftProblems,
   EDITOR_LIMITS,
   isDirty,
+  objectiveItemsFrom,
+  objectiveProblems,
+  objectivesChanged,
   prerequisiteCandidates,
   previewDefinitions,
+  removedObjectives,
   removedSavedNodes,
   removeNode,
   toContentRequest,
+  toObjectivesRequest,
   togglePrerequisite,
   updateOwnNode,
   type MapDraft,
@@ -166,4 +171,44 @@ test("保存する本文では、前後の空白を落とす", () => {
 test("プレビューは空の表示名を「（無題）」で出す", () => {
   const added = addOwnNode(draftFromMap(MAP));
   expect(previewDefinitions(added.draft).at(-1)?.label).toBe("（無題）");
+});
+
+test("前提のつながりが API の上限（200 本）を超えたら保存できない", () => {
+  // 21 ノードで、前のノードすべてを前提にする（循環はしない）。21 * 20 / 2 = 210 本。
+  let draft: MapDraft = { title: "t", description: "", nodes: [] };
+  for (let i = 0; i < 21; i++) {
+    const added = addOwnNode(draft);
+    draft = updateOwnNode(added.draft, added.ref, { label: `n${String(i)}`, summary: "s" });
+    for (const before of draft.nodes.slice(0, -1)) {
+      draft = togglePrerequisite(draft, added.ref, before.ref);
+    }
+  }
+  expect(toContentRequest(draft).edges).toHaveLength(210);
+  expect(draftProblems(draft)).toEqual([
+    `前提のつながりは ${String(EDITOR_LIMITS.edges)} 本までです（今は 210 本）。`,
+  ]);
+});
+
+test("「理解すること」の下書きの変更・消える項目・保存できない理由・本文", () => {
+  const saved = [
+    { id: "m.a:x", label: "X" },
+    { id: "m.a:y", label: "Y" },
+  ];
+  const items = objectiveItemsFrom(saved);
+  expect(objectivesChanged(saved, items)).toBe(false);
+  // 前後の空白だけの違いは変更とみなさない。
+  expect(objectivesChanged(saved, [{ id: "m.a:x", label: " X " }, saved[1]!])).toBe(false);
+  // 並べ替えは変更。
+  expect(objectivesChanged(saved, [saved[1]!, saved[0]!])).toBe(true);
+
+  const edited = [{ id: "m.a:y", label: " Y2 " }, { label: "Z" }];
+  expect(removedObjectives(saved, edited)).toEqual([{ id: "m.a:x", label: "X" }]);
+  expect(toObjectivesRequest(edited)).toEqual([{ id: "m.a:y", label: "Y2" }, { label: "Z" }]);
+
+  expect(objectiveProblems([{ label: " " }])).toEqual([
+    "空の項目があります。入力するか外してください。",
+  ]);
+  expect(
+    objectiveProblems(Array.from({ length: EDITOR_LIMITS.objectives + 1 }, () => ({ label: "a" }))),
+  ).toEqual([`項目は ${String(EDITOR_LIMITS.objectives)} 個までです。`]);
 });

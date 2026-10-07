@@ -9,6 +9,7 @@ import {
   fetchLearningMap,
   fetchOwnMapConcepts,
   MapInputError,
+  OWN_NODES_LIMIT,
   saveLearningMap,
   saveObjectives,
   type LearningMapView,
@@ -28,8 +29,14 @@ import {
   toContentRequest,
   togglePrerequisite,
   updateOwnNode,
+  objectiveItemsFrom,
+  objectiveProblems,
+  objectivesChanged,
+  removedObjectives,
+  toObjectivesRequest,
   type DraftNode,
   type MapDraft,
+  type ObjectiveItem,
 } from "../../map-editor.js";
 import { takeLoginRetry } from "../../session.js";
 
@@ -52,64 +59,34 @@ function saveErrorText(error: unknown): string {
 /**
  * 1ノードの「理解すること」。ノードの保存とは別に、ノードごとに保存する
  * （API の口が別。AI の生成が同じ口へ書けるようにするため、#242）。
+ *
+ * 下書きは画面（`MapEditor`）が持つ。ここに持つと、ノードを閉じたときに消え、
+ * 画面を離れる前の確認にも入らない。
  */
 function ObjectivesEditor({
-  mapId,
-  conceptId,
+  items,
   saved,
-  onSaved,
+  saving,
+  disabled,
+  error,
+  onChange,
+  onSave,
 }: {
-  mapId: string;
-  conceptId: string;
+  items: readonly ObjectiveItem[];
   saved: readonly LearningObjectiveView[];
-  onSaved: (objectives: LearningObjectiveView[]) => void;
+  /** この項目を保存している最中。 */
+  saving: boolean;
+  /** ほかの書き込みの最中。書き込みは1つずつ行う。 */
+  disabled: boolean;
+  error: string | undefined;
+  onChange: (items: ObjectiveItem[]) => void;
+  onSave: () => void;
 }) {
-  const [items, setItems] = useState<{ id?: string; label: string }[]>(() =>
-    saved.map(({ id, label }) => ({ id, label })),
-  );
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string>();
-  const guard = useRef(createSubmitGuard());
-  const dirty =
-    JSON.stringify(items.map((item) => [item.id, item.label.trim()])) !==
-    JSON.stringify(saved.map((item) => [item.id, item.label]));
-  const blank = items.some((item) => item.label.trim() === "");
-  const removed = saved.filter((objective) => !items.some((item) => item.id === objective.id));
-
-  const save = () => {
-    if (guard.current.isRunning("save")) return;
-    if (
-      removed.length > 0 &&
-      !window.confirm(
-        `${String(removed.length)} 個の項目を消します。その項目を狙って作った確認問題も消えます。`,
-      )
-    )
-      return;
-    setError(undefined);
-    setSaving(true);
-    void guard.current
-      .run("save", async () => {
-        try {
-          const result = await saveObjectives(
-            mapId,
-            conceptId,
-            items.map((item) => ({
-              ...(item.id === undefined ? {} : { id: item.id }),
-              label: item.label.trim(),
-            })),
-          );
-          setItems(result.objectives.map(({ id, label }) => ({ id, label })));
-          onSaved(result.objectives);
-        } catch (value: unknown) {
-          if (value instanceof ApiError && value.kind === "session_expired") {
-            window.location.href = "/login";
-            return;
-          }
-          setError(saveErrorText(value));
-        }
-      })
-      .finally(() => setSaving(false));
-  };
+  const dirty = objectivesChanged(saved, items);
+  const problems = objectiveProblems(items);
+  const busy = saving || disabled;
+  const setItems = (update: (current: readonly ObjectiveItem[]) => ObjectiveItem[]) =>
+    onChange(update(items));
 
   return (
     <fieldset className="editor-objectives">
@@ -124,7 +101,7 @@ function ObjectivesEditor({
               value={item.label}
               maxLength={EDITOR_LIMITS.objectiveLabel}
               aria-label={`理解すること ${String(index + 1)}`}
-              disabled={saving}
+              disabled={busy}
               onChange={(event) =>
                 setItems((current) =>
                   current.map((candidate, at) =>
@@ -135,7 +112,7 @@ function ObjectivesEditor({
             />
             <button
               className="link"
-              disabled={saving}
+              disabled={busy}
               onClick={() => setItems((current) => current.filter((_, at) => at !== index))}
             >
               外す
@@ -146,7 +123,7 @@ function ObjectivesEditor({
       <div className="editor-row">
         <button
           className="link"
-          disabled={saving || items.length >= EDITOR_LIMITS.objectives}
+          disabled={busy || items.length >= EDITOR_LIMITS.objectives}
           onClick={() => setItems((current) => [...current, { label: "" }])}
         >
           + 項目を足す
@@ -154,11 +131,16 @@ function ObjectivesEditor({
         <span className="muted">
           {items.length} / {EDITOR_LIMITS.objectives}
         </span>
-        <button disabled={saving || !dirty || blank} onClick={save}>
+        <button disabled={busy || !dirty || problems.length > 0} onClick={onSave}>
           {saving ? "保存中…" : "理解することを保存"}
         </button>
+        {dirty && <span className="muted">保存していません。</span>}
       </div>
-      {blank && <p className="muted">空の項目があります。入力するか外してください。</p>}
+      {problems.map((problem) => (
+        <p className="muted" key={problem}>
+          {problem}
+        </p>
+      ))}
       {error && (
         <p className="error-text" role="alert">
           {error}
@@ -231,23 +213,20 @@ function NodeEditor({
   node,
   draft,
   open,
-  mapId,
-  savedObjectives,
+  objectives,
   disabled,
   onToggle,
   onChange,
-  onObjectivesSaved,
 }: {
   node: DraftNode;
   draft: MapDraft;
   open: boolean;
-  mapId: string;
-  /** 保存済みのノードの項目。新しいノードは `undefined`。 */
-  savedObjectives: readonly LearningObjectiveView[] | undefined;
+  /** 保存済みの手作りのノードの「理解すること」。新しいノード・参照のノードは `undefined`。 */
+  objectives: Omit<Parameters<typeof ObjectivesEditor>[0], "disabled"> | undefined;
+  /** 書き込みの最中。 */
   disabled: boolean;
   onToggle: () => void;
   onChange: (draft: MapDraft) => void;
-  onObjectivesSaved: (objectives: LearningObjectiveView[]) => void;
 }) {
   const nameOfRef = (ref: string) => {
     const label = draft.nodes.find((candidate) => candidate.ref === ref)?.label.trim();
@@ -315,15 +294,10 @@ function NodeEditor({
             )}
           </fieldset>
           {node.kind === "own" &&
-            (savedObjectives === undefined ? (
+            (objectives === undefined ? (
               <p className="muted">「理解すること」は、マップを保存すると書けるようになります。</p>
             ) : (
-              <ObjectivesEditor
-                mapId={mapId}
-                conceptId={node.ref}
-                saved={savedObjectives}
-                onSaved={onObjectivesSaved}
-              />
+              <ObjectivesEditor {...objectives} disabled={disabled && !objectives.saving} />
             ))}
           <button
             className="link danger"
@@ -350,19 +324,42 @@ function MapEditor() {
   const router = useRouter();
   const [saved, setSaved] = useState<LearningMapView>(loaded.map);
   const [draft, setDraft] = useState<MapDraft>(() => draftFromMap(loaded.map));
+  // 「理解すること」の下書き。直したノードの分だけ持つ（無ければ保存済みのまま）。
+  const [objectiveDrafts, setObjectiveDrafts] = useState<Record<string, ObjectiveItem[]>>({});
+  const [objectiveErrors, setObjectiveErrors] = useState<Record<string, string>>({});
   const [openRef, setOpenRef] = useState<string>();
-  const [saving, setSaving] = useState(false);
+  // 書き込みの最中のもの。マップ（"map"）か、項目を保存しているノードの ID。
+  // 書き込みは1つずつ行う。マップの応答は項目を含むので、重なると古い項目で上書きしうる。
+  const [writing, setWriting] = useState<string>();
   const [saveError, setSaveError] = useState<string>();
   const [notice, setNotice] = useState<string>();
   const guard = useRef(createSubmitGuard());
+  const busy = writing !== undefined;
+
+  const savedObjectivesOf = new Map(
+    saved.nodes.flatMap((node) =>
+      node.kind === "own" ? [[node.conceptId, node.objectives] as const] : [],
+    ),
+  );
+  const objectiveItemsOf = (ref: string): ObjectiveItem[] =>
+    objectiveDrafts[ref] ?? objectiveItemsFrom(savedObjectivesOf.get(ref) ?? []);
+  // 下書きに残っているノードのうち、項目を直して保存していないもの。
+  const unsavedObjectives = draft.nodes.filter((node) => {
+    const savedObjectives = savedObjectivesOf.get(node.ref);
+    const items = objectiveDrafts[node.ref];
+    return savedObjectives !== undefined && items !== undefined
+      ? objectivesChanged(savedObjectives, items)
+      : false;
+  });
 
   const dirty = isDirty(saved, draft);
   const problems = draftProblems(draft);
-  // 保存していない変更があるまま画面を離れない。
+  const unsaved = dirty || unsavedObjectives.length > 0;
+  // 保存していない変更（ノード・線・項目）があるまま画面を離れない。
   useBlocker({
     shouldBlockFn: () => !window.confirm("保存していない変更があります。破棄して離れますか？"),
-    enableBeforeUnload: dirty,
-    disabled: !dirty,
+    enableBeforeUnload: unsaved,
+    disabled: !unsaved,
   });
 
   const candidates = useMemo<ReferenceCandidate[]>(() => {
@@ -384,19 +381,36 @@ function MapEditor() {
   const previewConcepts = new Map(
     overlaidConcepts(null, null, preview).map((concept) => [concept.conceptId, concept]),
   );
-  const savedObjectivesOf = new Map(
-    saved.nodes.flatMap((node) =>
-      node.kind === "own" ? [[node.conceptId, node.objectives] as const] : [],
-    ),
-  );
 
   const change = (next: MapDraft) => {
     setNotice(undefined);
     setDraft(next);
   };
 
+  /**
+   * 書き込みを1つずつ行う。最中なら何もしない（RULE-007）。
+   * セッション切れはログインへ送る。それ以外の失敗は `task` が画面に出す。
+   */
+  const write = (key: string, task: () => Promise<void>) => {
+    if (guard.current.isRunning("write")) return;
+    setWriting(key);
+    void guard.current
+      .run("write", async () => {
+        try {
+          await task();
+        } catch (value: unknown) {
+          if (value instanceof ApiError && value.kind === "session_expired") {
+            window.location.href = "/login";
+            return;
+          }
+          throw value;
+        }
+      })
+      .finally(() => setWriting(undefined));
+  };
+
   const save = () => {
-    if (guard.current.isRunning("save") || problems.length > 0) return;
+    if (problems.length > 0) return;
     const removed = removedSavedNodes(saved, draft);
     if (
       removed.length > 0 &&
@@ -408,29 +422,56 @@ function MapEditor() {
       return;
     setSaveError(undefined);
     setNotice(undefined);
-    setSaving(true);
-    void guard.current
-      .run("save", async () => {
-        try {
-          const result = await saveLearningMap(mapId, toContentRequest(draft));
-          setSaved(result.map);
-          setDraft(draftFromMap(result.map));
-          // 開いていた新しいノードは、振られた ID で開き直す。
-          setOpenRef((current) =>
-            current === undefined ? undefined : (result.assigned[current] ?? current),
-          );
-          setNotice("保存しました。");
-          // 表示画面と一覧の loader を捨て、戻ったときに古い中身を見せない（RULE-005）。
-          await router.invalidate();
-        } catch (value: unknown) {
-          if (value instanceof ApiError && value.kind === "session_expired") {
-            window.location.href = "/login";
-            return;
-          }
-          setSaveError(saveErrorText(value));
-        }
-      })
-      .finally(() => setSaving(false));
+    write("map", async () => {
+      try {
+        const result = await saveLearningMap(mapId, toContentRequest(draft));
+        setSaved(result.map);
+        setDraft(draftFromMap(result.map));
+        // 開いていた新しいノードは、振られた ID で開き直す。
+        setOpenRef((current) =>
+          current === undefined ? undefined : (result.assigned[current] ?? current),
+        );
+        setNotice("保存しました。");
+        // 表示画面と一覧の loader を捨て、戻ったときに古い中身を見せない（RULE-005）。
+        await router.invalidate();
+      } catch (value: unknown) {
+        if (value instanceof ApiError && value.kind === "session_expired") throw value;
+        setSaveError(saveErrorText(value));
+      }
+    });
+  };
+
+  const saveObjectivesOf = (ref: string) => {
+    const savedObjectives = savedObjectivesOf.get(ref) ?? [];
+    const items = objectiveItemsOf(ref);
+    if (objectiveProblems(items).length > 0) return;
+    const removed = removedObjectives(savedObjectives, items);
+    if (
+      removed.length > 0 &&
+      !window.confirm(
+        `${removed.map((objective) => objective.label).join("・")} を消します。` +
+          "その項目を狙って作った確認問題も消えます。",
+      )
+    )
+      return;
+    setObjectiveErrors((current) => withoutKey(current, ref));
+    write(ref, async () => {
+      try {
+        const result = await saveObjectives(mapId, ref, toObjectivesRequest(items));
+        setSaved((current) => ({
+          ...current,
+          nodes: current.nodes.map((node) =>
+            node.kind === "own" && node.conceptId === ref
+              ? { ...node, objectives: result.objectives }
+              : node,
+          ),
+        }));
+        setObjectiveDrafts((current) => withoutKey(current, ref));
+      } catch (value: unknown) {
+        if (value instanceof ApiError && value.kind === "session_expired") throw value;
+        setObjectiveErrors((current) => ({ ...current, [ref]: saveErrorText(value) }));
+      }
+    });
   };
 
   return (
@@ -447,7 +488,7 @@ function MapEditor() {
           <input
             value={draft.title}
             maxLength={EDITOR_LIMITS.title}
-            disabled={saving}
+            disabled={busy}
             onChange={(event) => change({ ...draft, title: event.target.value })}
           />
         </label>
@@ -457,7 +498,7 @@ function MapEditor() {
             value={draft.description}
             maxLength={EDITOR_LIMITS.description}
             rows={2}
-            disabled={saving}
+            disabled={busy}
             onChange={(event) => change({ ...draft, description: event.target.value })}
           />
         </label>
@@ -486,34 +527,39 @@ function MapEditor() {
             </span>
           </h2>
           <ul>
-            {draft.nodes.map((node) => (
-              <NodeEditor
-                key={node.ref}
-                node={node}
-                draft={draft}
-                open={openRef === node.ref}
-                mapId={mapId}
-                savedObjectives={savedObjectivesOf.get(node.ref)}
-                disabled={saving}
-                onToggle={() =>
-                  setOpenRef((current) => (current === node.ref ? undefined : node.ref))
-                }
-                onChange={change}
-                onObjectivesSaved={(objectives) =>
-                  setSaved((current) => ({
-                    ...current,
-                    nodes: current.nodes.map((candidate) =>
-                      candidate.kind === "own" && candidate.conceptId === node.ref
-                        ? { ...candidate, objectives }
-                        : candidate,
-                    ),
-                  }))
-                }
-              />
-            ))}
+            {draft.nodes.map((node) => {
+              const savedObjectives =
+                node.kind === "own" ? savedObjectivesOf.get(node.ref) : undefined;
+              return (
+                <NodeEditor
+                  key={node.ref}
+                  node={node}
+                  draft={draft}
+                  open={openRef === node.ref}
+                  objectives={
+                    savedObjectives === undefined
+                      ? undefined
+                      : {
+                          items: objectiveItemsOf(node.ref),
+                          saved: savedObjectives,
+                          saving: writing === node.ref,
+                          error: objectiveErrors[node.ref],
+                          onChange: (items) =>
+                            setObjectiveDrafts((current) => ({ ...current, [node.ref]: items })),
+                          onSave: () => saveObjectivesOf(node.ref),
+                        }
+                  }
+                  disabled={busy}
+                  onToggle={() =>
+                    setOpenRef((current) => (current === node.ref ? undefined : node.ref))
+                  }
+                  onChange={change}
+                />
+              );
+            })}
           </ul>
           <button
-            disabled={saving || draft.nodes.length >= EDITOR_LIMITS.nodes}
+            disabled={busy || draft.nodes.length >= EDITOR_LIMITS.nodes}
             onClick={() => {
               const added = addOwnNode(draft);
               change(added.draft);
@@ -524,7 +570,7 @@ function MapEditor() {
           </button>
           <ReferencePicker
             candidates={candidates.filter((candidate) => !inDraft.has(candidate.id))}
-            disabled={saving || draft.nodes.length >= EDITOR_LIMITS.nodes}
+            disabled={busy || draft.nodes.length >= EDITOR_LIMITS.nodes}
             onAdd={(candidate) => {
               change(addReference(draft, candidate.id, candidate.label));
               setOpenRef(candidate.id);
@@ -546,13 +592,26 @@ function MapEditor() {
           </p>
         )}
         {notice && !dirty && <p role="status">{notice}</p>}
-        <button disabled={saving || !dirty || problems.length > 0} onClick={save}>
-          {saving ? "保存中…" : "保存"}
+        <button disabled={busy || !dirty || problems.length > 0} onClick={save}>
+          {writing === "map" ? "保存中…" : "保存"}
         </button>
         {dirty && <span className="muted">保存していない変更があります。</span>}
+        {unsavedObjectives.length > 0 && (
+          <span className="muted">
+            「理解すること」を保存していないノード：
+            {unsavedObjectives.map((node) => node.label.trim() || "（無題）").join("・")}
+          </span>
+        )}
       </div>
     </section>
   );
+}
+
+/** `key` を除いた複製。 */
+function withoutKey<T>(record: Record<string, T>, key: string): Record<string, T> {
+  const rest = { ...record };
+  delete rest[key];
+  return rest;
 }
 
 export const Route = createFileRoute("/_framed/maps/$mapId_/edit")({
@@ -562,9 +621,15 @@ export const Route = createFileRoute("/_framed/maps/$mapId_/edit")({
     const retry = takeLoginRetry();
     const [map, own] = await Promise.all([
       fetchLearningMap(params.mapId, fetch, retry),
-      fetchOwnMapConcepts(fetch, retry),
+      // 参照で足す候補。VS Code 向けの既定（100 件）ではなく、自分のノードを全部読む。
+      fetchOwnMapConcepts(fetch, retry, OWN_NODES_LIMIT),
     ]);
     return { map, ownConcepts: own.concepts };
   },
-  component: MapEditor,
+  // 下書きはマップごと。同じ画面のまま別のマップへ移ったとき、前のマップの下書きで
+  // 移った先を保存しないよう、作り直す。
+  component: function MapEditorForMap() {
+    const { mapId } = Route.useParams();
+    return <MapEditor key={mapId} />;
+  },
 });
