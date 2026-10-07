@@ -22,21 +22,22 @@ import { vValidator } from "@hono/valibot-validator";
 import * as v from "valibot";
 import {
   buildLearnerPositionLines,
-  CONCEPTS,
   deriveFamiliarityFromEvidence,
   LEARNER_POSITION_GROUP_LIMIT,
   deriveMasteryFromEvents,
   MASTERY_SCORE_RANGE,
-  MOCK_LEARNING_OBJECTIVES,
   PERSONA_MAX_LENGTH,
   recentlyRecurredConceptIds,
+  type Concept,
   type ConceptFamiliarity,
   type ConceptId,
   type ConceptMastery,
   type LearningEvent,
   type LearningEvidence,
+  type LearningObjective,
   type ProfileSummary,
 } from "@gakushu-sochi/domain";
+import { loadUserConceptCatalog } from "../maps/catalog.js";
 import type { AuthVariables } from "../auth/middleware.js";
 import {
   AI_USAGE_LIMITS,
@@ -56,6 +57,7 @@ import type {
   IdentityRepository,
   LearningEventRepository,
   LearningEvidenceRepository,
+  LearningMapRepository,
   MasteryOverride,
   MasteryOverrideRepository,
 } from "../repository/types.js";
@@ -107,6 +109,8 @@ export interface AiDeps {
   evidence: LearningEvidenceRepository;
   /** 利用者が手動で申告した習熟度の上書き。導出値より優先する。 */
   overrides: MasteryOverrideRepository;
+  /** 手で作ったマップ（#242）。そのノードの「理解すること」と表示名を現在地に加える。 */
+  maps: LearningMapRepository;
   now: () => Date;
 }
 
@@ -268,17 +272,24 @@ export function createAiRoute(resolve: AiDepsResolver) {
     // 状態だけの最小限の要約を渡す（docs/architecture.md「Phase 2」）。
     // 導出は `GET /v1/learning-profile` と同じ規則を使い、利用者自身の手動上書きを
     // 重ねる（Web の Learning Map と同じ扱い）。
-    const [events, evidence, overrides] = await Promise.all([
+    const [events, evidence, overrides, catalog] = await Promise.all([
       deps.events.listByUser(userId),
       deps.evidence.listByUser(userId),
       deps.overrides.listByUser(userId),
+      loadUserConceptCatalog(deps.maps, userId),
     ]);
-    const position = learnerPositionFor(events, evidence, overrides, now.getTime());
+    const position = learnerPositionFor(
+      events,
+      evidence,
+      overrides,
+      catalog.objectives,
+      now.getTime(),
+    );
     // 要約の見積もり対象には persona との区切り（"\n\n"）も含める。
     const separatorBytes = personaInstruction === undefined ? 0 : 2;
     const positionBudget =
       AI_USAGE_LIMITS.inputTokensPerRequest - estimatedInputTokens - separatorBytes;
-    const positionSection = learnerPositionSection(position, positionBudget);
+    const positionSection = learnerPositionSection(position, catalog.concepts, positionBudget);
     if (positionSection === undefined && positionHasContent(position)) {
       // 載せるべき要約が残り枠に入らなかった。落としたことを追えるよう残す
       // （docs/api-ops.md「監視・監査ログ・障害時の再送」）。
@@ -692,9 +703,11 @@ function learnerPositionFor(
   events: readonly LearningEvent[],
   evidence: readonly LearningEvidence[],
   overrides: Record<string, MasteryOverride>,
+  /** 固定の Concept と手で作ったマップのノードの「理解すること」（learning-profile と同じ）。 */
+  objectives: readonly LearningObjective[],
   nowMs: number,
 ): ProfileSummary {
-  const derived = deriveMasteryFromEvents(events, MOCK_LEARNING_OBJECTIVES);
+  const derived = deriveMasteryFromEvents(events, objectives);
   const masteries = new Map<ConceptId, ConceptMastery>();
   for (const item of Object.values(derived)) {
     if (item !== undefined) {
@@ -748,10 +761,15 @@ function positionHasContent(position: ProfileSummary): boolean {
  * undefined を返す。要約は回答を整える補助であり、要約のために質問を拒否
  * しないため、ここでは切り詰めたり例外にしたりしない。
  */
-function learnerPositionSection(position: ProfileSummary, budget: number): string | undefined {
+function learnerPositionSection(
+  position: ProfileSummary,
+  /** 表示名を引く一覧。手で作ったマップのノードも含める（#242）。 */
+  concepts: readonly Concept[],
+  budget: number,
+): string | undefined {
   if (budget <= 0) return undefined;
   for (const groupLimit of [LEARNER_POSITION_GROUP_LIMIT, 5, 1]) {
-    const lines = buildLearnerPositionLines(position, CONCEPTS, groupLimit);
+    const lines = buildLearnerPositionLines(position, concepts, groupLimit);
     if (lines.length === 0) return undefined;
     const section = lines.join("\n");
     if (estimateInputTokens(section) <= budget) {

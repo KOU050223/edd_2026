@@ -6,22 +6,27 @@ import { TEST_TOKEN, stubAuth } from "../auth/test-auth.js";
 import {
   InMemoryLearningEventRepository,
   createInMemoryRepositoryStore,
+  InMemoryLearningMapRepository,
 } from "../repository/memory.js";
 import { createConversationLearningEventsRoute } from "./conversation-learning-events.js";
 import type { ConversationLearningEventsResponse } from "../contract/conversation-learning-events.js";
+import { seedTestMap, TEST_MAP_NODE, TEST_MAP_OBJECTIVES } from "../maps/test-map.js";
 
 let events: InMemoryLearningEventRepository;
+let maps: InMemoryLearningMapRepository;
 let app: Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>;
 
 const ENV = {};
 
 beforeEach(() => {
-  events = new InMemoryLearningEventRepository(createInMemoryRepositoryStore());
+  const store = createInMemoryRepositoryStore();
+  events = new InMemoryLearningEventRepository(store);
+  maps = new InMemoryLearningMapRepository(store);
   app = new Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>();
   app.use("/v1/*", stubAuth("user-a"));
   app.route(
     "/v1",
-    createConversationLearningEventsRoute(() => ({ events })),
+    createConversationLearningEventsRoute(() => ({ events, maps })),
   );
 });
 
@@ -129,4 +134,29 @@ test("他の利用者のイベントは返さない", async () => {
   await seed("user-b", [{ objectiveIds: ["go.defer:lifo_order"], sessionId: "conv-1" }]);
 
   expect((await getLearningEvents("conv-1")).events).toEqual([]);
+});
+
+test("手で作ったマップのノードの項目も、Concept 名・項目名つきで返す（#242）", async () => {
+  await seedTestMap(maps, "user-a");
+  const [move] = TEST_MAP_OBJECTIVES;
+  await seed("user-a", [
+    { id: "asked", conceptIds: [TEST_MAP_NODE.id], objectiveIds: [move!.id], sessionId: "conv-1" },
+  ]);
+
+  const body = await getLearningEvents("conv-1");
+  expect(body.events).toEqual([
+    expect.objectContaining({
+      id: "asked",
+      changes: [
+        {
+          conceptId: TEST_MAP_NODE.id,
+          conceptLabel: TEST_MAP_NODE.label,
+          objectiveId: move!.id,
+          objectiveLabel: move!.label,
+          before: 0,
+          after: 0.05,
+        },
+      ],
+    }),
+  ]);
 });

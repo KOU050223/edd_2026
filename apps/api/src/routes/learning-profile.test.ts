@@ -10,15 +10,23 @@ import {
   InMemoryLearningEvidenceRepository,
   createInMemoryRepositoryStore,
   type InMemoryRepositoryStore,
+  InMemoryLearningMapRepository,
 } from "../repository/memory.js";
 import { createLearningEventsRoute } from "./learning-events.js";
 import { createLearningProfileRoute } from "./learning-profile.js";
 import type { LearningProfileResponse } from "../contract/learning-profile.js";
+import {
+  seedTestMap,
+  TEST_MAP_BASE,
+  TEST_MAP_NODE,
+  TEST_MAP_OBJECTIVES,
+} from "../maps/test-map.js";
 
 let store: InMemoryRepositoryStore;
 let events: InMemoryLearningEventRepository;
 let evidence: InMemoryLearningEvidenceRepository;
 let sessions: InMemoryImportSessionRepository;
+let maps: InMemoryLearningMapRepository;
 let app: Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>;
 
 /** 認証は `stubAuth` が担うので、env に資格情報は要らない。 */
@@ -30,11 +38,17 @@ beforeEach(() => {
   events = new InMemoryLearningEventRepository(store);
   evidence = new InMemoryLearningEvidenceRepository(store);
   sessions = new InMemoryImportSessionRepository(store);
+  maps = new InMemoryLearningMapRepository(store);
   app = new Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>();
   app.use("/v1/*", stubAuth("user-a"));
   app.route(
     "/v1",
-    createLearningProfileRoute(() => ({ events, evidence, nowIso: () => NOW })),
+    createLearningProfileRoute(() => ({
+      events,
+      evidence,
+      maps,
+      nowIso: () => NOW,
+    })),
   );
   // 書き込み口（同期）を通した結果が読み取りに反映されることを確かめるために載せる。
   const identity = new InMemoryIdentityRepository();
@@ -122,6 +136,46 @@ test("「理解すること」がある Concept は項目ごとの理解度を�
   );
   expect(defer?.status).toBe("learning");
   expect(defer?.evidence.checkPassedCount).toBe(1);
+});
+
+test("手で作ったマップのノードも、表示名と項目ごとの理解度を返す（#242）", async () => {
+  await seedTestMap(maps, "user-a");
+  const [move, drop] = TEST_MAP_OBJECTIVES;
+  await seed("user-a", [
+    {
+      id: "e1",
+      type: "solved_independently",
+      conceptIds: [TEST_MAP_NODE.id],
+      objectiveIds: [move!.id],
+    },
+    { id: "e2", type: "solved_independently", conceptIds: [TEST_MAP_BASE.id] },
+  ]);
+
+  const body = (await (await getProfile()).json()) as LearningProfileResponse;
+  const node = body.concepts.find((item) => item.conceptId === TEST_MAP_NODE.id);
+  expect(node?.label).toBe(TEST_MAP_NODE.label);
+  expect(node?.objectives).toEqual({ [move!.id]: 0.5, [drop!.id]: 0 });
+  // 項目の無いノードは回数で判定する（#223 決定 6）。
+  const base = body.concepts.find((item) => item.conceptId === TEST_MAP_BASE.id);
+  expect(base?.label).toBe(TEST_MAP_BASE.label);
+  expect(base?.objectives).toBeUndefined();
+});
+
+test("他の利用者のマップの項目では導出しない", async () => {
+  await seedTestMap(maps, "user-b");
+  await seed("user-a", [
+    {
+      id: "e1",
+      type: "solved_independently",
+      conceptIds: [TEST_MAP_NODE.id],
+      objectiveIds: [TEST_MAP_OBJECTIVES[0]!.id],
+    },
+  ]);
+
+  const body = (await (await getProfile()).json()) as LearningProfileResponse;
+  const node = body.concepts.find((item) => item.conceptId === TEST_MAP_NODE.id);
+  expect(node?.label).toBeUndefined();
+  expect(node?.objectives).toBeUndefined();
 });
 
 test("イベントの生ログは返さない", async () => {

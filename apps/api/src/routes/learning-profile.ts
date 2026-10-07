@@ -5,12 +5,7 @@
  */
 
 import { Hono } from "hono";
-import {
-  CONCEPT_BY_ID,
-  deriveFamiliarityFromEvidence,
-  deriveMasteryFromEvents,
-  MOCK_LEARNING_OBJECTIVES,
-} from "@gakushu-sochi/domain";
+import { deriveFamiliarityFromEvidence, deriveMasteryFromEvents } from "@gakushu-sochi/domain";
 import {
   compareConceptView,
   LEARNING_PROFILE_RESPONSE_VERSION,
@@ -18,7 +13,12 @@ import {
   type LearningProfileResponse,
 } from "../contract/learning-profile.js";
 import type { AuthVariables } from "../auth/middleware.js";
-import type { LearningEventRepository, LearningEvidenceRepository } from "../repository/types.js";
+import { loadUserConceptCatalog } from "../maps/catalog.js";
+import type {
+  LearningEventRepository,
+  LearningEvidenceRepository,
+  LearningMapRepository,
+} from "../repository/types.js";
 
 export interface ProfileDeps {
   events: LearningEventRepository;
@@ -27,6 +27,8 @@ export interface ProfileDeps {
    * LearningEvent とは別の根拠であり、習熟度の計算には混ぜない。
    */
   evidence: LearningEvidenceRepository;
+  /** 手で作ったマップ（#242）。そのノードの「理解すること」と表示名を導出に加える。 */
+  maps: LearningMapRepository;
   /** 現在時刻を ISO 8601 で返す。テストで固定できるよう注入する。 */
   nowIso: () => string;
 }
@@ -40,19 +42,23 @@ export function createLearningProfileRoute(resolve: ProfileDepsResolver) {
   app.get("/learning-profile", async (c) => {
     const userId = c.get("user").userId;
     const deps = resolve(c.env);
-    const events = await deps.events.listByUser(userId);
+    const [events, catalog] = await Promise.all([
+      deps.events.listByUser(userId),
+      loadUserConceptCatalog(deps.maps, userId),
+    ]);
 
     // 習熟度は保存値ではなくログから導出する。docs/concepts.md「サーバー側の導出」。
-    // 「理解すること」の一覧は、生成の口ができるまでモックを使う（設計/05 #224）。
+    // 「理解すること」の一覧は、固定の Concept の項目（生成の口ができるまではモック、設計/05 #224）と、
+    // 利用者が手で作ったマップのノードの項目（#242）を合わせたもの。
     // 読むたびにその時点の一覧で計算し直すので、項目の増減もここで反映される（#223）。
-    const mastery = deriveMasteryFromEvents(events, MOCK_LEARNING_OBJECTIVES);
+    const mastery = deriveMasteryFromEvents(events, catalog.objectives);
 
     const concepts: ConceptMasteryView[] = Object.values(mastery)
       // 観測のある Concept だけが値を持つ。既知の Concept 全件を 0 で埋めない。
       // 埋めると「判断材料がない」と「習熟度が低い」をクライアントが区別できない。
       .filter((item) => item !== undefined)
       .map((item) => {
-        const label = CONCEPT_BY_ID.get(item.conceptId)?.label;
+        const label = catalog.conceptById.get(item.conceptId)?.label;
         return label === undefined ? item : { ...item, label };
       })
       .sort(compareConceptView);
@@ -63,7 +69,7 @@ export function createLearningProfileRoute(resolve: ProfileDepsResolver) {
     const familiarity = Object.values(deriveFamiliarityFromEvidence(evidence))
       .filter((item) => item !== undefined)
       .map((item) => {
-        const label = CONCEPT_BY_ID.get(item.conceptId)?.label;
+        const label = catalog.conceptById.get(item.conceptId)?.label;
         return label === undefined ? item : { ...item, label };
       })
       .sort((a, b) => (a.conceptId < b.conceptId ? -1 : a.conceptId > b.conceptId ? 1 : 0));

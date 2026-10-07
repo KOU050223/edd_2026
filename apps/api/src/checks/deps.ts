@@ -6,6 +6,7 @@ import type {
   ConversationRepository,
   IdentityRepository,
   LearningEventRepository,
+  LearningMapRepository,
   PersonalCheckRepository,
   UserSettingsRepository,
 } from "../repository/types.js";
@@ -42,7 +43,12 @@ export interface ChecksDeps {
   enforceUsageLimits?: boolean;
   /** 上流の一時的な失敗のあとの待ち時間。省略は `UPSTREAM_RETRY_DELAYS_MS`。テストで縮める。 */
   retryDelaysMs?: readonly number[];
-  /** 「理解すること」の一覧。生成の口ができるまではモック（#224）。テストで差し替える。 */
+  /**
+   * 手で作ったマップ（#242）。そのノードも確認問題の対象にする。
+   * 生成の入力（表示名・概要・前提・次）と「理解すること」を、固定の一覧に無ければここから引く。
+   */
+  maps: LearningMapRepository;
+  /** 固定の Concept の「理解すること」の一覧。生成の口ができるまではモック（#224）。テストで差し替える。 */
   objectives?: readonly LearningObjective[];
   now: () => Date;
 }

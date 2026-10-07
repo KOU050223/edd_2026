@@ -21,9 +21,11 @@ import {
   InMemoryLearningEvidenceRepository,
   InMemoryPersonalCheckRepository,
   type InMemoryRepositoryStore,
+  InMemoryLearningMapRepository,
 } from "../repository/memory.js";
 import type { LearningProfileResponse } from "../contract/learning-profile.js";
 import type { SyncResponse } from "../contract/learning-event.js";
+import { seedTestMap, TEST_MAP_ID, TEST_MAP_NODE, TEST_MAP_OBJECTIVES } from "../maps/test-map.js";
 import { createLearningDataRoute, type DeleteLearningEventsResponse } from "./learning-data.js";
 import { createLearningEventsRoute } from "./learning-events.js";
 import { createLearningProfileRoute } from "./learning-profile.js";
@@ -35,6 +37,7 @@ let evidence: InMemoryLearningEvidenceRepository;
 let sessions: InMemoryImportSessionRepository;
 let conversations: InMemoryConversationRepository;
 let personalChecks: InMemoryPersonalCheckRepository;
+let maps: InMemoryLearningMapRepository;
 /** 現在時刻（epoch ミリ秒）。テストの中で進めて、削除の前後を作る。 */
 let clockMs: number;
 let app: Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>;
@@ -56,6 +59,7 @@ beforeEach(() => {
   sessions = new InMemoryImportSessionRepository(store);
   conversations = new InMemoryConversationRepository(store);
   personalChecks = new InMemoryPersonalCheckRepository(store);
+  maps = new InMemoryLearningMapRepository(store);
   clockMs = 1_000;
   app = new Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>();
   app.use("/v1/*", stubAuth(TOKENS));
@@ -70,6 +74,7 @@ beforeEach(() => {
       sessions,
       conversations,
       checks: personalChecks,
+      maps,
       audit: new InMemoryAuditLogRepository(store),
       nowIso: () => NOW,
       nowMs: () => clockMs,
@@ -82,7 +87,12 @@ beforeEach(() => {
   );
   app.route(
     "/v1",
-    createLearningProfileRoute(() => ({ events, evidence, nowIso: () => NOW })),
+    createLearningProfileRoute(() => ({
+      events,
+      evidence,
+      maps,
+      nowIso: () => NOW,
+    })),
   );
 });
 
@@ -138,6 +148,28 @@ test("エクスポートは自分のイベントを LearnerProfile の形で返�
     mastery: deriveMasteryFromEvents(mine, MOCK_LEARNING_OBJECTIVES),
     events: mine,
   });
+});
+
+test("エクスポートの習熟度は、手で作ったマップのノードの項目でも導出する（#242）", async () => {
+  await seedTestMap(maps, "user-a");
+  const [move, drop] = TEST_MAP_OBJECTIVES;
+  await seed("user-a", [
+    event({ id: "e1", conceptIds: [TEST_MAP_NODE.id], objectiveIds: [move!.id] }),
+  ]);
+
+  const body = (await (
+    await request("/v1/learning-events:export", "token-a")
+  ).json()) as LearnerProfile;
+  expect(body.mastery[TEST_MAP_NODE.id]?.objectives).toEqual({ [move!.id]: 0.5, [drop!.id]: 0 });
+});
+
+test("学習データを消しても、手で作ったマップは消さない（#242）", async () => {
+  await seedTestMap(maps, "user-a");
+
+  const res = await request("/v1/learning-events", "token-a", "DELETE");
+
+  expect(res.status).toBe(200);
+  await expect(maps.get("user-a", TEST_MAP_ID)).resolves.not.toBeNull();
 });
 
 test("イベントが無ければ空の LearnerProfile を返す", async () => {

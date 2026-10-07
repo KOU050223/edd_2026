@@ -522,12 +522,18 @@ export interface PersonalCheckRepository {
    * 以前なら書かず、`saved: false` を返す。** 生成は上流を待つ間に削除が終わりうる。
    * 削除前の履歴から作った問題を後から書くと、消したはずのデータが戻る。
    * 判定と書き込みは同じ文で行う（`LearningEventRepository.append` と同じ）。
+   *
+   * `mapId` を渡したとき（手で作ったマップのノードの問題、#242）は、自分のそのマップに
+   * 参照ではないそのノードがあり、狙った項目もまだあるときだけ書く。無ければ
+   * `reason: "target-removed"` を返す。生成の間にマップ・ノード・項目が消されたら、
+   * 消したものの問題を後から書き戻さないため。
    */
   put(
     userId: string,
     check: PersonalConceptCheck,
     startedAtMs: number,
-  ): Promise<{ saved: boolean }>;
+    target?: { mapId: string },
+  ): Promise<{ saved: true } | { saved: false; reason: "reset" | "target-removed" }>;
   /** エクスポート用。全件を Concept ID・狙いの順で返す。 */
   listAllByUser(userId: string): Promise<PersonalConceptCheck[]>;
   /**

@@ -1523,10 +1523,24 @@ export class D1PersonalCheckRepository implements PersonalCheckRepository {
     userId: string,
     check: PersonalConceptCheck,
     startedAtMs: number,
-  ): Promise<{ saved: boolean }> {
+    target?: { mapId: string },
+  ): Promise<{ saved: true } | { saved: false; reason: "reset" | "target-removed" }> {
     const { conceptId, overview, practice } = check;
     // 本文は生成時の JSON と同じ形で持つ。読み出しで `parseConceptCheck` をそのまま通せる。
     const body = JSON.stringify({ conceptId, overview, practice });
+    const objectiveId = check.objectiveId ?? null;
+    // 手で作ったマップのノードなら、ノードと狙った項目がまだあることも同じ文で確かめる。
+    const targetExists = `EXISTS (
+           SELECT 1 FROM learning_map_nodes n JOIN learning_maps m ON m.id = n.map_id
+           WHERE n.map_id = ? AND n.concept_id = ? AND n.is_reference = 0 AND m.owner_user_id = ?
+         )
+         AND (? IS NULL OR EXISTS (
+           SELECT 1 FROM learning_objectives WHERE id = ? AND map_id = ? AND concept_id = ?
+         ))`;
+    const targetBindings =
+      target === undefined
+        ? []
+        : [target.mapId, conceptId, userId, objectiveId, objectiveId, target.mapId, conceptId];
     const result = await this.db
       .prepare(
         `INSERT INTO user_concept_checks (
@@ -1538,6 +1552,7 @@ export class D1PersonalCheckRepository implements PersonalCheckRepository {
            SELECT 1 FROM learning_history_resets
            WHERE user_id = ? AND reset_at_ms >= ?
          )
+         ${target === undefined ? "" : `AND ${targetExists}`}
          ON CONFLICT (user_id, concept_id, target) DO UPDATE SET
            scope = excluded.scope,
            objective_id = excluded.objective_id,
@@ -1558,13 +1573,22 @@ export class D1PersonalCheckRepository implements PersonalCheckRepository {
         check.generatedAt,
         userId,
         startedAtMs,
+        ...targetBindings,
       )
       .run();
     const changes = result.meta.changes;
     if (typeof changes !== "number") {
       throw new Error("D1 insert result has no meta.changes");
     }
-    return { saved: changes > 0 };
+    if (changes > 0) return { saved: true };
+    if (target === undefined) return { saved: false, reason: "reset" };
+    // 書かなかった理由を応答の文面のために分ける。判定は書き込みと同じ文で済んでいるので、
+    // ここで読み直した結果が書き込みの可否を左右することはない。
+    const exists = await this.db
+      .prepare(`SELECT 1 AS found WHERE ${targetExists}`)
+      .bind(...targetBindings)
+      .first<{ found: number }>();
+    return { saved: false, reason: exists === null ? "target-removed" : "reset" };
   }
 
   async listAllByUser(userId: string): Promise<PersonalConceptCheck[]> {
@@ -1880,6 +1904,21 @@ export class D1LearningMapRepository implements LearningMapRepository {
            WHERE id = ? AND owner_user_id = ?`,
         )
         .bind(content.title, content.description, now.nowIso, now.nowMs, mapId, ownerUserId),
+      // 外すノードの確認問題を、ノードを消す前に消す（#242、2026-10-07 の決定）。
+      // user_concept_checks はノードを参照していないので、CASCADE では消えない。
+      this.db
+        .prepare(
+          `DELETE FROM user_concept_checks
+           WHERE user_id = ? AND ${OWNED_MAP}
+             AND concept_id IN (
+               SELECT concept_id FROM learning_map_nodes
+               WHERE map_id = ? AND is_reference = 0
+                 AND concept_id NOT IN (
+                   SELECT json_extract(value, '$.conceptId') FROM json_each(?)
+                 )
+             )`,
+        )
+        .bind(ownerUserId, mapId, ownerUserId, mapId, nodes),
       this.db
         .prepare(`DELETE FROM learning_map_edges WHERE map_id = ? AND ${OWNED_MAP}`)
         .bind(mapId, mapId, ownerUserId),
@@ -1908,12 +1947,23 @@ export class D1LearningMapRepository implements LearningMapRepository {
   }
 
   async delete(ownerUserId: string, mapId: string): Promise<boolean> {
-    // ノード・線・項目は外部キーの ON DELETE CASCADE で消える。
-    const result = await this.db
-      .prepare("DELETE FROM learning_maps WHERE id = ? AND owner_user_id = ?")
-      .bind(mapId, ownerUserId)
-      .run();
-    return changesOf(result) === 1;
+    // ノード・線・項目は外部キーの ON DELETE CASCADE で消える。確認問題はノードを
+    // 参照していないので、マップを消す前に同じ batch で消す（#242、2026-10-07 の決定）。
+    const [, deleted] = await this.db.batch([
+      this.db
+        .prepare(
+          `DELETE FROM user_concept_checks
+           WHERE user_id = ? AND ${OWNED_MAP}
+             AND concept_id IN (
+               SELECT concept_id FROM learning_map_nodes WHERE map_id = ? AND is_reference = 0
+             )`,
+        )
+        .bind(ownerUserId, mapId, ownerUserId, mapId),
+      this.db
+        .prepare("DELETE FROM learning_maps WHERE id = ? AND owner_user_id = ?")
+        .bind(mapId, ownerUserId),
+    ]);
+    return changesOf(deleted) === 1;
   }
 
   async replaceObjectives(
@@ -1938,6 +1988,15 @@ export class D1LearningMapRepository implements LearningMapRepository {
            WHERE id = ? AND ${OWNED_MAP_NODE}`,
         )
         .bind(params.nowIso, params.nowMs, mapId, ...ownedNode),
+      // 外す項目を狙った確認問題を消す（#242、2026-10-07 の決定）。
+      this.db
+        .prepare(
+          `DELETE FROM user_concept_checks
+           WHERE user_id = ? AND concept_id = ? AND ${OWNED_MAP_NODE}
+             AND objective_id IS NOT NULL
+             AND objective_id NOT IN (SELECT json_extract(value, '$.id') FROM json_each(?))`,
+        )
+        .bind(ownerUserId, conceptId, ...ownedNode, objectives),
       this.db
         .prepare(
           `DELETE FROM learning_objectives
