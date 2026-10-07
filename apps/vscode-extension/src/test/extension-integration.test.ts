@@ -30,6 +30,7 @@ const {
   showInputBox,
   showQuickPick,
   syncEvent,
+  fetchUserConcepts,
   uploadConversation,
   getRemoteSaveConversationHistory,
   setRemoteSaveConversationHistory,
@@ -62,6 +63,10 @@ const {
   showInputBox: vi.fn(),
   showQuickPick: vi.fn(),
   syncEvent: vi.fn(),
+  // 手で作ったマップのノード（#242）。既定は「マップが無い」。API を叩かない。
+  fetchUserConcepts: vi.fn(
+    async () => ({ ok: true, value: { concepts: [], objectives: [] } }) as const,
+  ),
   // 履歴の保存経路は API を叩かないよう差し替える。オプトイン確認の
   // 読み取りは「サーバー側が無効」にしておく（保存自体を試さないテストが
   // キャッシュ無しで動く既定の状態）。
@@ -155,7 +160,7 @@ vi.mock("../learning/store", async (importOriginal) => {
   };
 });
 
-vi.mock("../learning/sync", () => ({ syncEvent, deleteServerLearningData }));
+vi.mock("../learning/sync", () => ({ syncEvent, deleteServerLearningData, fetchUserConcepts }));
 
 vi.mock("../conversations/sync", () => ({
   uploadConversation,
@@ -288,6 +293,8 @@ test("選択したコードの文脈をChatの質問から回答記録まで引�
       language: "typescript",
     }),
     expect.any(Function),
+    // 「理解すること」の一覧（固定の項目と、手で作ったノードの項目。#242）。
+    expect.any(Array),
   );
 });
 
@@ -613,6 +620,8 @@ test("同じエラーを2回解説させるとerror_recurredを記録する", as
       diagnosticCode: "ts:2345",
     }),
     expect.any(Function),
+    // 「理解すること」の一覧（固定の項目と、手で作ったノードの項目。#242）。
+    expect.any(Array),
   );
   expect(recordedTypes().filter((type) => type === "error_recurred")).toHaveLength(1);
   // 送信前の時刻を持つ question_asked は、再発（現在時刻）より先に記録する。手元は記録順、
@@ -1049,4 +1058,52 @@ test("削除の実行中にコマンドを再度呼んでも二重には走ら�
 
   resolveDelete?.({ ok: true, deletedCount: 0, resetAtMs: 5_000 });
   await first;
+});
+
+test("起動時に読んだ自分のマップのノードを、質問の AIRequest に載せる（#242）", async () => {
+  const userConcepts = {
+    concepts: [
+      {
+        id: "mrust0001.owner001",
+        label: "所有権（Rust 入門）",
+        language: "mrust0001",
+        summary: "s",
+        prerequisites: [],
+        source: { kind: "manual" as const },
+      },
+    ],
+    objectives: [{ id: "mrust0001.owner001:move", conceptId: "mrust0001.owner001", label: "move" }],
+  };
+  fetchUserConcepts.mockResolvedValueOnce({ ok: true, value: userConcepts } as never);
+  collectFromEditor.mockResolvedValueOnce(CONTEXT);
+  loadProfile.mockReturnValueOnce({ events: [], mastery: {} });
+  recordEvent.mockImplementation(async (_context, profile: LearnerProfile) => profile);
+  getConfiguration.mockReturnValue({
+    get: (key: string, fallback: string) => {
+      if (key === "api.baseUrl") return "https://api.example.com";
+      return fallback;
+    },
+  });
+
+  const context = createExtensionContext(true);
+  activate(context as never);
+  // 起動時の読み込みが終わるのを待つ。
+  await vi.waitFor(() => expect(fetchUserConcepts).toHaveBeenCalled());
+  await Promise.resolve();
+
+  await registeredCommands.get("gakushuSochi.askSelection")?.();
+  const chatOpen = executeCommand.mock.calls.find(
+    ([command]) => command === "workbench.action.chat.open",
+  );
+  const prompt = `${chatOpen?.[1].query.replace("@gakushu-sochi ", "")}所有権とは？`;
+  await participantHandlers[0]?.(
+    { prompt },
+    { history: [] },
+    { markdown: vi.fn(), progress: vi.fn() },
+  );
+
+  expect(askedRequests.at(-1)?.userConcepts).toEqual(userConcepts);
+  // 手元の理解度の記録にも、手作りのノードの項目を渡す。
+  const objectives = recordEvent.mock.calls.at(-1)?.[4] as { id: string }[];
+  expect(objectives.map((objective) => objective.id)).toContain("mrust0001.owner001:move");
 });

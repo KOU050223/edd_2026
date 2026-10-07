@@ -15,6 +15,7 @@ import {
   MOCK_LEARNING_OBJECTIVES,
   type LearnerProfile,
   type LearningEvent,
+  type LearningObjective,
 } from "@gakushu-sochi/domain";
 import { isExplainedErrors, type ExplainedErrors } from "./recurrence";
 
@@ -114,10 +115,14 @@ export async function recordEvent(
   profile: LearnerProfile,
   event: LearningEvent,
   onError?: (error: unknown) => void,
+  /**
+   * 「理解すること」の一覧。サーバーの導出（apps/api の deriveMasteryFromEvents）と同じく、
+   * 固定の Concept の項目に、利用者が手で作ったマップのノードの項目を足したもの（#242）。
+   */
+  objectives: readonly LearningObjective[] = MOCK_LEARNING_OBJECTIVES,
 ): Promise<LearnerProfile> {
-  // 「理解すること」の一覧はサーバーの導出（apps/api の deriveMasteryFromEvents）と同じものを渡す。
   // 渡さないと、項目を持つ Concept まで回数による判定で畳み込まれ、サーバーと意味がずれる。
-  const updated = applyEvent(profile, event, MOCK_LEARNING_OBJECTIVES);
+  const updated = applyEvent(profile, event, objectives);
   await saveProfile(context, updated, onError);
   return updated;
 }

@@ -71,3 +71,19 @@ test("選択範囲にあるDiagnosticsをAIRequestへ引き継ぐ", () => {
     diagnostics,
   });
 });
+
+test("手で作ったマップのノードを AIRequest の userConcepts へ引き継ぐ（#242）", () => {
+  const context = {
+    code: "value",
+    source: "editor" as const,
+    contextLevel: 2 as const,
+    surroundingCode: "",
+  };
+  const userConcepts = { concepts: [], objectives: [] };
+
+  expect(
+    createChatAIRequest(context, "なぜですか？", [], [], undefined, undefined, userConcepts),
+  ).toMatchObject({ userConcepts });
+  // 取得できていなければキー自体を持たせない。
+  expect(createChatAIRequest(context, "なぜですか？")).not.toHaveProperty("userConcepts");
+});
