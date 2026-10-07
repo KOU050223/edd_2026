@@ -147,6 +147,9 @@ async function sendJson<T>(
     const body = (await response.json().catch(() => ({}))) as { error?: string };
     throw writeErrorOf(response.status, body);
   }
+  // 204 は「本文を返さない」と明示した成功（学習マップの削除）。読める本文が無いのが正しい。
+  // 呼び出し側は戻り値を `void` で受ける。
+  if (response.status === 204) return undefined as T;
   try {
     return (await response.json()) as T;
   } catch {

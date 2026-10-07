@@ -1,6 +1,8 @@
 import { createFileRoute, Link, useRouter, type ErrorComponentProps } from "@tanstack/react-router";
 import { useRef, useState } from "react";
 import {
+  type Concept as DomainConcept,
+  type LearningObjective,
   CHECK_GENERATION_NOTICE,
   CHECK_LEVEL_LABELS,
   CHECK_LEVELS,
@@ -48,6 +50,7 @@ import {
   type MapProfile,
 } from "../../learning-map-view.js";
 import { objectiveProgress, type ObjectiveProgress } from "../../learning-map.js";
+import { fetchLearningMap, mapDefinitions, mapIdOfConcept } from "../../learning-maps.js";
 import type { MasteryOverrides } from "../../overrides.js";
 import { takeLoginRetry } from "../../session.js";
 
@@ -70,8 +73,19 @@ type RecordState =
   | { kind: "dropped" }
   | { kind: "failed"; message: string };
 
-/** マップへ戻る先。地図に無い Concept は項目一覧で詳細を開く。 */
+/**
+ * マップへ戻る先。手で作ったノードはそのマップへ（#242）、地図に無い Concept は項目一覧で
+ * 詳細を開く。
+ */
 function BackLink({ conceptId }: { conceptId: string }) {
+  const mapId = mapIdOfConcept(conceptId);
+  if (mapId !== undefined) {
+    return (
+      <Link to="/maps/$mapId" params={{ mapId }} search={{ concept: conceptId }} className="link">
+        ← マップへ戻る
+      </Link>
+    );
+  }
   const language = AREAS.get(conceptId);
   return language === undefined ? (
     <Link to="/" search={{ concept: conceptId }} className="link">
@@ -372,9 +386,7 @@ type GenerateFailure = { title: string; message: string };
 function CheckPage() {
   const { conceptId } = Route.useParams();
   const loaded = Route.useLoaderData();
-  const definition = CONCEPT_BY_ID.get(conceptId);
-  const label = definition?.label ?? conceptId;
-  const areaName = definition ? (languageLabel[definition.language] ?? definition.language) : "";
+  const { label, areaName } = loaded;
 
   const [checks, setChecks] = useState(loaded.checks);
   const [consent, setConsent] = useState<CheckGenerationConsent>(loaded.consent);
@@ -829,33 +841,65 @@ export const Route = createFileRoute("/_framed/check/$conceptId")({
   // 保存済みの組は生成のたびに変わる。戻ってきたときに古い一覧を見せない。
   staleTime: 0,
   loader: async ({ params }) => {
-    const definition = CONCEPT_BY_ID.get(params.conceptId);
-    if (definition === undefined) throw new ApiError("not_found");
     // 読むだけで、AI は呼ばない。生成は利用者が「作る」を押したときだけ。
     const retry = takeLoginRetry();
-    const [checks, profile, overrides, consent] = await Promise.all([
+    const mapId = mapIdOfConcept(params.conceptId);
+    const [checks, profile, overrides, consent, map] = await Promise.all([
       fetchSavedChecks(params.conceptId, fetch, retry),
       requestJson<MapProfile>("/api/v1/learning-profile", fetch, retry),
       requestJson<MasteryOverrides>("/api/v1/mastery-overrides", fetch, retry),
       fetchGenerationConsent(fetch, retry),
+      // 手で作ったノードは、そのマップから定義を引く（#242）。他人のマップは 404 になる。
+      mapId === undefined ? undefined : fetchLearningMap(mapId, fetch, retry),
     ]);
-    const concepts = overlaidConcepts(profile, overrides);
+
+    // 対象の Concept と同じ領域（手で作ったノードならそのマップ）の定義・項目・見出し。
+    let area: { definitions: readonly DomainConcept[]; objectives: readonly LearningObjective[] };
+    let areaName: string;
+    if (map === undefined) {
+      const definition = CONCEPT_BY_ID.get(params.conceptId);
+      if (definition === undefined) throw new ApiError("not_found");
+      area = {
+        definitions: [...CONCEPT_BY_ID.values()].filter(
+          (candidate) => candidate.language === definition.language,
+        ),
+        objectives: OBJECTIVES_BY_CONCEPT.get(params.conceptId) ?? [],
+      };
+      areaName = languageLabel[definition.language] ?? definition.language;
+    } else {
+      const defined = mapDefinitions(map);
+      // ID のマップの ID 部分から引いたので、ここに無いならノードが消えている。
+      if (!defined.concepts.some((candidate) => candidate.id === params.conceptId)) {
+        throw new ApiError("not_found");
+      }
+      area = {
+        definitions: defined.concepts,
+        objectives: defined.objectives.filter(
+          (objective) => objective.conceptId === params.conceptId,
+        ),
+      };
+      areaName = map.title;
+    }
+    const label =
+      area.definitions.find((candidate) => candidate.id === params.conceptId)?.label ??
+      params.conceptId;
+
+    const concepts = overlaidConcepts(profile, overrides, area.definitions);
     const concept = concepts.find((candidate) => candidate.conceptId === params.conceptId);
     // 手動修正は status だけを変えるので、項目の割合は自動算出のまま見せる（詳細パネルと同じ）。
     const objectives: ObjectiveProgress[] = concept
-      ? objectiveProgress(OBJECTIVES_BY_CONCEPT.get(params.conceptId) ?? [], {
+      ? objectiveProgress(area.objectives, {
           status: concept.derived.status,
           objectives: concept.objectives,
         })
       : [];
+    const areaIds = new Set(area.definitions.map((candidate) => candidate.id));
     const recommended = recommendedLevel(
       concepts
-        .filter(
-          (candidate) => CONCEPT_BY_ID.get(candidate.conceptId)?.language === definition.language,
-        )
+        .filter((candidate) => areaIds.has(candidate.conceptId))
         .map((candidate) => candidate.status),
     );
-    return { checks, consent, objectives, recommended };
+    return { checks, consent, objectives, recommended, label, areaName };
   },
   errorComponent: CheckError,
   // 同じルートのまま Concept だけ変わっても、前の Concept の問題や選択を持ち越さない。

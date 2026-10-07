@@ -5,7 +5,10 @@ import type { ConceptFamiliarity, MasteryStatusView } from "@gakushu-sochi/domai
 import {
   AREAS,
   CompleteBadge,
+  CONCEPT_BY_ID,
   ConceptDetail,
+  FIXED_OBJECTIVES_NOTE,
+  OBJECTIVES_BY_CONCEPT,
   LINKS,
   loadLearningMap,
   languageLabel,
@@ -18,6 +21,7 @@ import {
   useMasteryChange,
 } from "../../learning-map-view.js";
 import { findCurrentPosition, summarizeTree } from "../../learning-map.js";
+import { mapIdOfConcept } from "../../learning-maps.js";
 
 /**
  * 項目一覧。領域ごとのカードを並べ、詳しい地図は `/map/$language` へ譲る。
@@ -39,7 +43,10 @@ function AreaIndex() {
   const selected = selectedId === undefined ? undefined : concepts.get(selectedId);
   // 定義から外れた Concept の観測は地図に載らない。件数だけ数えて見えなくすると
   // 記録が消えたように見えるので、一覧の下に並べて選べるようにする（RULE-004）。
-  const unmapped = conceptList.filter((concept) => !AREAS.has(concept.conceptId));
+  // 手で作ったマップのノードは「自分のマップ」に載るので、ここには並べない（#242）。
+  const unmapped = conceptList.filter(
+    (concept) => !AREAS.has(concept.conceptId) && mapIdOfConcept(concept.conceptId) === undefined,
+  );
   // 件数はサーバーの記録を正とする。記録は Concept が増えても消えないので、
   // いま全件 確認済みかどうかとは一致しないことがある（RULE-004 の理由で理由も出す）。
   const celebrated = completions?.newlyCompleted ?? [];
@@ -164,6 +171,9 @@ function AreaIndex() {
         {selected && (
           <ConceptDetail
             concept={selected}
+            summary={CONCEPT_BY_ID.get(selected.conceptId)?.summary}
+            objectives={OBJECTIVES_BY_CONCEPT.get(selected.conceptId) ?? []}
+            objectivesNote={FIXED_OBJECTIVES_NOTE}
             links={LINKS.get(selected.conceptId)}
             concepts={concepts}
             isCurrent={selected.conceptId === current}

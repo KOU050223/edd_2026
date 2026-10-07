@@ -32,7 +32,7 @@ export function randomKey(): string {
   return key;
 }
 
-/** マップの ID。`m` + 英小文字と数字 8 文字（例: `m7k2x9qa`）。 */
+/** マップの ID。`m` + 英小文字と数字 8 文字（例: `m7k2x9qa4`）。 */
 export function newMapId(newKey: () => string): string {
   return `m${newKey()}`;
 }
