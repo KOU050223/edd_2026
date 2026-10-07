@@ -52,6 +52,7 @@ export const INVOKE_CHANNELS = {
   authLogout: "auth:logout",
   selectionRetry: "selection:retry",
   answerAsk: "answer:ask",
+  answerCancel: "answer:cancel",
   conversationHistoryGet: "conversation-history:get",
   conversationHistorySet: "conversation-history:set",
   consentStatus: "consent:status",
@@ -93,6 +94,7 @@ export interface InvokeContract {
   "auth:logout": { args: []; result: void };
   "selection:retry": { args: []; result: void };
   "answer:ask": { args: [selection: string, question: string]; result: void };
+  "answer:cancel": { args: []; result: void };
   "conversation-history:get": { args: []; result: ConversationHistoryOptIn };
   "conversation-history:set": {
     args: [enabled: boolean];
@@ -159,6 +161,7 @@ export interface DesktopApi {
   logout(): Promise<void>;
   retrySelection(): Promise<void>;
   ask(selection: string, question: string): Promise<void>;
+  cancelAnswer(): Promise<void>;
   getConsentStatus(): Promise<ConsentStatus>;
   reviewConsent(): Promise<ConsentStatus>;
   getConversationHistoryOptIn(): Promise<ConversationHistoryOptIn>;

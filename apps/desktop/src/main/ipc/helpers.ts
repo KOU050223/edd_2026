@@ -66,5 +66,10 @@ export function send<C extends EventChannel>(
   channel: C,
   payload: EventContract[C],
 ): void {
-  webContents?.send(channel, payload);
+  // 破棄済みの webContents への送信はレンダラーが無い＝届け先が無いという
+  // 想定内の状況なので、例外にせずイベントを落とす（破棄時の中断処理が
+  // 残りの delta を送ろうとしうる）。isDestroyed() なしの send は
+  // Electron が例外を投げるか無警告で落とすため、ここで明示的に弾く。
+  if (webContents === undefined || webContents.isDestroyed()) return;
+  webContents.send(channel, payload);
 }

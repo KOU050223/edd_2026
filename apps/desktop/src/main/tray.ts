@@ -1,4 +1,6 @@
 // 常駐トレイの生成とメニュー（Issue #279 ステップ 3 で index.ts から分離）。
+import path from "node:path";
+
 import { app, Menu, nativeImage, Tray } from "electron";
 
 import { appState } from "./app-state.js";
@@ -10,8 +12,25 @@ import { createPopup, showPopup } from "./windows/popup.js";
 
 const SERVICE_NAME = "Gakushu Sochi";
 
+/**
+ * トレイアイコンのパス。vite の trayIconsPlugin が assets/icons/icon-16.png を
+ * out/main/assets/tray-icon.png（@2x は icon-32.png → tray-icon@2x.png）へ
+ * emit する。app.getAppPath() は dev では apps/desktop、パッケージでは asar の
+ * ルートを指すので、どちらでもこの相対パスで届く。
+ */
+export function resolveTrayIconPath(appPath: string): string {
+  return path.join(appPath, "out", "main", "assets", "tray-icon.png");
+}
+
 export function createTray(): void {
-  const tray = new Tray(nativeImage.createEmpty());
+  const iconPath = resolveTrayIconPath(app.getAppPath());
+  const icon = nativeImage.createFromPath(iconPath);
+  if (icon.isEmpty()) {
+    // アイコンが読めなくてもトレイのメニュー自体は機能するので起動は止めない。
+    // ステータスバーに何も出ない原因が分かるよう理由だけは残す。
+    console.error(`トレイアイコンを読み込めませんでした: ${iconPath}`);
+  }
+  const tray = new Tray(icon);
   appState.tray = tray;
   tray.setToolTip(SERVICE_NAME);
   tray.setContextMenu(

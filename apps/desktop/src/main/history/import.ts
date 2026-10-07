@@ -3,13 +3,7 @@
 import { randomBytes } from "node:crypto";
 import { readdir, readFile, stat } from "node:fs/promises";
 
-import {
-  CONCEPTS,
-  type AnalysisMode,
-  type EvidenceImportedBy,
-  type HistoryProviderId,
-  type RawConversation,
-} from "@gakushu-sochi/domain";
+import { CONCEPTS, type AnalysisMode, type EvidenceImportedBy } from "@gakushu-sochi/domain";
 
 import { apiDeps } from "../api-deps.js";
 import { ensureConsent } from "../consent-dialog.js";
@@ -24,6 +18,7 @@ import type {
 import { createImportSession } from "./api.js";
 import { parseExcludedConceptIds, prepareApplyEvidence } from "./apply.js";
 import { createLocalRuleProvider } from "./local-rules.js";
+import { pendingImportStore } from "./pending-import.js";
 import { mergePastedAnalysis, runImportPipeline } from "./pipeline.js";
 import {
   CLI_SPECS,
@@ -44,17 +39,6 @@ const historyFs: ScanFs = {
 
 /** Managed AI へ回す分析の1回のインポートあたりの予算。 */
 const IMPORT_BUDGET = { managedAiMaxCalls: 10 };
-
-/**
- * 分析済みだが未適用の Import。renderer には本文を渡さないため、
- * prompt-copy fallback と apply の素材を main 側だけに保持する。
- * `analyze` ごとに上書きし、古い結果が後から適用されないようにする。
- */
-interface PendingImport {
-  preview: ImportPreview;
-  pending: Map<HistoryProviderId, RawConversation[]>;
-}
-let pendingImport: PendingImport | undefined;
 
 /** renderer へ返すプレビュー。evidence（概念IDのみ）と pending（本文）は落とす。 */
 function previewForRenderer(preview: ImportPreview) {
@@ -97,6 +81,9 @@ export async function analyzeHistory(
   request: HistoryAnalyzeRequest,
   onProgress: (progress: ImportProgress) => void,
 ) {
+  // 新しい分析の始まる前に前の結果を捨てる。分析が失敗しても
+  // 古い会話本文を残さない。
+  pendingImportStore.discard();
   // 履歴本文が AI（CLI / Managed）へ出る経路なので、同意の記録があるときだけ走らせる。
   if (!(await ensureConsent())) {
     throw new Error("送信の同意が得られなかったため、インポートを中止しました。");
@@ -126,7 +113,7 @@ export async function analyzeHistory(
     ...(request.sinceMs === undefined ? {} : { sinceMs: request.sinceMs }),
     onProgress,
   });
-  pendingImport = { preview: run.preview, pending: run.pending };
+  pendingImportStore.set({ preview: run.preview, pending: run.pending });
   return {
     ...previewForRenderer(run.preview),
     pendingCount: [...run.pending.values()].reduce((sum, list) => sum + list.length, 0),
@@ -135,11 +122,9 @@ export async function analyzeHistory(
 }
 
 export function buildImportPrompt(): string {
-  if (pendingImport === undefined) {
-    throw new Error("先に履歴の分析を実行してください。");
-  }
+  const entry = pendingImportStore.require("先に履歴の分析を実行してください。");
   // API の1回あたりの会話数上限と揃える（apps/api MAX_CONVERSATIONS_PER_ANALYSIS）。
-  const conversations = [...pendingImport.pending.values()].flat().slice(0, 50);
+  const conversations = [...entry.pending.values()].flat().slice(0, 50);
   if (conversations.length === 0) {
     throw new Error("分析待ちの会話がありません。");
   }
@@ -150,17 +135,16 @@ export function buildImportPrompt(): string {
 }
 
 export function pasteAnalysisIntoImport(text: unknown): ImportAnalyzeView {
-  if (pendingImport === undefined) {
-    throw new Error("先に履歴の分析を実行してください。");
-  }
+  const entry = pendingImportStore.require("先に履歴の分析を実行してください。");
   if (typeof text !== "string") throw new Error("分析結果のテキストを貼ってください。");
   const merged = mergePastedAnalysis({
-    preview: pendingImport.preview,
-    pending: pendingImport.pending,
+    preview: entry.preview,
+    pending: entry.pending,
     result: parseAnalysisOutput(text),
     concepts: CONCEPTS,
   });
-  pendingImport = { preview: merged.preview, pending: merged.remaining };
+  // 貼り戻しで期限は延びない。本文を持つ期間は分析開始から 30 分で固定。
+  pendingImportStore.set({ preview: merged.preview, pending: merged.remaining }, entry.expiresAt);
   return {
     ...previewForRenderer(merged.preview),
     pendingCount: [...merged.remaining.values()].reduce((sum, list) => sum + list.length, 0),
@@ -171,25 +155,22 @@ export function pasteAnalysisIntoImport(text: unknown): ImportAnalyzeView {
 export async function applyImport(
   payload: HistoryApplyRequest | undefined,
 ): Promise<CreateImportSessionResult> {
-  if (pendingImport === undefined) {
-    throw new Error("適用できる分析結果がありません。先に履歴の分析を実行してください。");
-  }
-  const evidence = prepareApplyEvidence(
-    pendingImport.preview.evidence,
-    parseExcludedConceptIds(payload),
+  const entry = pendingImportStore.require(
+    "適用できる分析結果がありません。先に履歴の分析を実行してください。",
   );
+  const evidence = prepareApplyEvidence(entry.preview.evidence, parseExcludedConceptIds(payload));
   const result = await createImportSession(apiDeps(), {
-    id: pendingImport.preview.sessionId,
-    importedBy: pendingImport.preview.importedBy,
-    providers: pendingImport.preview.providers,
-    conversationCount: pendingImport.preview.conversationCount,
-    ignoredCount: pendingImport.preview.ignoredCount,
+    id: entry.preview.sessionId,
+    importedBy: entry.preview.importedBy,
+    providers: entry.preview.providers,
+    conversationCount: entry.preview.conversationCount,
+    ignoredCount: entry.preview.ignoredCount,
     // サーバー側の上限（apps/api MAX_UNMAPPED_CANDIDATES=200）と揃える。
-    unmappedCandidates: pendingImport.preview.unmapped.slice(0, 200),
+    unmappedCandidates: entry.preview.unmapped.slice(0, 200),
     evidence,
   });
   // 適用後に残しておくと、同じ preview の二重適用や stale な
   // prompt への貼り戻しが起きる。適用したら破棄する。
-  pendingImport = undefined;
+  pendingImportStore.discard();
   return result;
 }

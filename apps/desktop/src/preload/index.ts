@@ -12,6 +12,7 @@ const api = {
   logout: () => invoke(INVOKE_CHANNELS.authLogout),
   retrySelection: () => invoke(INVOKE_CHANNELS.selectionRetry),
   ask: (selection, question) => invoke(INVOKE_CHANNELS.answerAsk, selection, question),
+  cancelAnswer: () => invoke(INVOKE_CHANNELS.answerCancel),
   getConsentStatus: () => invoke(INVOKE_CHANNELS.consentStatus),
   reviewConsent: () => invoke(INVOKE_CHANNELS.consentReview),
   // 質問履歴の保存オプトイン（Issue #204）。値はサーバーの user-settings が正。

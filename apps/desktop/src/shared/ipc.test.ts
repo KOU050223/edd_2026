@@ -41,6 +41,7 @@ const expectedApi: Record<string, { channel: string; args: unknown[] } | { onCha
   logout: { channel: INVOKE_CHANNELS.authLogout, args: [] },
   retrySelection: { channel: INVOKE_CHANNELS.selectionRetry, args: [] },
   ask: { channel: INVOKE_CHANNELS.answerAsk, args: ["selection", "question"] },
+  cancelAnswer: { channel: INVOKE_CHANNELS.answerCancel, args: [] },
   getConsentStatus: { channel: INVOKE_CHANNELS.consentStatus, args: [] },
   reviewConsent: { channel: INVOKE_CHANNELS.consentReview, args: [] },
   getConversationHistoryOptIn: {

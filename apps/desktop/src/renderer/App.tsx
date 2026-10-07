@@ -379,10 +379,25 @@ export function App() {
   // 質問の送信。
   // ---------------------------------------------------------------------------
   const [question, setQuestion] = useState("");
+  // 「停止」を押したかどうか。main 側の中断はエラーではなく正常終了で返るので、
+  // キャンセル由来かどうかをここで記憶して通知の文面に使う。
+  const cancelRequestedRef = useRef(false);
+
+  const cancelAsk = useCallback(async () => {
+    if (!isAskingRef.current) return;
+    cancelRequestedRef.current = true;
+    try {
+      await window.desktop.cancelAnswer();
+    } catch (e) {
+      cancelRequestedRef.current = false;
+      showError(`回答を停止できませんでした: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }, [showError]);
 
   const ask = useCallback(async () => {
     if (isAskingRef.current) return;
     isAskingRef.current = true;
+    cancelRequestedRef.current = false;
     setIsAsking(true);
     try {
       showNotice();
@@ -391,6 +406,9 @@ export function App() {
       setCardTitle(asked || "回答");
       setCardHidden(false);
       await window.desktop.ask(selectionText, question);
+      if (cancelRequestedRef.current) {
+        showNotice("回答を停止しました");
+      }
       // 履歴保存が有効なら新しい会話が保存されている。一覧を読み直す。
       void loadConversations();
     } catch (e) {
@@ -485,8 +503,13 @@ export function App() {
         }
         void window.desktop.close();
       }
-      // 設定シート表示中は背後の送信を走らせない。
-      if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && !settingsOpen) {
+      // モーダル表示中は背後の送信を走らせない。
+      if (
+        event.key === "Enter" &&
+        (event.metaKey || event.ctrlKey) &&
+        !settingsOpen &&
+        !importOpen
+      ) {
         event.preventDefault();
         void askRef.current();
       }
@@ -592,9 +615,15 @@ export function App() {
               onChange={(event) => setQuestion(event.target.value)}
             />
             <div className="composer-actions">
-              <button id="send" disabled={isAsking} onClick={() => void ask()}>
-                送信
-              </button>
+              {isAsking ? (
+                <button id="cancel" onClick={() => void cancelAsk()}>
+                  停止
+                </button>
+              ) : (
+                <button id="send" onClick={() => void ask()}>
+                  送信
+                </button>
+              )}
             </div>
           </div>
         </section>

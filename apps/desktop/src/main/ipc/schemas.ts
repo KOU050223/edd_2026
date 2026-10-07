@@ -120,6 +120,7 @@ export const INVOKE_SCHEMAS: {
   "auth:logout": v.strictTuple([]),
   "selection:retry": v.strictTuple([]),
   "answer:ask": v.strictTuple([v.string(), v.string()]),
+  "answer:cancel": v.strictTuple([]),
   "conversation-history:get": v.strictTuple([]),
   "conversation-history:set": v.strictTuple([v.boolean()]),
   "consent:status": v.strictTuple([]),

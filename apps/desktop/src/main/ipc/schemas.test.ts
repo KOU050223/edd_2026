@@ -14,6 +14,7 @@ describe("INVOKE_SCHEMAS", () => {
       "auth:login",
       "auth:logout",
       "selection:retry",
+      "answer:cancel",
       "conversation-history:get",
       "consent:status",
       "consent:review",

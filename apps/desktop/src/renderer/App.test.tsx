@@ -98,6 +98,7 @@ interface MockDesktop {
   getConversation: ReturnType<typeof vi.fn>;
   deleteConversation: ReturnType<typeof vi.fn>;
   ask: ReturnType<typeof vi.fn>;
+  cancelAnswer: ReturnType<typeof vi.fn>;
   login: ReturnType<typeof vi.fn>;
   logout: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
@@ -113,6 +114,7 @@ const mockDesktop = (): MockDesktop => {
   const getConversation = vi.fn(async () => CONVERSATION);
   const deleteConversation = vi.fn(async () => ({ deletedCount: 1 }));
   const ask = vi.fn(async () => {});
+  const cancelAnswer = vi.fn(async () => {});
   const login = vi.fn(async () => {});
   const logout = vi.fn(async () => {});
   const close = vi.fn(async () => {});
@@ -123,6 +125,7 @@ const mockDesktop = (): MockDesktop => {
     logout,
     retrySelection: vi.fn(async () => {}),
     ask,
+    cancelAnswer,
     getConsentStatus: vi.fn(async () => ({ granted: true, grantedAt: "2026-01-01T00:00:00Z" })),
     reviewConsent: vi.fn(async () => ({ granted: true, grantedAt: "2026-01-01T00:00:00Z" })),
     getConversationHistoryOptIn: vi.fn(async () => ({ saveConversationHistory: false })),
@@ -162,6 +165,7 @@ const mockDesktop = (): MockDesktop => {
     getConversation,
     deleteConversation,
     ask,
+    cancelAnswer,
     login,
     logout,
     close,
@@ -207,6 +211,51 @@ describe("App", () => {
     await act(async () => {
       pending.resolve();
     });
+  });
+
+  it("shows the stop button only while an answer is generating", async () => {
+    const pending = deferred<void>();
+    desktop.ask.mockReturnValue(pending.promise);
+    const view = render(<App />);
+    await settle();
+
+    expect(view.container.querySelector("#send")).not.toBeNull();
+    expect(view.container.querySelector("#cancel")).toBeNull();
+
+    await act(async () => {
+      view.container.querySelector<HTMLButtonElement>("#send")!.click();
+    });
+    expect(view.container.querySelector("#send")).toBeNull();
+    expect(view.container.querySelector("#cancel")).not.toBeNull();
+
+    await act(async () => {
+      pending.resolve();
+    });
+    expect(view.container.querySelector("#send")).not.toBeNull();
+    expect(view.container.querySelector("#cancel")).toBeNull();
+  });
+
+  it("calls cancelAnswer and shows a stop notice when the stop button is pressed", async () => {
+    const pending = deferred<void>();
+    desktop.ask.mockReturnValue(pending.promise);
+    const view = render(<App />);
+    await settle();
+
+    await act(async () => {
+      view.container.querySelector<HTMLButtonElement>("#send")!.click();
+    });
+    await act(async () => {
+      view.container.querySelector<HTMLButtonElement>("#cancel")!.click();
+    });
+    expect(desktop.cancelAnswer).toHaveBeenCalledTimes(1);
+
+    // main は中断をエラーではなく正常終了で返す。ここで通知になる。
+    await act(async () => {
+      pending.resolve();
+    });
+    const error = view.container.querySelector<HTMLElement>("#error");
+    expect(error?.textContent).toBe("回答を停止しました");
+    expect(error?.dataset.tone).toBe("notice");
   });
 
   it("keeps the newer conversation list when an older load resolves later", async () => {

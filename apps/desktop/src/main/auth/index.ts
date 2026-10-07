@@ -5,6 +5,7 @@ import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 
 import { appState } from "../app-state.js";
+import { discardPendingImport } from "../history/pending-import.js";
 import { send } from "../ipc/helpers.js";
 import { performLogout } from "../logout.js";
 import {
@@ -34,6 +35,9 @@ export const OAUTH_REDIRECT_URI = `http://127.0.0.1:${OAUTH_CALLBACK_PORT}/callb
 
 export async function loginWithBrowser(): Promise<void> {
   const generation = appState.authOperation.beginLogin();
+  // アカウントが切り替わるので、前のアカウントの会話本文を含む
+  // 未適用のインポート結果は残さない。
+  discardPendingImport();
   try {
     const pkce = createPkcePair();
     const state = randomState();
@@ -70,6 +74,9 @@ export async function loginWithBrowser(): Promise<void> {
 /** ログアウトの順序は `logout.ts` が固定する（docs/auth.md §8）。ここは配線だけ。 */
 export async function logout(): Promise<void> {
   appState.authOperation.begin();
+  // ログアウトでアカウントの境界が変わるので、未適用のインポート結果
+  // （会話本文を含む）は破棄する。
+  discardPendingImport();
   const store = refreshTokenStore();
   await performLogout({
     readRefreshToken: () => store.get(),

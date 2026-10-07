@@ -611,6 +611,7 @@ button:disabled {
 }
 
 #send,
+#cancel,
 #settings-form button:not([type="button"]) {
   border: none;
   background: var(--color-accent);
@@ -618,6 +619,7 @@ button:disabled {
   font-weight: 600;
 }
 #send:hover,
+#cancel:hover,
 #settings-form button:not([type="button"]):hover {
   background: var(--color-accent-600);
 }
