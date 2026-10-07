@@ -96,8 +96,9 @@ function LearningMapPage() {
           ← 自分のマップ
         </Link>
         <h1>{map.title}</h1>
+        {/* 編集はノードごとではなくマップ単位（まとめて保存する）なので、そう書く。 */}
         <Link to="/maps/$mapId/edit" params={{ mapId }} className="link">
-          編集
+          マップを編集
         </Link>
       </p>
       {map.description && <p className="muted">{map.description}</p>}
@@ -126,7 +127,7 @@ function LearningMapPage() {
         <p className="hint">
           このマップにはまだノードがありません。
           <Link to="/maps/$mapId/edit" params={{ mapId }} className="link">
-            編集
+            マップを編集
           </Link>
           からノードを足してください。
         </p>
