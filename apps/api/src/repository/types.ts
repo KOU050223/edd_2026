@@ -404,7 +404,10 @@ export interface AiUsageRepository {
    * 枠を消費する**。15回の枠へ30回同時に来たとき、通るのは15回なのに
    * 月次からは30回引かれる、という取りこぼしが起きる。
    *
-   * @returns 確保できたら `reserved: true` と加算後の値。上限に達していれば
+   * `amount` は確保する回数（省略は 1）。マップの生成（#243）は内部の呼び出しの数に
+   * かかわらず 5 回分をまとめて確保する。**全部が枠に収まるときだけ**足し、一部だけは足さない。
+   *
+   * @returns 確保できたら `reserved: true` と加算後の値。枠が足りなければ
    *   `reserved: false` と、**加算していない**現在値。どの上限で止まったかは
    *   呼び出し側がその値から決める。
    */
@@ -414,6 +417,7 @@ export interface AiUsageRepository {
     dayKey: string;
     updatedAt: string;
     limits: { dailyRequests: number; monthlyRequests: number };
+    amount?: number;
   }): Promise<{ reserved: boolean; usage: AiUsage }>;
 
   /**
@@ -611,12 +615,17 @@ export interface LearningMapRepository {
   /**
    * マップを作る。1人のマップ数が `maxMaps` に達していれば何も書かず `created: false` を返す。
    * 数えることと書くことを1つの操作にまとめる（同時に作られても上限を超えない）。
+   *
+   * `objectives` は、作るノード（参照ではないもの）の「理解すること」。AI の生成（#243）が
+   * マップと一緒に入れる。並びはノードごとに渡した順。マップと同じ操作で書くので、
+   * 途中で失敗しても項目の無いノードだけが残ることはない。このマップに無いノードを指す項目は例外。
    */
   create(
     ownerUserId: string,
     params: {
       id: string;
       content: StoredMapContent;
+      objectives?: readonly StoredLearningObjective[];
       nowIso: string;
       nowMs: number;
       maxMaps: number;

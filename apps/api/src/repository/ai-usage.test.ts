@@ -141,4 +141,30 @@ describe("InMemoryAiUsageRepository", () => {
       monthlyRequests: 2,
     });
   });
+
+  it("まとめて確保するときは、全部が枠に収まるときだけ足す（#243）", async () => {
+    const repo = new InMemoryAiUsageRepository();
+    const limits = { dailyRequests: 15, monthlyRequests: 150 };
+    for (let i = 0; i < 2; i++) {
+      await expect(
+        repo.reserve({ userId: USER, ...SEPT, updatedAt: "t", limits, amount: 5 }),
+      ).resolves.toMatchObject({ reserved: true });
+    }
+    await repo.reserve({ userId: USER, ...SEPT, updatedAt: "t", limits });
+
+    // 残りは 4 回分。5 回分は確保せず、一部だけ足すこともしない。
+    const rejected = await repo.reserve({
+      userId: USER,
+      ...SEPT,
+      updatedAt: "t",
+      limits,
+      amount: 5,
+    });
+
+    expect(rejected.reserved).toBe(false);
+    await expect(repo.get({ userId: USER, ...SEPT })).resolves.toMatchObject({
+      dailyRequests: 11,
+      monthlyRequests: 11,
+    });
+  });
 });

@@ -9,6 +9,7 @@ import {
   D1AreaCompletionRepository,
   D1AuditLogRepository,
   D1CheckGenerationConsentRepository,
+  D1MapGenerationConsentRepository,
   D1ConversationRepository,
   D1IdentityRepository,
   D1ImportSessionRepository,
@@ -364,5 +365,18 @@ app.route(
     newKey: randomKey,
     nowIso: () => new Date().toISOString(),
     nowMs: () => Date.now(),
+    // AI でマップを作る（#243）。モデルと回数上限の切り替えは確認問題と同じ設定を使う。
+    generation: {
+      apiKey: env.GEMINI_API_KEY,
+      model: env.GEMINI_MODEL,
+      models: parseModelList(env.CHECK_MODELS),
+      fetch: (input, init) => globalThis.fetch(input, init),
+      usage: new D1AiUsageRepository(env.DB),
+      consents: new D1MapGenerationConsentRepository(env.DB),
+      events: new D1LearningEventRepository(env.DB),
+      overrides: new D1MasteryOverrideRepository(env.DB),
+      enforceUsageLimits: env.CHECK_GENERATION_LIMITS !== "off",
+      now: () => new Date(),
+    },
   })),
 );

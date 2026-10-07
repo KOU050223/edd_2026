@@ -8,7 +8,7 @@
  */
 
 import * as v from "valibot";
-import { CONCEPT_ID_PATTERN } from "@gakushu-sochi/domain";
+import { CHECK_LEVELS, CONCEPT_ID_PATTERN } from "@gakushu-sochi/domain";
 
 /** 1人が持てるマップの数。 */
 export const MAX_MAPS_PER_USER = 20;
@@ -216,4 +216,63 @@ export interface ClientMapConcept {
 
 export interface ListClientMapConceptsResponse {
   concepts: ClientMapConcept[];
+}
+
+/**
+ * AI で作るマップの種類（#243）。
+ *
+ * - `field`: 分野の全体マップ。言語や技術の名前から、基礎から応用までの木を作る。
+ * - `goal`: 目標までのマップ。テーマと目標から、そこへ至る道筋の木を作る。
+ */
+export const MAP_GENERATION_KINDS = ["field", "goal"] as const;
+export type MapGenerationKind = (typeof MAP_GENERATION_KINDS)[number];
+
+/**
+ * AI で作るマップのノード数の上限（#243 の 2026-10-08 の決定）。手で作る上限
+ * （{@link MAX_NODES_PER_MAP}）より小さい。生成のトークンを 5 回分の上界に収めるため。
+ */
+export const MAX_GENERATED_NODES = 30;
+/** AI が作る1ノードの「理解すること」の数。範囲から外れた応答は受理しない。 */
+export const MIN_GENERATED_OBJECTIVES = 2;
+export const MAX_GENERATED_OBJECTIVES = 5;
+/** 1マップの生成で `ai_usage` から引く回数。内部で AI を何回呼ぶかにかかわらない。 */
+export const MAP_GENERATION_USAGE_COST = 5;
+export const MAX_GENERATION_THEME_LENGTH = 80;
+export const MAX_GENERATION_GOAL_LENGTH = 400;
+
+/**
+ * `POST /v1/learning-maps:generate` が受け取るもの。
+ *
+ * 目標（`goal`）は目標までのマップでだけ受け取り、そこでは必須にする。
+ * 分野の全体マップで目標を受け取ると、どちらの種類の木を作るのかが曖昧になる。
+ */
+export const generateLearningMapSchema = v.pipe(
+  v.strictObject({
+    kind: v.picklist(MAP_GENERATION_KINDS),
+    theme: text(MAX_GENERATION_THEME_LENGTH),
+    goal: v.optional(text(MAX_GENERATION_GOAL_LENGTH)),
+    level: v.picklist(CHECK_LEVELS),
+    /** 生成の画面でその場で同意した文面の版。「今後表示しない」の記録があれば省略できる。 */
+    consentVersion: v.optional(v.pipe(v.number(), v.integer())),
+  }),
+  v.check(
+    (input) => (input.kind === "goal") === (input.goal !== undefined),
+    'goal is required for kind "goal" and not allowed for kind "field"',
+  ),
+);
+
+export type GenerateLearningMapInput = v.InferOutput<typeof generateLearningMapSchema>;
+
+/** `POST /v1/learning-maps:generate` の応答。作って保存したマップ。 */
+export interface GenerateLearningMapResponse {
+  map: LearningMapView;
+}
+
+/** `GET /v1/map-generation-consent` の応答（`/v1/check-generation-consent` と同じ形）。 */
+export interface MapGenerationConsentBody {
+  /** 今の文面の版。クライアントは同意したときにこの値を送る。 */
+  version: number;
+  /** 今の版で「今後表示しない」を選んでいるか。古い版の記録は false。 */
+  granted: boolean;
+  grantedAt?: string;
 }

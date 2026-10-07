@@ -30,22 +30,24 @@ export class InMemoryAiUsageRepository implements AiUsageRepository {
     dayKey: string;
     updatedAt: string;
     limits: { dailyRequests: number; monthlyRequests: number };
+    amount?: number;
   }): Promise<{ reserved: boolean; usage: AiUsage }> {
     const { userId, monthKey, dayKey, limits } = params;
+    const amount = params.amount ?? 1;
     const current = this.read(params);
-    // 上限に達していたら加算しない。D1 側は `DO UPDATE ... WHERE` で同じことを
+    // 枠が足りなければ加算しない。D1 側は `DO UPDATE ... WHERE` で同じことを
     // 1文でやる。弾いた分まで枠を消費しないという性質を、両実装で揃える。
     if (
-      current.monthlyRequests >= limits.monthlyRequests ||
-      current.dailyRequests >= limits.dailyRequests
+      current.monthlyRequests + amount > limits.monthlyRequests ||
+      current.dailyRequests + amount > limits.dailyRequests
     ) {
       return Promise.resolve({ reserved: false, usage: current });
     }
     const next: Row = {
       monthKey,
       dayKey,
-      monthlyRequests: current.monthlyRequests + 1,
-      dailyRequests: current.dailyRequests + 1,
+      monthlyRequests: current.monthlyRequests + amount,
+      dailyRequests: current.dailyRequests + amount,
       monthlyTokens: current.monthlyTokens,
     };
     this.write(userId, monthKey, next);

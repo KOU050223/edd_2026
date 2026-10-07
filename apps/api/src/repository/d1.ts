@@ -845,8 +845,10 @@ export class D1AiUsageRepository implements AiUsageRepository {
     dayKey: string;
     updatedAt: string;
     limits: { dailyRequests: number; monthlyRequests: number };
+    amount?: number;
   }): Promise<{ reserved: boolean; usage: AiUsage }> {
     const { userId, monthKey, dayKey, updatedAt, limits } = params;
+    const amount = params.amount ?? 1;
     // 退会中のユーザーの行を作らない。`user_settings` と同じ守り方で、
     // 削除の最中に users 行が復活する窓を塞ぐ（repository/types.ts の
     // `startUserDeletion` の説明を参照）。
@@ -859,31 +861,43 @@ export class D1AiUsageRepository implements AiUsageRepository {
         `INSERT INTO ai_usage (
            user_id, month_key, day_key, monthly_requests, daily_requests, monthly_tokens, updated_at
          )
-         SELECT ?, ?, ?, 1, 1, 0, ?
+         SELECT ?, ?, ?, ?, ?, 0, ?
          WHERE NOT EXISTS (
            SELECT 1 FROM account_deletions
            WHERE user_id = ? AND started_at_ms > ?
          )
+           -- 初回の行でも、確保する回数が上限を超えるなら作らない。
+           AND ? <= ? AND ? <= ?
          ON CONFLICT (user_id, month_key) DO UPDATE SET
-           monthly_requests = ai_usage.monthly_requests + 1,
-           -- 日が変わっていれば、その日の1回目として数え直す。
+           monthly_requests = ai_usage.monthly_requests + excluded.monthly_requests,
+           -- 日が変わっていれば、その日の最初の分として数え直す。
            daily_requests = CASE
-             WHEN ai_usage.day_key = excluded.day_key THEN ai_usage.daily_requests + 1
-             ELSE 1
+             WHEN ai_usage.day_key = excluded.day_key
+               THEN ai_usage.daily_requests + excluded.daily_requests
+             ELSE excluded.daily_requests
            END,
            day_key = excluded.day_key,
            updated_at = excluded.updated_at
-         WHERE ai_usage.monthly_requests < ?
-           AND (ai_usage.day_key <> excluded.day_key OR ai_usage.daily_requests < ?)
+         WHERE ai_usage.monthly_requests + excluded.monthly_requests <= ?
+           AND (
+             ai_usage.day_key <> excluded.day_key
+             OR ai_usage.daily_requests + excluded.daily_requests <= ?
+           )
          RETURNING day_key, monthly_requests, daily_requests, monthly_tokens`,
       )
       .bind(
         userId,
         monthKey,
         dayKey,
+        amount,
+        amount,
         updatedAt,
         userId,
         nowMs - ACCOUNT_DELETION_TOMBSTONE_TTL_MS,
+        amount,
+        limits.monthlyRequests,
+        amount,
+        limits.dailyRequests,
         limits.monthlyRequests,
         limits.dailyRequests,
       )
@@ -895,8 +909,8 @@ export class D1AiUsageRepository implements AiUsageRepository {
     // なる経路は2つあり、**上限到達と退会中を同じ扱いにしない**（RULE-004）。
     const current = await this.get({ userId, monthKey, dayKey });
     const atLimit =
-      current.monthlyRequests >= limits.monthlyRequests ||
-      current.dailyRequests >= limits.dailyRequests;
+      current.monthlyRequests + amount > limits.monthlyRequests ||
+      current.dailyRequests + amount > limits.dailyRequests;
     if (atLimit) return { reserved: false, usage: current };
 
     // 上限に達していないのに加算されていないなら、INSERT が
@@ -1618,12 +1632,19 @@ export class D1PersonalCheckRepository implements PersonalCheckRepository {
 }
 
 /** 確認問題の生成への同意（migrations/0012_user_concept_checks.sql、Issue #236）。 */
-export class D1CheckGenerationConsentRepository implements CheckGenerationConsentRepository {
-  constructor(private readonly db: D1Database) {}
+/**
+ * 生成の同意の「今後表示しない」の記録（確認問題 #236、学習マップ #243）。
+ * 表の形が同じなので、表の名前だけを変えて使い回す。
+ */
+class D1GenerationConsentRepository implements CheckGenerationConsentRepository {
+  constructor(
+    private readonly db: D1Database,
+    private readonly table: "check_generation_consents" | "map_generation_consents",
+  ) {}
 
   async get(userId: string): Promise<ConsentRecord | null> {
     const row = await this.db
-      .prepare("SELECT version, granted_at FROM check_generation_consents WHERE user_id = ?")
+      .prepare(`SELECT version, granted_at FROM ${this.table} WHERE user_id = ?`)
       .bind(userId)
       .first<{ version: number; granted_at: string }>();
     return row === null ? null : { version: row.version, grantedAt: row.granted_at };
@@ -1632,7 +1653,7 @@ export class D1CheckGenerationConsentRepository implements CheckGenerationConsen
   async put(userId: string, record: ConsentRecord): Promise<void> {
     await this.db
       .prepare(
-        `INSERT INTO check_generation_consents (user_id, version, granted_at)
+        `INSERT INTO ${this.table} (user_id, version, granted_at)
          VALUES (?, ?, ?)
          ON CONFLICT (user_id) DO UPDATE SET
            version = excluded.version,
@@ -1643,10 +1664,20 @@ export class D1CheckGenerationConsentRepository implements CheckGenerationConsen
   }
 
   async delete(userId: string): Promise<void> {
-    await this.db
-      .prepare("DELETE FROM check_generation_consents WHERE user_id = ?")
-      .bind(userId)
-      .run();
+    await this.db.prepare(`DELETE FROM ${this.table} WHERE user_id = ?`).bind(userId).run();
+  }
+}
+
+export class D1CheckGenerationConsentRepository extends D1GenerationConsentRepository {
+  constructor(db: D1Database) {
+    super(db, "check_generation_consents");
+  }
+}
+
+/** 学習マップの AI 生成の同意（migrations/0014_map_generation_consents.sql）。 */
+export class D1MapGenerationConsentRepository extends D1GenerationConsentRepository {
+  constructor(db: D1Database) {
+    super(db, "map_generation_consents");
   }
 }
 
@@ -1786,12 +1817,20 @@ export class D1LearningMapRepository implements LearningMapRepository {
     params: {
       id: string;
       content: StoredMapContent;
+      objectives?: readonly StoredLearningObjective[];
       nowIso: string;
       nowMs: number;
       maxMaps: number;
     },
   ): Promise<{ created: boolean }> {
     const { id, content } = params;
+    // 並び（position）はノードごとに数える。json_each の添字は全体の通し番号なので、ここで振る。
+    const positions = new Map<string, number>();
+    const objectives = (params.objectives ?? []).map((objective) => {
+      const position = positions.get(objective.conceptId) ?? 0;
+      positions.set(objective.conceptId, position + 1);
+      return { ...objective, position };
+    });
     // 数えることと書くことを1文にまとめる。読んでから書くと、同時に作られたときに上限を超える。
     // ノードと線の文は、マップの行が入ったときだけ書く（上限で弾いたら何も書かない）。
     const [inserted] = await this.db.batch([
@@ -1815,6 +1854,18 @@ export class D1LearningMapRepository implements LearningMapRepository {
         ),
       this.db.prepare(INSERT_MAP_NODES).bind(id, nodesJson(content.nodes), id, ownerUserId),
       this.db.prepare(INSERT_MAP_EDGES).bind(id, JSON.stringify(content.edges), id, ownerUserId),
+      // 項目は (map_id, concept_id) でノードを参照する。無いノードを指せば batch ごと失敗する。
+      this.db
+        .prepare(
+          `INSERT INTO learning_objectives
+             (id, concept_id, map_id, label, source, position, created_at, updated_at)
+           SELECT json_extract(value, '$.id'), json_extract(value, '$.conceptId'), ?,
+                  json_extract(value, '$.label'), json_extract(value, '$.source'),
+                  json_extract(value, '$.position'), ?, ?
+           FROM json_each(?)
+           WHERE ${OWNED_MAP}`,
+        )
+        .bind(id, params.nowIso, params.nowIso, JSON.stringify(objectives), id, ownerUserId),
     ]);
     return { created: changesOf(inserted) === 1 };
   }
