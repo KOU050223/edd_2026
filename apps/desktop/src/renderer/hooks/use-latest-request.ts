@@ -9,6 +9,11 @@ export interface LatestRequest {
    */
   begin: () => number;
   /**
+   * 現在の世代番号を返す。新しい読み込みを始めずに「この時点の世代」を
+   * 捕まえたいときに使う（例: 続き読み込み中に全件読み直しが走ったかを知る）。
+   */
+  current: () => number;
+  /**
    * 渡した世代番号が今も最新かを返す。
    * await 後の反映前に必ず呼び、false なら応答を捨てる。
    */
@@ -32,6 +37,7 @@ export function useLatestRequest(): LatestRequest {
   return useMemo(
     () => ({
       begin: () => ++generationRef.current,
+      current: () => generationRef.current,
       isLatest: (generation) => generation === generationRef.current,
     }),
     [],

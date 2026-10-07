@@ -18,12 +18,10 @@ export default [
     // renderer の React コードだけに Hooks の規則をかける。
     // web 側はこのプラグインを使っていないため、ここで新規に足す
     // （useDesktopEvent など、依存配線の誤りをコンパイルより早く止める）。
+    // recommended（React Compiler 由来の refs / set-state-in-effect 等を含む）で、
+    // ref のレンダー中書き換えも検出する。
     files: ["src/renderer/**/*.{ts,tsx}"],
-    plugins: { "react-hooks": reactHooks },
-    rules: {
-      "react-hooks/rules-of-hooks": "error",
-      "react-hooks/exhaustive-deps": "error",
-    },
+    ...reactHooks.configs.flat.recommended,
   },
   {
     // src/shared は renderer からも読む正本。Electron・Node・main/preload へ
