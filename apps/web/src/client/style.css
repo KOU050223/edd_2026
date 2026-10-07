@@ -1355,3 +1355,168 @@ button.link:disabled {
 button.link.danger {
   color: #b91c1c;
 }
+
+/* マップを作る・編集する（Issue #242、フォーム型）。入力欄は設定画面と同じ見た目にそろえる。 */
+.map-create,
+.editor-meta {
+  display: grid;
+  gap: 12px;
+  max-width: 720px;
+  margin-bottom: 20px;
+}
+.map-create {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 16px;
+}
+.map-create h2 {
+  font-size: 15px;
+  margin: 0;
+}
+.map-create label,
+.editor-meta label,
+.editor-node-body > label,
+.editor-reference label {
+  display: grid;
+  gap: 6px;
+  font-weight: 600;
+}
+.map-create input,
+.map-create textarea,
+.editor input,
+.editor select,
+.editor textarea {
+  padding: 8px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  font: inherit;
+  font-weight: 400;
+  width: 100%;
+}
+.map-create button,
+.editor button:not(.link):not(.editor-node-head):not(.node) {
+  justify-self: start;
+  border: 0;
+  border-radius: 8px;
+  padding: 8px 14px;
+  background: #0f766e;
+  color: #fff;
+  font: inherit;
+  cursor: pointer;
+}
+.map-create button:disabled,
+.editor button:not(.link):not(.editor-node-head):not(.node):disabled {
+  background: #cbd5e1;
+  color: #475569;
+  cursor: not-allowed;
+}
+/* 左に木のプレビュー、右にノードの一覧。狭い画面では縦に積む。 */
+.editor-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 400px);
+  gap: 16px;
+  align-items: start;
+}
+.editor-nodes {
+  display: grid;
+  gap: 12px;
+}
+.editor-nodes h2 {
+  font-size: 15px;
+  margin: 0;
+}
+.editor-nodes > ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 8px;
+}
+.editor-node {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+}
+.editor-node.open {
+  border-color: #0f766e;
+}
+.editor-node-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 12px;
+  background: none;
+  border: 0;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.editor-node-head span {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.editor-node-body {
+  display: grid;
+  gap: 12px;
+  padding: 0 12px 12px;
+}
+.editor-node-body fieldset {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 4px;
+}
+.editor-node-body legend {
+  font-weight: 600;
+  padding: 0;
+  margin-bottom: 4px;
+}
+.editor-objectives ol {
+  padding-left: 20px;
+  margin: 0;
+  display: grid;
+  gap: 6px;
+}
+.editor-objectives li {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.editor-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.editor-reference ul {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0 0;
+  display: grid;
+  gap: 4px;
+}
+.editor-reference li {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+.editor-save {
+  display: grid;
+  gap: 8px;
+  margin-top: 20px;
+  max-width: 720px;
+}
+.editor-problems {
+  margin: 0;
+  padding-left: 20px;
+  color: #b91c1c;
+}
+@media (max-width: 600px) {
+  .editor-layout {
+    grid-template-columns: 1fr;
+  }
+}

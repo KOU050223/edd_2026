@@ -96,6 +96,10 @@ function LearningMapPage() {
           ← 自分のマップ
         </Link>
         <h1>{map.title}</h1>
+        {/* 編集はノードごとではなくマップ単位（まとめて保存する）なので、そう書く。 */}
+        <Link to="/maps/$mapId/edit" params={{ mapId }} className="link">
+          マップを編集
+        </Link>
       </p>
       {map.description && <p className="muted">{map.description}</p>}
       {summary && (
@@ -120,7 +124,13 @@ function LearningMapPage() {
         </section>
       )}
       {tree === undefined ? (
-        <p className="hint">このマップにはまだノードがありません。</p>
+        <p className="hint">
+          このマップにはまだノードがありません。
+          <Link to="/maps/$mapId/edit" params={{ mapId }} className="link">
+            マップを編集
+          </Link>
+          からノードを足してください。
+        </p>
       ) : (
         <div className={selected ? "map-layout" : undefined}>
           <div className="map">

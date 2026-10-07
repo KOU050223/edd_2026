@@ -184,6 +184,24 @@ test("他の利用者のマップは取得・編集・削除とも 404 になる
   );
 });
 
+test("前提を2つ持つノードは保存しない（#242、前提は1つまで）", async () => {
+  const response = await send("POST", "/v1/learning-maps", "token-a", {
+    title: "t",
+    nodes: [
+      { kind: "own", ref: "new:a", label: "a", summary: "s" },
+      { kind: "own", ref: "new:b", label: "b", summary: "s" },
+      { kind: "own", ref: "new:c", label: "c", summary: "s" },
+    ],
+    edges: [
+      { from: "new:a", to: "new:c" },
+      { from: "new:b", to: "new:c" },
+    ],
+  });
+  expect(response.status).toBe(400);
+  expect(await response.text()).toBe("a node must have at most one prerequisite: new:c");
+  expect(store.learningMaps.size).toBe(0);
+});
+
 test("線が循環すると保存しない", async () => {
   const response = await send("POST", "/v1/learning-maps", "token-a", {
     ...TWO_NODES,
@@ -248,8 +266,9 @@ test("既存の Concept を参照で置くと、元の表示名・概要・項�
       { kind: "reference", conceptId: otherNodeId },
       { kind: "own", ref: "new:x", label: "後片付け", summary: "資源を閉じる。" },
     ],
+    // 参照のノードどうし・参照から手で作ったノードへも線を引ける（前提は1つまで）。
     edges: [
-      { from: "go.defer", to: "new:x" },
+      { from: "go.defer", to: otherNodeId },
       { from: otherNodeId, to: "new:x" },
     ],
   });
@@ -610,4 +629,26 @@ test("VS Code 向けの一覧は、参照ではないノードを更新の新し
     await send("GET", "/v1/learning-maps:concepts", "token-b")
   ).json()) as ListClientMapConceptsResponse;
   expect(empty.concepts).toEqual([]);
+});
+
+test("VS Code 向けの一覧は既定で 100 件、`limit` で自分のノードを全部まで読める", async () => {
+  await create({
+    title: "多い",
+    nodes: Array.from({ length: 3 }, (_, i) => ({
+      kind: "own",
+      ref: `new:${String(i)}`,
+      label: `n${String(i)}`,
+      summary: "s",
+    })),
+  });
+  const limited = (await (
+    await send("GET", "/v1/learning-maps:concepts?limit=2", "token-a")
+  ).json()) as ListClientMapConceptsResponse;
+  expect(limited.concepts).toHaveLength(2);
+
+  for (const limit of ["0", "1001", "abc", "1.5"]) {
+    const response = await send("GET", `/v1/learning-maps:concepts?limit=${limit}`, "token-a");
+    expect(response.status).toBe(400);
+  }
+  expect((await send("GET", "/v1/learning-maps:concepts?limit=1000", "token-a")).status).toBe(200);
 });

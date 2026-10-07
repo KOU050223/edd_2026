@@ -99,6 +99,7 @@ export function resolveMapContent(
 
   const edges: StoredMapContent["edges"] = [];
   const seenEdges = new Set<string>();
+  const withPrerequisite = new Set<string>();
   for (const edge of input.edges) {
     const from = conceptIdByRef.get(edge.from);
     const to = conceptIdByRef.get(edge.to);
@@ -117,6 +118,11 @@ export function resolveMapContent(
       return { ok: false, error: `duplicate edge: ${edge.from} -> ${edge.to}` };
     }
     seenEdges.add(key);
+    // 前提は1つのノードにつき1つまで（親が1つの純粋な木。固定の言語別マップと同じ形）。
+    if (withPrerequisite.has(to)) {
+      return { ok: false, error: `a node must have at most one prerequisite: ${edge.to}` };
+    }
+    withPrerequisite.add(to);
     edges.push({ from, to });
   }
 

@@ -4,9 +4,13 @@ import { layoutTrees } from "./learning-map.js";
 import {
   createLearningMap,
   deleteLearningMap,
+  fetchOwnMapConcepts,
   isMapId,
   isOnExistingMap,
+  MapInputError,
   MapLimitError,
+  saveLearningMap,
+  saveObjectives,
   mapDefinitions,
   mapIdOfConcept,
   MISSING_ORIGIN_LABEL,
@@ -147,4 +151,46 @@ test("マップの ID の形だけを、確認問題からの戻り先として�
   expect(isMapId("mrust000")).toBe(false);
   expect(isMapId("go")).toBe(false);
   expect(isMapId("mrust0001/../x")).toBe(false);
+});
+
+test("保存の 400 は、API の定型文つきの入力の誤りとして返す", async () => {
+  const error = await saveLearningMap("mrust0001", {}, async () =>
+    Response.json({ error: "edges must not form a cycle" }, { status: 400 }),
+  ).catch((value: unknown) => value);
+  expect(error).toBeInstanceOf(MapInputError);
+  expect((error as MapInputError).message).toBe("edges must not form a cycle");
+});
+
+test("「理解すること」は、ノードの ID をパスに入れて置き換える", async () => {
+  let url: string | undefined;
+  let sent: RequestInit | undefined;
+  await saveObjectives(
+    "mrust0001",
+    "mrust0001.owner001",
+    [{ id: "mrust0001.owner001:move", label: "move" }, { label: "drop" }],
+    async (input, init) => {
+      url = String(input);
+      sent = init;
+      return Response.json({ objectives: [] });
+    },
+  );
+  expect(url).toBe("/api/v1/learning-maps/mrust0001/nodes/mrust0001.owner001/objectives");
+  expect(sent?.method).toBe("PUT");
+  expect(JSON.parse(String(sent?.body))).toEqual({
+    objectives: [{ id: "mrust0001.owner001:move", label: "move" }, { label: "drop" }],
+  });
+});
+
+test("参照の候補は、件数を指定すると自分のノードを全部まで読む", async () => {
+  const urls: string[] = [];
+  const fetcher = async (input: RequestInfo | URL) => {
+    urls.push(String(input));
+    return Response.json({ concepts: [] });
+  };
+  await fetchOwnMapConcepts(fetcher);
+  await fetchOwnMapConcepts(fetcher, false, 1000);
+  expect(urls).toEqual([
+    "/api/v1/learning-maps:concepts",
+    "/api/v1/learning-maps:concepts?limit=1000",
+  ]);
 });
