@@ -100,7 +100,12 @@ export interface InvokeContract {
   };
   "consent:status": { args: []; result: ConsentStatus };
   "consent:review": { args: []; result: ConsentStatus };
-  "conversations:list": { args: [cursor?: string]; result: ListConversationsResult };
+  // structured clone は省略引数と明示的な undefined を区別しないため、
+  // 省略可能な引数は `| undefined` を型に含める（exactOptionalPropertyTypes）。
+  "conversations:list": {
+    args: [cursor?: string | undefined];
+    result: ListConversationsResult;
+  };
   "conversations:get": { args: [id: string]; result: Conversation };
   "conversations:delete": { args: [id: string]; result: { deletedCount: number } };
   "history:detect": { args: []; result: HistoryDetectResult };
@@ -109,7 +114,7 @@ export interface InvokeContract {
   "history:build-prompt": { args: []; result: string };
   "history:paste-analysis": { args: [text: string]; result: ImportAnalyzeView };
   "history:apply": {
-    args: [payload?: HistoryApplyRequest];
+    args: [payload?: HistoryApplyRequest | undefined];
     result: CreateImportSessionResult;
   };
   "history:list": { args: []; result: { sessions: ImportSessionView[] } };

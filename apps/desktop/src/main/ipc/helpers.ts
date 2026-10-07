@@ -44,19 +44,20 @@ function assertTrustedSender(channel: string, event: IpcMainInvokeEvent): void {
 
 export function handle<C extends InvokeChannel>(
   channel: C,
-  schema: v.GenericSchema,
+  schema: v.GenericSchema<unknown, InvokeContract[C]["args"]>,
   handler: InvokeHandler<C>,
 ): void {
   // IPC の引数は renderer 由来の未検証の値。送信元を確かめ、スキーマで
   // 実行時検査してからハンドラへ渡す。どちらも通らない呼び出しは例外にする
-  // （黙って undefined を返さない）。
+  // （黙って undefined を返さない）。スキーマの出力型は契約の args に
+  // 結びついているので、ここにキャストは要らない。
   ipcMain.handle(channel, (event, ...args: unknown[]) => {
     assertTrustedSender(channel, event);
     const parsed = v.safeParse(schema, args);
     if (!parsed.success) {
       throw new Error(`${channel} の引数が不正です: ${v.summarize(parsed.issues)}`);
     }
-    return handler(event, ...(parsed.output as InvokeContract[C]["args"]));
+    return handler(event, ...parsed.output);
   });
 }
 

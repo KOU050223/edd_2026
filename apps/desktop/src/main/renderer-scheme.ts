@@ -4,7 +4,8 @@
 // 代わりに out/renderer だけを返す専用スキーム app://renderer/ に切り替え、
 // Fuse は無効のままにする。
 import { protocol } from "electron";
-import { readFileSync, realpathSync, statSync } from "node:fs";
+import { realpathSync, statSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 
 export const RENDERER_SCHEME = "app";
@@ -35,11 +36,22 @@ export function registerRendererScheme(): void {
   ]);
 }
 
+/** 「ファイルが存在しない」ことを示す errno。それ以外は見通しの悪い null にせず投げ直す。 */
+function isNotFoundError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    (error.code === "ENOENT" || error.code === "ENOTDIR")
+  );
+}
+
 /**
  * app://renderer/<path> を rendererRoot 配下の実ファイルへ解決する。
  * スキーム・ホストの不一致、ルート外への脱出（..・%2e%2e・シンボリックリンク）、
  * 存在しないパス、ファイルでないパス、知らない拡張子は null を返す
  * （呼び出し側は 404 を返す。index.html への黙ったフォールバックはしない）。
+ * ファイルシステムの「存在しない」以外のエラー（権限・I/O など）は区別が付くよう
+ * 呼び出し側へ投げ直す（RULE-004）。
  */
 export function resolveRendererAsset(
   requestUrl: string,
@@ -68,21 +80,43 @@ export function resolveRendererAsset(
   try {
     rootReal = realpathSync(root);
     real = realpathSync(resolved);
-  } catch {
-    return null;
+  } catch (error) {
+    if (isNotFoundError(error)) return null;
+    throw error;
   }
   const rel = path.relative(rootReal, real);
   if (rel === "" || rel.startsWith("..") || path.isAbsolute(rel)) return null;
-  if (!statSync(real).isFile()) return null;
+  try {
+    if (!statSync(real).isFile()) return null;
+  } catch (error) {
+    if (isNotFoundError(error)) return null;
+    throw error;
+  }
   return { filePath: real, contentType };
 }
 
-export function installRendererProtocolHandler(rendererRoot: string): void {
-  protocol.handle(RENDERER_SCHEME, (request) => {
-    const asset = resolveRendererAsset(request.url, rendererRoot);
+/**
+ * app:// リクエストを捌いて Response を返す本体。protocol.handle から委譲される。
+ * 見つからない・許可しない要求は 404、解決・読み込みの失敗は 404 と区別して
+ * 500 を返し、理由をログに残す（RULE-004: 失敗を握りつぶさない）。
+ */
+export async function serveRendererAsset(
+  requestUrl: string,
+  rendererRoot: string,
+): Promise<Response> {
+  try {
+    const asset = resolveRendererAsset(requestUrl, rendererRoot);
     if (!asset) return new Response("not found", { status: 404 });
-    return new Response(readFileSync(asset.filePath), {
+    const body = await readFile(asset.filePath);
+    return new Response(new Uint8Array(body), {
       headers: { "Content-Type": asset.contentType },
     });
-  });
+  } catch (error) {
+    console.error(`app:// の配信に失敗しました: ${requestUrl}`, error);
+    return new Response("internal error", { status: 500 });
+  }
+}
+
+export function installRendererProtocolHandler(rendererRoot: string): void {
+  protocol.handle(RENDERER_SCHEME, (request) => serveRendererAsset(request.url, rendererRoot));
 }

@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import react from "@vitejs/plugin-react";
 import { defineConfig, type Plugin } from "vite";
 
@@ -31,9 +33,24 @@ const cspPlugin = (): Plugin => ({
   },
 });
 
+// OFL 1.1 はフォントと一緒にライセンス文を配ることを求める。OFL.txt は CSS から
+// 参照されないため既定のビルドではコピーされず、publicDir を広げると woff2 が
+// 二重に出力される。フォントと同じ fonts/ 配下へ 1 ファイルだけ emit する。
+const fontLicensePlugin = (): Plugin => ({
+  name: "emit-font-license",
+  apply: "build",
+  generateBundle() {
+    this.emitFile({
+      type: "asset",
+      fileName: "fonts/OFL.txt",
+      source: readFileSync(new URL("./src/renderer/fonts/OFL.txt", import.meta.url)),
+    });
+  },
+});
+
 export default defineConfig({
   root: "src/renderer",
   base: "./",
-  plugins: [react(), cspPlugin()],
+  plugins: [react(), cspPlugin(), fontLicensePlugin()],
   build: { outDir: "../../out/renderer", emptyOutDir: true },
 });

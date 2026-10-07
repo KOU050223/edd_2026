@@ -1,7 +1,8 @@
 // renderer → main の invoke 引数を実行時検証するスキーマ（Issue #279 ステップ 5）。
 // handle（ipc/helpers.ts）がここのスキーマを必須で受け取り、ハンドラへ渡す前に
-// 未検証の引数を検査する。INVOKE_SCHEMAS は InvokeChannel の Record なので、
-// 契約に新しいチャネルを足したのにスキーマを書き忘れるとコンパイルエラーになる。
+// 未検証の引数を検査する。INVOKE_SCHEMAS は InvokeChannel の mapped type で
+// 出力型を契約の args に結びつけているため、チャネルの書き忘れ・スキーマと
+// 契約の型ずれはどちらもコンパイルエラーになる。
 import * as v from "valibot";
 
 import {
@@ -19,7 +20,7 @@ import {
   isValidTemperature,
   MANAGED_AI_MAX_OUTPUT_TOKENS,
 } from "../settings.js";
-import type { InvokeChannel } from "../../shared/ipc.js";
+import type { InvokeChannel, InvokeContract } from "../../shared/ipc.js";
 
 /**
  * domain の HistoryProviderId に対応する一覧。allowlist の正本。
@@ -110,7 +111,9 @@ const historyApplyRequestSchema = v.strictObject({
   excludeConceptIds: v.optional(v.array(v.string())),
 });
 
-export const INVOKE_SCHEMAS: Record<InvokeChannel, v.GenericSchema> = {
+export const INVOKE_SCHEMAS: {
+  [C in InvokeChannel]: v.GenericSchema<unknown, InvokeContract[C]["args"]>;
+} = {
   "settings:get": v.strictTuple([]),
   "settings:save": v.strictTuple([desktopSettingsSchema]),
   "auth:login": v.strictTuple([]),

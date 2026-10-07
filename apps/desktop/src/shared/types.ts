@@ -96,11 +96,13 @@ export interface ListConversationsResult {
 
 /** `history:analyze` の引数（Issue #157）。 */
 export interface HistoryAnalyzeRequest {
-  providers?: HistoryProviderId[];
-  filePath?: string;
-  fileProvider?: HistoryProviderId;
-  mode?: AnalysisMode;
-  sinceMs?: number;
+  // IPC の structured clone は省略と明示的な undefined を区別しないので、
+  // 省略可能な項目は `| undefined` を許す（exactOptionalPropertyTypes）。
+  providers?: HistoryProviderId[] | undefined;
+  filePath?: string | undefined;
+  fileProvider?: HistoryProviderId | undefined;
+  mode?: AnalysisMode | undefined;
+  sinceMs?: number | undefined;
 }
 
 /** `history:apply` の引数。 */
