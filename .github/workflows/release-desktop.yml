@@ -68,11 +68,11 @@ jobs:
       # 競合を起こさない。
       - name: Build Desktop packages
         run: |
+          # main のバンドルが domain の dist/（CJS）を取り込むので、先に compile が必要。
           npm run compile --workspace=@gakushu-sochi/domain
-          npm run compile --workspace=@gakushu-sochi/desktop
           # build.afterPack のようなフックのパスは cwd 基準で解決される。
           # apps/desktop を cwd にしないと ./scripts/… がルート側を指して壊れる。
-          cd apps/desktop && npx --no-install electron-builder --publish never
+          cd apps/desktop && npm run package -- --publish never
       - name: Upload installers
         uses: actions/upload-artifact@v4
         with:

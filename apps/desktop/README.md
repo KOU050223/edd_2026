@@ -7,8 +7,12 @@ macOS のメニューバー、Windows のタスクトレイに常駐し、任意
 リポジトリルートで依存関係をインストールした後、次を実行します。
 
 ```bash
-npm run start --workspace=@gakushu-sochi/desktop
+npm run dev --workspace=@gakushu-sochi/desktop
 ```
+
+`dev` は renderer を Vite dev server（HMR）から読み、main・preload は変更のたびに
+再ビルドして Electron を再起動します。ビルド済みの `out/` からそのまま起動する
+（配布物と同じ経路の）確認には `npm run start` を使います。
 
 初回起動後、「設定」から API URL（ローカル開発は `http://localhost:8787`）、API トークン、モデル、ショートカットを設定してください。API トークンは macOS Keychain / Windows Credential Manager に保存し、本文・質問は永続化しません。AI のプロバイダキー（Gemini）は API Server 側だけに置きます。
 

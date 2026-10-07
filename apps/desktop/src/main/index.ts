@@ -107,11 +107,36 @@ const ACCESSIBILITY_SETTINGS_URL =
 let popup: BrowserWindow | undefined;
 let tray: Tray | undefined;
 let settings = { ...DEFAULT_SETTINGS };
+// 開発時だけ Vite dev server の URL が入る。whenReady で検証してから使う。
+let rendererDevServerUrl: string | undefined;
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 const authOperation = new AuthOperationState();
 
 if (!hasSingleInstanceLock) {
   app.quit();
+}
+
+// 開発時は renderer を Vite dev server（HMR）から読む。送信先は環境変数由来なので、
+// loopback の http に限定する（RULE-003）。不正な値は起動を失敗させ、
+// 黙って loadFile へフォールバックしない。
+function resolveRendererDevServerUrl(): string | undefined {
+  if (app.isPackaged) return undefined;
+  const raw = process.env.ELECTRON_RENDERER_URL;
+  if (!raw) return undefined;
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error(`ELECTRON_RENDERER_URL を URL として解釈できません: ${raw}`);
+  }
+  const isLoopbackHttp =
+    url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+  if (!isLoopbackHttp) {
+    throw new Error(
+      `ELECTRON_RENDERER_URL は http://localhost / 127.0.0.1 / [::1] に限定してください: ${raw}`,
+    );
+  }
+  return url.toString();
 }
 
 function updateLoginItem(): void {
@@ -418,7 +443,7 @@ function createPopup(): BrowserWindow {
       ? { titleBarStyle: "hiddenInset" as const, trafficLightPosition: { x: 18, y: 22 } }
       : { frame: false }),
     webPreferences: {
-      preload: path.join(app.getAppPath(), "out/main/preload.cjs"),
+      preload: path.join(app.getAppPath(), "out/preload/index.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
     },
@@ -439,7 +464,11 @@ function createPopup(): BrowserWindow {
       });
     }
   });
-  void window.loadFile(path.join(app.getAppPath(), "src/renderer/index.html"));
+  if (rendererDevServerUrl) {
+    void window.loadURL(rendererDevServerUrl);
+  } else {
+    void window.loadFile(path.join(app.getAppPath(), "out/renderer/index.html"));
+  }
   window.on("closed", () => {
     popup = undefined;
   });
@@ -831,6 +860,7 @@ app
   .whenReady()
   .then(async () => {
     if (!hasSingleInstanceLock) return;
+    rendererDevServerUrl = resolveRendererDevServerUrl();
     await loadSettings();
     updateLoginItem();
     await guideAccessibilityPermission();
