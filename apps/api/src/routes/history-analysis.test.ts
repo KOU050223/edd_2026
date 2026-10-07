@@ -9,6 +9,7 @@ import {
   InMemoryIdentityRepository,
   InMemoryLearningEventRepository,
   InMemoryLearningEvidenceRepository,
+  InMemoryLearningMapRepository,
 } from "../repository/memory.js";
 import { InMemoryMasteryOverrideRepository } from "../repository/mastery-overrides.js";
 import { createAiRoute } from "./ai.js";
@@ -58,6 +59,7 @@ beforeEach(() => {
       events: new InMemoryLearningEventRepository(store),
       evidence: new InMemoryLearningEvidenceRepository(store),
       overrides: new InMemoryMasteryOverrideRepository(),
+      maps: new InMemoryLearningMapRepository(store),
       now: () => new Date("2026-09-22T10:00:00.000Z"),
     })),
   );

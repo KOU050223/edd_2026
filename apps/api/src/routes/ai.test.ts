@@ -12,6 +12,7 @@ import {
   InMemoryImportSessionRepository,
   InMemoryLearningEventRepository,
   InMemoryLearningEvidenceRepository,
+  InMemoryLearningMapRepository,
 } from "../repository/memory.js";
 import { InMemoryMasteryOverrideRepository } from "../repository/mastery-overrides.js";
 import type { AiUsageRepository } from "../repository/types.js";
@@ -70,6 +71,7 @@ function buildApp(
     events?: InMemoryLearningEventRepository;
     evidence?: InMemoryLearningEvidenceRepository;
     overrides?: InMemoryMasteryOverrideRepository;
+    maps?: InMemoryLearningMapRepository;
     now?: () => Date;
   } = {},
 ): Harness {
@@ -103,6 +105,7 @@ function buildApp(
       events,
       evidence,
       overrides,
+      maps: options.maps ?? new InMemoryLearningMapRepository(store),
       now: options.now ?? (() => new Date("2026-09-22T10:00:00.000Z")),
     })),
   );
@@ -461,6 +464,55 @@ describe("POST /v1/ai/responses", () => {
       expect(fetchMock).toHaveBeenCalled();
       expect(sent.system).toContain("繰り返しつまずいている");
       expect(sent.system).toContain("コミットとメッセージ");
+      vi.unstubAllGlobals();
+    });
+
+    it("手で作ったマップのノードも、表示名と項目つきで現在地に載せる（#242）", async () => {
+      const fetchMock = stubUpstream(SSE_WITH_USAGE);
+      const maps = new InMemoryLearningMapRepository();
+      await maps.create("auth0|user-a", {
+        id: "mrust0001",
+        content: {
+          title: "Rust 入門",
+          description: "",
+          nodes: [{ kind: "own", conceptId: "mrust0001.owner001", label: "所有権", summary: "s" }],
+          edges: [],
+        },
+        nowIso: "2026-09-20T00:00:00.000Z",
+        nowMs: 0,
+        maxMaps: 20,
+      });
+      await maps.replaceObjectives("auth0|user-a", {
+        mapId: "mrust0001",
+        conceptId: "mrust0001.owner001",
+        objectives: [
+          { id: "mrust0001.owner001:move", label: "代入で move する", source: "manual" },
+        ],
+        nowIso: "2026-09-20T00:00:00.000Z",
+        nowMs: 0,
+      });
+      const events = new InMemoryLearningEventRepository();
+      // 項目を持つ Concept は項目の理解度で判定する。自力解決1回で 0.5（学習中）。
+      await events.append("auth0|user-a", [
+        {
+          event: {
+            ...learningEvent("e1", "solved_independently", ["mrust0001.owner001"]),
+            objectiveIds: ["mrust0001.owner001:move"],
+          },
+          clientId: "device-1",
+          receivedAtMs: 0,
+        },
+      ]);
+      const harness = buildApp({ events, maps });
+      const { ctx, settled } = createExecutionContext();
+
+      const sent = await systemInstructionOf(harness, ctx);
+      await settled();
+
+      expect(fetchMock).toHaveBeenCalled();
+      expect(sent.system).toContain("学習中");
+      expect(sent.system).toContain("所有権");
+      expect(sent.system).not.toContain("mrust0001.owner001");
       vi.unstubAllGlobals();
     });
 

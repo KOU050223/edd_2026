@@ -9,30 +9,25 @@
  */
 
 import { Hono } from "hono";
-import {
-  CONCEPT_BY_ID,
-  deriveObjectiveChanges,
-  MOCK_LEARNING_OBJECTIVES,
-} from "@gakushu-sochi/domain";
+import { deriveObjectiveChanges } from "@gakushu-sochi/domain";
 import type { AuthVariables } from "../auth/middleware.js";
 import {
   CONVERSATION_LEARNING_EVENTS_RESPONSE_VERSION,
   type ConversationLearningEventView,
   type ConversationLearningEventsResponse,
 } from "../contract/conversation-learning-events.js";
-import type { LearningEventRepository } from "../repository/types.js";
+import { loadUserConceptCatalog } from "../maps/catalog.js";
+import type { LearningEventRepository, LearningMapRepository } from "../repository/types.js";
 
 export interface ConversationLearningEventsDeps {
   events: LearningEventRepository;
+  /** 手で作ったマップ（#242）。そのノードの「理解すること」と表示名を加える。 */
+  maps: LearningMapRepository;
 }
 
 export type ConversationLearningEventsDepsResolver = (
   env: CloudflareBindings,
 ) => ConversationLearningEventsDeps;
-
-const OBJECTIVE_LABEL_BY_ID = new Map(
-  MOCK_LEARNING_OBJECTIVES.map((objective) => [objective.id, objective.label]),
-);
 
 export function createConversationLearningEventsRoute(
   resolve: ConversationLearningEventsDepsResolver,
@@ -45,9 +40,15 @@ export function createConversationLearningEventsRoute(
     const deps = resolve(c.env);
 
     // 加算幅は過去のイベントに依存する（頭打ち・0 で止まる）ため、この会話の分だけでなく
-    // 利用者の全イベントを畳み込む。項目一覧は learning-profile と同じモック（設計/05 #224）。
-    const events = await deps.events.listByUser(userId);
-    const changes = deriveObjectiveChanges(events, MOCK_LEARNING_OBJECTIVES);
+    // 利用者の全イベントを畳み込む。項目一覧は learning-profile と同じ（固定 + 手で作ったマップ）。
+    const [events, catalog] = await Promise.all([
+      deps.events.listByUser(userId),
+      loadUserConceptCatalog(deps.maps, userId),
+    ]);
+    const changes = deriveObjectiveChanges(events, catalog.objectives);
+    const objectiveLabelById = new Map(
+      catalog.objectives.map((objective) => [objective.id, objective.label]),
+    );
 
     const views: ConversationLearningEventView[] = events
       .filter((event) => event.sessionId === conversationId)
@@ -64,13 +65,13 @@ export function createConversationLearningEventsRoute(
             type: event.type,
             occurredAt: event.occurredAt,
             changes: eventChanges.map((change) => {
-              const conceptLabel = CONCEPT_BY_ID.get(change.conceptId)?.label;
+              const conceptLabel = catalog.conceptById.get(change.conceptId)?.label;
               return {
                 ...change,
                 ...(conceptLabel === undefined ? {} : { conceptLabel }),
                 // deriveObjectiveChanges は一覧に載る項目しか返さないので、ラベルは必ずある。
                 // 万一引けなくても ID を出して、表示から項目を消さない。
-                objectiveLabel: OBJECTIVE_LABEL_BY_ID.get(change.objectiveId) ?? change.objectiveId,
+                objectiveLabel: objectiveLabelById.get(change.objectiveId) ?? change.objectiveId,
               };
             }),
           },

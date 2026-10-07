@@ -186,6 +186,7 @@ app.route(
     // という前提を崩さないため（migrations/0004_ai_usage.sql）。
     usage: new D1AiUsageRepository(env.DB),
     identity: new D1IdentityRepository(env.DB),
+    maps: new D1LearningMapRepository(env.DB),
     // #216: 回答へ載せる学習の現在地は、Profile と同じくイベントから導出する。
     events: new D1LearningEventRepository(env.DB),
     evidence: new D1LearningEvidenceRepository(env.DB),
@@ -212,6 +213,7 @@ app.route(
     settings: new D1UserSettingsRepository(env.DB),
     usage: new D1AiUsageRepository(env.DB),
     identity: new D1IdentityRepository(env.DB),
+    maps: new D1LearningMapRepository(env.DB),
     audit: new D1AuditLogRepository(env.DB),
     // テスト中は回数上限を外す。値がちょうど "off" のときだけ外し、無い・別の値なら効かせる（#255）。
     enforceUsageLimits: env.CHECK_GENERATION_LIMITS !== "off",
@@ -240,6 +242,7 @@ app.route(
   createLearningProfileRoute((env) => ({
     events: new D1LearningEventRepository(env.DB),
     evidence: new D1LearningEvidenceRepository(env.DB),
+    maps: new D1LearningMapRepository(env.DB),
     nowIso: () => new Date().toISOString(),
   })),
 );
@@ -267,6 +270,7 @@ app.route(
     sessions: new D1ImportSessionRepository(env.DB),
     conversations: new D1ConversationRepository(env.DB),
     checks: new D1PersonalCheckRepository(env.DB),
+    maps: new D1LearningMapRepository(env.DB),
     audit: new D1AuditLogRepository(env.DB),
     nowIso: () => new Date().toISOString(),
     nowMs: () => Date.now(),
@@ -344,6 +348,7 @@ app.route(
   "/v1",
   createConversationLearningEventsRoute((env) => ({
     events: new D1LearningEventRepository(env.DB),
+    maps: new D1LearningMapRepository(env.DB),
   })),
 );
 

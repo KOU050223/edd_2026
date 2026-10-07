@@ -20,10 +20,18 @@ import {
   InMemoryLearningEvidenceRepository,
   InMemoryPersonalCheckRepository,
   type InMemoryRepositoryStore,
+  InMemoryLearningMapRepository,
 } from "../repository/memory.js";
 import { InMemoryMasteryOverrideRepository } from "../repository/mastery-overrides.js";
 import { createAiRoute } from "./ai.js";
 import { createChecksRoute, parseModelList } from "./checks.js";
+import {
+  seedTestMap,
+  TEST_MAP_BASE,
+  TEST_MAP_NODE,
+  TEST_MAP_OBJECTIVES,
+  TEST_MAP_TITLE,
+} from "../maps/test-map.js";
 
 describe("parseModelList", () => {
   it("カンマ区切りを並びにし、空白と空の要素を捨てる", () => {
@@ -74,6 +82,7 @@ interface Harness {
   events: InMemoryLearningEventRepository;
   conversations: InMemoryConversationRepository;
   settings: InMemoryUserSettingsRepository;
+  maps: InMemoryLearningMapRepository;
 }
 
 /**
@@ -94,6 +103,7 @@ function buildApp(
   const events = new InMemoryLearningEventRepository(store);
   const conversations = new InMemoryConversationRepository(store);
   const settings = new InMemoryUserSettingsRepository();
+  const maps = new InMemoryLearningMapRepository(store);
   const app = new Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>();
   app.use(
     "/v1/*",
@@ -114,6 +124,7 @@ function buildApp(
       usage,
       identity,
       audit: new InMemoryAuditLogRepository(store),
+      maps,
       objectives,
       ...options,
       now: () => NOW,
@@ -130,10 +141,11 @@ function buildApp(
       events,
       evidence: new InMemoryLearningEvidenceRepository(store),
       overrides: new InMemoryMasteryOverrideRepository(),
+      maps,
       now: () => NOW,
     })),
   );
-  return { app, store, checks, consents, events, conversations, settings };
+  return { app, store, checks, consents, events, conversations, settings, maps };
 }
 
 const ENV = {
@@ -780,6 +792,78 @@ describe("POST /v1/checks:generate", () => {
 
     expect(response.status).toBe(500);
     expect(error).toHaveBeenCalledWith("unhandled error", { message: "D1 is unavailable" });
+  });
+});
+
+describe("手で作ったマップのノード（#242）", () => {
+  const MAP_OBJECTIVE = {
+    conceptId: TEST_MAP_NODE.id,
+    scope: "objective",
+    level: "basic",
+    objectiveId: TEST_MAP_OBJECTIVES[0]!.id,
+    consentVersion: CHECK_GENERATION_CONSENT_VERSION,
+  };
+
+  it("マップの題名・概要・前提を入力にして作り、保存する", async () => {
+    const fetchMock = stubUpstream(generatedCheck({ conceptId: TEST_MAP_NODE.id }));
+    silenceInfo();
+    const harness = buildApp();
+    await seedTestMap(harness.maps, USER_A);
+
+    const response = await generate(harness, MAP_OBJECTIVE);
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      conceptId: TEST_MAP_NODE.id,
+      scope: "objective",
+      objectiveId: TEST_MAP_OBJECTIVES[0]!.id,
+    });
+    const prompt = sentPrompt(fetchMock);
+    // 領域はマップの ID ではなく題名で渡す。
+    expect(prompt).toContain(`領域: ${TEST_MAP_TITLE}`);
+    expect(prompt).not.toContain("領域: mrust0001");
+    expect(prompt).toContain(TEST_MAP_NODE.summary);
+    expect(prompt).toContain(TEST_MAP_BASE.label);
+    expect(prompt).toContain(TEST_MAP_OBJECTIVES[0]!.label);
+    await expect(harness.checks.listByConcept(USER_A, TEST_MAP_NODE.id)).resolves.toHaveLength(1);
+  });
+
+  it("項目を持つノードでは、項目を狙わない組を作らない", async () => {
+    const fetchMock = stubUpstream(generatedCheck({ conceptId: TEST_MAP_NODE.id }));
+    const harness = buildApp();
+    await seedTestMap(harness.maps, USER_A);
+
+    const response = await generate(harness, {
+      ...CONCEPT_BASIC,
+      conceptId: TEST_MAP_NODE.id,
+    });
+
+    expect(response.status).toBe(400);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("他の利用者のマップのノードでは作らない", async () => {
+    const fetchMock = stubUpstream(generatedCheck({ conceptId: TEST_MAP_NODE.id }));
+    const harness = buildApp();
+    await seedTestMap(harness.maps, "auth0|user-b");
+
+    const response = await generate(harness, MAP_OBJECTIVE);
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ error: "unknown concept" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("別のノードの項目は狙えない", async () => {
+    const fetchMock = stubUpstream(generatedCheck({ conceptId: TEST_MAP_BASE.id }));
+    const harness = buildApp();
+    await seedTestMap(harness.maps, USER_A);
+
+    const response = await generate(harness, { ...MAP_OBJECTIVE, conceptId: TEST_MAP_BASE.id });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ error: "invalid objective" });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 

@@ -18,8 +18,9 @@ import {
   CHECK_LEVELS,
   CHECK_SCOPES,
   CONCEPT_ID_PATTERN,
+  CONCEPT_BY_ID,
+  CONCEPTS,
   LEARNING_OBJECTIVE_ID_PATTERN,
-  MOCK_LEARNING_OBJECTIVES,
   type LearningObjective,
   type PersonalConceptCheck,
 } from "@gakushu-sochi/domain";
@@ -35,6 +36,7 @@ import {
 } from "../contract/ai-usage.js";
 import type { ChecksDeps } from "./deps.js";
 import { failureBody, limitReached, notConfiguredBody, upstreamFailureBody } from "./errors.js";
+import { loadUserConceptCatalog } from "../maps/catalog.js";
 import { fitQuestionsToInputLimit, solvedQuestionsFor } from "./material.js";
 import {
   buildCheckPrompt,
@@ -84,7 +86,7 @@ export async function generateCheck(
 ): Promise<GenerateCheckOutcome> {
   const { conceptId, scope, level } = input;
 
-  const target = resolveTarget(deps, input);
+  const target = await resolveTarget(deps, userId, input);
   if (!target.ok) return target.outcome;
   const { promptInput, objective } = target.value;
 
@@ -200,12 +202,23 @@ export async function generateCheck(
   return { status: 200, body: check };
 }
 
-/** Concept が既知で、狙う項目がその Concept の「理解すること」の一覧にあるかを確かめる。 */
-function resolveTarget(
+/**
+ * Concept が既知で、狙う項目がその Concept の「理解すること」の一覧にあるかを確かめる。
+ *
+ * 既知の Concept は、固定の一覧と、利用者が手で作ったマップのノード（#242）。
+ */
+async function resolveTarget(
   deps: ChecksDeps,
+  userId: string,
   { conceptId, scope, objectiveId }: GenerateCheckInput,
-): Step<{ promptInput: CheckPromptInput; objective: LearningObjective | undefined }> {
-  const resolved = checkPromptInputFor(conceptId);
+): Promise<Step<{ promptInput: CheckPromptInput; objective: LearningObjective | undefined }>> {
+  const catalog = await loadUserConceptCatalog(deps.maps, userId, {
+    ...(deps.objectives === undefined ? {} : { objectives: deps.objectives }),
+  });
+  // 固定の Concept は固定の一覧だけで前提・次を引く。手で作ったマップの線を混ぜると、
+  // 同じ Concept でも利用者ごとにプロンプトが変わる。
+  const fixed = CONCEPT_BY_ID.has(conceptId);
+  const resolved = checkPromptInputFor(conceptId, fixed ? CONCEPTS : catalog.concepts);
   if (!resolved.ok) {
     if (resolved.reason === "unknown-concept") {
       return {
@@ -228,9 +241,7 @@ function resolveTarget(
   }
 
   // 狙う項目は、その Concept の「理解すること」の一覧にあるものだけを受け付ける。
-  const objectives = (deps.objectives ?? MOCK_LEARNING_OBJECTIVES).filter(
-    (candidate) => candidate.conceptId === conceptId,
-  );
+  const objectives = catalog.objectives.filter((candidate) => candidate.conceptId === conceptId);
   const objective =
     objectiveId === undefined
       ? undefined
@@ -264,7 +275,11 @@ function resolveTarget(
       },
     };
   }
-  return { ok: true, value: { promptInput: resolved.input, objective } };
+  // 手で作ったノードの領域はマップの ID なので、AI にはマップの題名を渡す。
+  const areaLabel = catalog.areaLabelOf(resolved.input.language);
+  const promptInput =
+    areaLabel === undefined ? resolved.input : { ...resolved.input, language: areaLabel };
+  return { ok: true, value: { promptInput, objective } };
 }
 
 /** 送る前に同意を確かめる。その場の同意か、「今後表示しない」の記録のどちらか。 */

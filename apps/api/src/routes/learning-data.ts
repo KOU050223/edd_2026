@@ -15,10 +15,10 @@ import { Hono } from "hono";
 import {
   LEARNER_PROFILE_VERSION,
   deriveMasteryFromEvents,
-  MOCK_LEARNING_OBJECTIVES,
   type LearnerProfile,
 } from "@gakushu-sochi/domain";
 import type { AuthVariables } from "../auth/middleware.js";
+import { loadUserConceptCatalog } from "../maps/catalog.js";
 import type {
   AuditLogRepository,
   ConversationRepository,
@@ -26,6 +26,7 @@ import type {
   ImportSessionRepository,
   LearningEventRepository,
   LearningEvidenceRepository,
+  LearningMapRepository,
   PersonalCheckRepository,
 } from "../repository/types.js";
 
@@ -52,6 +53,11 @@ export interface LearningDataDeps {
    * 学習データの削除で一緒に消す。全員共通の `concept_checks` は対象外のまま。
    */
   checks: PersonalCheckRepository;
+  /**
+   * 手で作ったマップ（#242）。エクスポートの習熟度を learning-profile と同じ項目一覧で導出する。
+   * マップは教材であって行動の記録ではないので、学習データの削除では消さない。
+   */
+  maps: LearningMapRepository;
   /** 監査ログ（Issue #122）。エクスポートと削除を「誰がいつ何をしたか」として残す。 */
   audit: AuditLogRepository;
   /** 現在時刻を ISO 8601 で返す。テストで固定できるよう注入する。 */
@@ -98,7 +104,10 @@ export function createLearningDataRoute(resolve: LearningDataDepsResolver) {
     // 退会済みアカウントのエクスポートが拒否されるのは意図した挙動である
     // （docs/api-ops.md「監視・監査ログ・障害時の再送」）。
     await deps.identity.ensureUser({ userId, nowMs: deps.nowMs() });
-    const events = await deps.events.listByUser(userId);
+    const [events, catalog] = await Promise.all([
+      deps.events.listByUser(userId),
+      loadUserConceptCatalog(deps.maps, userId),
+    ]);
 
     // 独自形式を作らず、VS Code 拡張が globalState に持つ `LearnerProfile` と
     // 同じ形で返す。再取り込みできることに意味がある（Issue #79）。
@@ -106,7 +115,7 @@ export function createLearningDataRoute(resolve: LearningDataDepsResolver) {
     const body: LearnerProfile = {
       version: LEARNER_PROFILE_VERSION,
       updatedAt: deps.nowIso(),
-      mastery: deriveMasteryFromEvents(events, MOCK_LEARNING_OBJECTIVES),
+      mastery: deriveMasteryFromEvents(events, catalog.objectives),
       events,
     };
     await deps.audit.record({
