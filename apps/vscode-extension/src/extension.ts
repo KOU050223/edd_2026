@@ -144,6 +144,8 @@ export function activate(context: vscode.ExtensionContext): void {
       try {
         await deviceAuth.login();
         vscode.window.showInformationMessage("Gakushu Sochi にログインしました");
+        // 別のアカウントでログインし直したかもしれない。前のアカウントの一覧を捨ててから読む。
+        forgetUserConcepts();
         void refreshUserConcepts();
       } catch (error) {
         channel.appendLine(`ログインに失敗しました: ${String(error)}`);
@@ -157,8 +159,7 @@ export function activate(context: vscode.ExtensionContext): void {
       // 投げない（docs/auth.md §8）。ここまで来たらログアウトは成立している。
       await deviceAuth.logout();
       // 前の利用者のマップを、次にログインする人の質問へ持ち越さない。
-      userConcepts = undefined;
-      userConceptsCheckedAtMs = 0;
+      forgetUserConcepts();
       vscode.window.showInformationMessage("Gakushu Sochi からログアウトしました");
     }),
   );
@@ -328,8 +329,23 @@ export function activate(context: vscode.ExtensionContext): void {
   let userConcepts: UserConcepts | undefined;
   let userConceptsCheckedAtMs = 0;
   let userConceptsLoading: Promise<void> | undefined;
+  /**
+   * ログイン・ログアウトのたびに進める。読み込みの途中でアカウントが変わったら、
+   * 終わったときに世代が違うので結果を捨てる。捨てないと、前の利用者の非公開のノードが
+   * 次の利用者の質問と一緒に AI へ送られる。
+   */
+  let userConceptsGeneration = 0;
   // Web でマップを直したことを、間隔をあけて取り込む。毎問取りに行くと回答が遅れる。
   const USER_CONCEPTS_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
+
+  /** 手元の一覧を捨て、読み込み中の結果も無効にする（ログイン・ログアウト）。 */
+  function forgetUserConcepts(): void {
+    userConceptsGeneration += 1;
+    userConcepts = undefined;
+    userConceptsCheckedAtMs = 0;
+    // 読み込み中の Promise を待たせない。次の読み込みは新しいアカウントで始める。
+    userConceptsLoading = undefined;
+  }
 
   /**
    * 手で作ったマップのノードを読み直す。読み込み中なら、その完了を待つだけにする。
@@ -339,10 +355,13 @@ export function activate(context: vscode.ExtensionContext): void {
    */
   function refreshUserConcepts(): Promise<void> {
     if (userConceptsLoading) return userConceptsLoading;
+    const generation = userConceptsGeneration;
     const loading = (async () => {
       const config = conversationSyncConfig();
       if (config === null) return;
       const outcome = await fetchUserConcepts(config);
+      // 読み込みの途中でログイン・ログアウトした。前のアカウントの結果なので使わない。
+      if (generation !== userConceptsGeneration) return;
       userConceptsCheckedAtMs = Date.now();
       if (outcome.ok) {
         userConcepts = outcome.value;
@@ -359,7 +378,8 @@ export function activate(context: vscode.ExtensionContext): void {
         channel.appendLine(`自分のマップのノードを読み込めませんでした: ${String(error)}`);
       })
       .finally(() => {
-        userConceptsLoading = undefined;
+        // 途中で `forgetUserConcepts` が別の読み込みに替えていたら、そちらは消さない。
+        if (userConceptsLoading === loading) userConceptsLoading = undefined;
       });
     userConceptsLoading = loading;
     return loading;

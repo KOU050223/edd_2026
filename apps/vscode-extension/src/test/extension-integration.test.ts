@@ -1107,3 +1107,56 @@ test("起動時に読んだ自分のマップのノードを、質問の AIReque
   const objectives = recordEvent.mock.calls.at(-1)?.[4] as { id: string }[];
   expect(objectives.map((objective) => objective.id)).toContain("mrust0001.owner001:move");
 });
+
+test("読み込みの途中でログアウトしたら、前の利用者のノードを質問に載せない（#242）", async () => {
+  // 読み込みを途中で止めておき、ログアウトのあとで終わらせる。
+  let finishFetch: (value: unknown) => void = () => undefined;
+  fetchUserConcepts.mockImplementationOnce(
+    () => new Promise((resolve) => (finishFetch = resolve)) as never,
+  );
+  collectFromEditor.mockResolvedValueOnce(CONTEXT);
+  loadProfile.mockReturnValueOnce({ events: [], mastery: {} });
+  recordEvent.mockImplementation(async (_context, profile: LearnerProfile) => profile);
+  getConfiguration.mockReturnValue({
+    get: (key: string, fallback: string) => {
+      if (key === "api.baseUrl") return "https://api.example.com";
+      return fallback;
+    },
+  });
+
+  const context = createExtensionContext(true);
+  activate(context as never);
+  await vi.waitFor(() => expect(fetchUserConcepts).toHaveBeenCalled());
+
+  await registeredCommands.get("gakushuSochi.logout")?.();
+  finishFetch({
+    ok: true,
+    value: {
+      concepts: [
+        {
+          id: "mrust0001.owner001",
+          label: "前の利用者のノード",
+          language: "mrust0001",
+          prerequisites: [],
+          source: { kind: "manual" },
+        },
+      ],
+      objectives: [],
+    },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  await registeredCommands.get("gakushuSochi.askSelection")?.();
+  const chatOpen = executeCommand.mock.calls.find(
+    ([command]) => command === "workbench.action.chat.open",
+  );
+  const prompt = `${chatOpen?.[1].query.replace("@gakushu-sochi ", "")}所有権とは？`;
+  await participantHandlers[0]?.(
+    { prompt },
+    { history: [] },
+    { markdown: vi.fn(), progress: vi.fn() },
+  );
+
+  expect(askedRequests.at(-1)).toBeDefined();
+  expect(askedRequests.at(-1)?.userConcepts).toBeUndefined();
+});
