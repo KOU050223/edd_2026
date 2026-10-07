@@ -1,6 +1,6 @@
 import { afterEach, expect, test, vi } from "vitest";
 import type { LearningEvent } from "@gakushu-sochi/domain";
-import { deleteServerLearningData, syncEvent } from "./sync";
+import { deleteServerLearningData, fetchUserConcepts, syncEvent } from "./sync";
 
 const EVENT: LearningEvent = {
   id: "event-1",
@@ -489,4 +489,44 @@ test("サーバー削除もhttpのリモートURLへはトークンを送らず�
 
   expect(outcome.ok).toBe(false);
   expect(fetchMock).not.toHaveBeenCalled();
+});
+
+test("自分のマップのノードは、トークン付き・リダイレクト拒否の GET で読む（#242）", async () => {
+  const fetchMock = vi.fn().mockResolvedValue(
+    Response.json({
+      concepts: [
+        {
+          id: "mrust0001.owner001",
+          label: "所有権",
+          summary: "s",
+          mapId: "mrust0001",
+          mapTitle: "Rust 入門",
+          prerequisites: [],
+          objectives: [],
+        },
+      ],
+    }),
+  );
+  vi.stubGlobal("fetch", fetchMock);
+
+  const outcome = await fetchUserConcepts(CONFIG);
+
+  expect(outcome).toMatchObject({
+    ok: true,
+    value: { concepts: [{ id: "mrust0001.owner001", label: "所有権（Rust 入門）" }] },
+  });
+  const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+  expect(url).toBe("https://api.example.com/v1/learning-maps:concepts");
+  expect(init.method).toBe("GET");
+  expect(init.redirect).toBe("error");
+  expect((init.headers as Record<string, string>).authorization).toBe("Bearer test-token");
+});
+
+test("自分のマップのノードの応答が契約と違えば、失敗として返す", async () => {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ concepts: [{ id: 1 }] })));
+
+  await expect(fetchUserConcepts(CONFIG)).resolves.toEqual({
+    ok: false,
+    reason: "サーバー応答の形式が不正です（concepts の形が契約と違います）",
+  });
 });

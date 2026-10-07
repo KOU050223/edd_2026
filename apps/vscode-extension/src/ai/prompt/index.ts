@@ -38,11 +38,14 @@ export function knownConceptsFor(request: AIRequest): readonly Concept[] {
   // 言語の Concept は languageId と一致するものだけに絞る。git や db のような
   // 領域の Concept は languageId に対応付かないため、有無に関わらず常に載せる。
   const languageId = request.context.languageId;
-  return CONCEPTS.filter(
+  const fixed = CONCEPTS.filter(
     (concept) =>
       CROSS_DOMAIN_PREFIXES.has(concept.language) ||
       (languageId !== undefined && concept.language === conceptLanguageFor(languageId)),
   );
+  // 利用者が手で作ったマップのノード（#242）は、言語に対応付かないので常に載せる。
+  // 件数はサーバーが更新の新しいマップから 100 ノードまでに絞っている。
+  return [...fixed, ...(request.userConcepts?.concepts ?? [])];
 }
 
 /**
@@ -64,7 +67,8 @@ export function knownObjectivesFor(request: AIRequest): readonly LearningObjecti
       values.set(id, value);
     }
   }
-  return MOCK_LEARNING_OBJECTIVES.filter(
+  // 固定の Concept の項目（今はモック）と、手で作ったマップのノードの項目（#242）。
+  return [...MOCK_LEARNING_OBJECTIVES, ...(request.userConcepts?.objectives ?? [])].filter(
     (objective) => conceptIds.has(objective.conceptId) && (values.get(objective.id) ?? 0) < 1,
   );
 }
@@ -193,14 +197,18 @@ export function buildPrompt(request: AIRequest): string {
   // 長期履歴そのものではなく、この質問に関係しうる Concept の状態だけの
   // 最小限の要約を載せる（docs/architecture.md「Phase 2」）。
   const knownIds = new Set(knownConcepts.map((concept) => concept.id));
-  const positionLines = buildLearnerPositionLines({
-    masteries: (request.profile?.masteries ?? []).filter((mastery) =>
-      knownIds.has(mastery.conceptId),
-    ),
-    recurringConceptIds: (request.profile?.recurringConceptIds ?? []).filter((id) =>
-      knownIds.has(id),
-    ),
-  });
+  // 表示名は既知の概念一覧から引く。手で作ったノードも ID のまま出さない（#242）。
+  const positionLines = buildLearnerPositionLines(
+    {
+      masteries: (request.profile?.masteries ?? []).filter((mastery) =>
+        knownIds.has(mastery.conceptId),
+      ),
+      recurringConceptIds: (request.profile?.recurringConceptIds ?? []).filter((id) =>
+        knownIds.has(id),
+      ),
+    },
+    knownConcepts,
+  );
   if (positionLines.length > 0) {
     lines.push("", ...positionLines);
   }

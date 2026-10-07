@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { buildPrompt, effectiveQuestion, knownObjectivesFor } from ".";
+import { buildPrompt, effectiveQuestion, knownConceptsFor, knownObjectivesFor } from ".";
 
 const baseRequest = {
   context: {
@@ -262,4 +262,75 @@ test("effectiveQuestion は質問が無いとき AI が答えた preset 指示�
   // AI が実際に答えた preset の指示文が質問の実体である。
   expect(effectiveQuestion({ ...baseRequest, question: "  " })).toContain("### Explain");
   expect(effectiveQuestion({ ...baseRequest, question: "これは何？" })).toBe("これは何？");
+});
+
+describe("手で作ったマップのノード（#242）", () => {
+  const userConcepts = {
+    concepts: [
+      {
+        id: "mrust0001.owner001",
+        label: "所有権（Rust 入門）",
+        language: "mrust0001",
+        summary: "値の持ち主は1つ。",
+        prerequisites: [],
+        source: { kind: "manual" as const },
+      },
+    ],
+    objectives: [
+      {
+        id: "mrust0001.owner001:move",
+        conceptId: "mrust0001.owner001",
+        label: "代入で持ち主が移る",
+      },
+    ],
+  };
+
+  test("言語に関わらず既知の概念一覧と項目一覧に載せる", () => {
+    // TypeScript のファイルでも、手で作ったノードは載る。
+    const request = { ...baseRequest, userConcepts };
+    expect(knownConceptsFor(request).map((concept) => concept.id)).toContain("mrust0001.owner001");
+    expect(knownObjectivesFor(request).map((objective) => objective.id)).toContain(
+      "mrust0001.owner001:move",
+    );
+
+    const prompt = buildPrompt(request);
+    expect(prompt).toContain("mrust0001.owner001: 所有権（Rust 入門）");
+    expect(prompt).toContain("mrust0001.owner001:move: 代入で持ち主が移る");
+  });
+
+  test("満点の項目は、手で作ったノードでも項目一覧から除く", () => {
+    const request = {
+      ...baseRequest,
+      userConcepts,
+      profile: {
+        masteries: [
+          {
+            conceptId: "mrust0001.owner001",
+            status: "confirmed" as const,
+            score: 1,
+            evidence: {
+              questionCount: 0,
+              answerViewCount: 0,
+              solvedIndependentlyCount: 0,
+              errorRecurrenceCount: 0,
+              checkPassedCount: 1,
+              checkFailedCount: 0,
+              recentTypes: [],
+            },
+            objectives: { "mrust0001.owner001:move": 1 },
+          },
+        ],
+      },
+    };
+    expect(knownObjectivesFor(request).map((objective) => objective.id)).not.toContain(
+      "mrust0001.owner001:move",
+    );
+    // 現在地の要約には、ID ではなく表示名で載る。
+    const prompt = buildPrompt(request);
+    expect(prompt).toContain("所有権（Rust 入門）（100%）");
+  });
+
+  test("取得できていなければ固定の一覧だけになる", () => {
+    expect(knownConceptsFor(baseRequest).some((concept) => concept.id.startsWith("m"))).toBe(false);
+  });
 });

@@ -3,6 +3,7 @@ import type {
   CodeContext,
   ConversationTurn,
   ProfileSummary,
+  UserConcepts,
 } from "@gakushu-sochi/domain";
 
 /**
@@ -20,6 +21,7 @@ export function createChatAIRequest(
   diagnostics: string[] = [],
   persona?: string,
   profile?: ProfileSummary,
+  userConcepts?: UserConcepts,
 ): AIRequest {
   const trimmedPersona = persona?.trim();
   return {
@@ -33,5 +35,7 @@ export function createChatAIRequest(
     ...(trimmedPersona ? { persona: trimmedPersona } : {}),
     // 満点の「理解すること」をプロンプトから除くのに使う（knownObjectivesFor）。
     ...(profile ? { profile } : {}),
+    // 利用者が手で作ったマップのノード（#242）。取得できていなければ省略する。
+    ...(userConcepts ? { userConcepts } : {}),
   };
 }

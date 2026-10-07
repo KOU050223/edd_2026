@@ -3,12 +3,15 @@ import * as vscode from "vscode";
 import {
   CONVERSATION_HISTORY_OPT_IN_NOTICE,
   createEmptyProfile,
+  MOCK_LEARNING_OBJECTIVES,
   PERSONA_MAX_LENGTH,
   recentlyRecurredConceptIds,
   type CodeContext,
   type ConceptMastery,
   type ConversationTurn,
   type LearningEvent,
+  type LearningObjective,
+  type UserConcepts,
 } from "@gakushu-sochi/domain";
 import type { AIError } from "./ai/types";
 import type { AIProvider } from "./ai/provider";
@@ -46,7 +49,7 @@ import {
   solvedIndependentlyTarget,
   type AnswerMetadata,
 } from "./learning/resolution";
-import { deleteServerLearningData, syncEvent } from "./learning/sync";
+import { deleteServerLearningData, fetchUserConcepts, syncEvent } from "./learning/sync";
 import { buildVscodeConversation, conversationBodyOverLimit } from "./conversations/conversation";
 import {
   getRemoteSaveConversationHistory,
@@ -141,6 +144,9 @@ export function activate(context: vscode.ExtensionContext): void {
       try {
         await deviceAuth.login();
         vscode.window.showInformationMessage("Gakushu Sochi にログインしました");
+        // 別のアカウントでログインし直したかもしれない。前のアカウントの一覧を捨ててから読む。
+        forgetUserConcepts();
+        void refreshUserConcepts();
       } catch (error) {
         channel.appendLine(`ログインに失敗しました: ${String(error)}`);
         vscode.window.showErrorMessage(`ログインに失敗しました: ${String(error)}`);
@@ -152,6 +158,8 @@ export function activate(context: vscode.ExtensionContext): void {
       // `logout` はローカルの破棄を先に済ませ、撤回の失敗は内部で記録して
       // 投げない（docs/auth.md §8）。ここまで来たらログアウトは成立している。
       await deviceAuth.logout();
+      // 前の利用者のマップを、次にログインする人の質問へ持ち越さない。
+      forgetUserConcepts();
       vscode.window.showInformationMessage("Gakushu Sochi からログアウトしました");
     }),
   );
@@ -314,6 +322,75 @@ export function activate(context: vscode.ExtensionContext): void {
   }
 
   /**
+   * 利用者が手で作った学習マップのノード（#242）。AI へ渡す「既知の概念一覧」と、
+   * 手元の理解度の導出（`recordEvent`）に足す。取得できていなければ `undefined` で、
+   * そのときは固定の一覧だけで動く（質問は止めない）。
+   */
+  let userConcepts: UserConcepts | undefined;
+  let userConceptsCheckedAtMs = 0;
+  let userConceptsLoading: Promise<void> | undefined;
+  /**
+   * ログイン・ログアウトのたびに進める。読み込みの途中でアカウントが変わったら、
+   * 終わったときに世代が違うので結果を捨てる。捨てないと、前の利用者の非公開のノードが
+   * 次の利用者の質問と一緒に AI へ送られる。
+   */
+  let userConceptsGeneration = 0;
+  // Web でマップを直したことを、間隔をあけて取り込む。毎問取りに行くと回答が遅れる。
+  const USER_CONCEPTS_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
+
+  /** 手元の一覧を捨て、読み込み中の結果も無効にする（ログイン・ログアウト）。 */
+  function forgetUserConcepts(): void {
+    userConceptsGeneration += 1;
+    userConcepts = undefined;
+    userConceptsCheckedAtMs = 0;
+    // 読み込み中の Promise を待たせない。次の読み込みは新しいアカウントで始める。
+    userConceptsLoading = undefined;
+  }
+
+  /**
+   * 手で作ったマップのノードを読み直す。読み込み中なら、その完了を待つだけにする。
+   *
+   * 例外を外へ出さない。起動時（`activate` の中）からも呼ぶので、設定の読み取りなどが
+   * 投げても起動を止めない。失敗は理由をログに残す（RULE-004）。
+   */
+  function refreshUserConcepts(): Promise<void> {
+    if (userConceptsLoading) return userConceptsLoading;
+    const generation = userConceptsGeneration;
+    const loading = (async () => {
+      const config = conversationSyncConfig();
+      if (config === null) return;
+      const outcome = await fetchUserConcepts(config);
+      // 読み込みの途中でログイン・ログアウトした。前のアカウントの結果なので使わない。
+      if (generation !== userConceptsGeneration) return;
+      userConceptsCheckedAtMs = Date.now();
+      if (outcome.ok) {
+        userConcepts = outcome.value;
+        channel.appendLine(
+          `自分のマップのノードを ${String(outcome.value.concepts.length)} 件読み込みました。`,
+        );
+        return;
+      }
+      // 前回読めた一覧は捨てない。一時的な失敗で手作りのノードが一覧から消えると、
+      // その間の質問で理解度が積めなくなる。
+      channel.appendLine(`自分のマップのノードを読み込めませんでした: ${outcome.reason}`);
+    })()
+      .catch((error: unknown) => {
+        channel.appendLine(`自分のマップのノードを読み込めませんでした: ${String(error)}`);
+      })
+      .finally(() => {
+        // 途中で `forgetUserConcepts` が別の読み込みに替えていたら、そちらは消さない。
+        if (userConceptsLoading === loading) userConceptsLoading = undefined;
+      });
+    userConceptsLoading = loading;
+    return loading;
+  }
+
+  /** 理解度の導出に使う「理解すること」。固定の Concept の項目に、手作りのノードの項目を足す。 */
+  function knownObjectives(): readonly LearningObjective[] {
+    return [...MOCK_LEARNING_OBJECTIVES, ...(userConcepts?.objectives ?? [])];
+  }
+
+  /**
    * 回答済みの質問を会話としてサーバーへ送る。
    *
    * persistEvent と同じく、失敗は出力チャンネルに残すだけで質問フローは
@@ -401,9 +478,15 @@ export function activate(context: vscode.ExtensionContext): void {
   }
 
   async function persistEventNow(event: LearningEvent): Promise<void> {
-    profile = await recordEvent(context, profile, event, (error) => {
-      channel.appendLine(`LearnerProfile の保存に失敗しました: ${String(error)}`);
-    });
+    profile = await recordEvent(
+      context,
+      profile,
+      event,
+      (error) => {
+        channel.appendLine(`LearnerProfile の保存に失敗しました: ${String(error)}`);
+      },
+      knownObjectives(),
+    );
     channel.appendLine(`--- LearningEvent ---\n${JSON.stringify(event, null, 2)}`);
 
     // Issue #56: ローカル保存（globalState）に加えて、サーバー側の正本（D1）へも
@@ -458,9 +541,15 @@ export function activate(context: vscode.ExtensionContext): void {
         !outcome.droppedByReset &&
         !profile.events.some((e) => e.id === event.id)
       ) {
-        profile = await recordEvent(context, profile, event, (error) => {
-          channel.appendLine(`LearnerProfile の保存に失敗しました: ${String(error)}`);
-        });
+        profile = await recordEvent(
+          context,
+          profile,
+          event,
+          (error) => {
+            channel.appendLine(`LearnerProfile の保存に失敗しました: ${String(error)}`);
+          },
+          knownObjectives(),
+        );
       }
     } catch (error) {
       channel.appendLine(`クラウド同期に失敗しました: ${String(error)}`);
@@ -599,12 +688,23 @@ export function activate(context: vscode.ExtensionContext): void {
       const masteries = Object.values(profile.mastery).filter(
         (mastery): mastery is ConceptMastery => mastery !== undefined,
       );
-      const aiRequest = createChatAIRequest(codeContext, question, history, diagnostics, persona, {
-        masteries,
-        // #216: 最近つまずき直した Concept を渡し、回答が「もう知っている前提」に
-        // ならないようにする。
-        recurringConceptIds: recentlyRecurredConceptIds(profile.events, Date.now()),
-      });
+      if (Date.now() - userConceptsCheckedAtMs > USER_CONCEPTS_REFRESH_INTERVAL_MS) {
+        void refreshUserConcepts();
+      }
+      const aiRequest = createChatAIRequest(
+        codeContext,
+        question,
+        history,
+        diagnostics,
+        persona,
+        {
+          masteries,
+          // #216: 最近つまずき直した Concept を渡し、回答が「もう知っている前提」に
+          // ならないようにする。
+          recurringConceptIds: recentlyRecurredConceptIds(profile.events, Date.now()),
+        },
+        userConcepts,
+      );
       const aiResponse = await provider.ask(aiRequest);
 
       if (!aiResponse.ok) {
@@ -710,6 +810,8 @@ export function activate(context: vscode.ExtensionContext): void {
   void refreshConversationHistoryEnabled().catch((error: unknown) => {
     channel.appendLine(`質問履歴の設定を読み込めませんでした: ${String(error)}`);
   });
+  // 起動時に、手で作ったマップのノードを読んでおく（#242）。失敗は内側でログに残す。
+  void refreshUserConcepts();
 
   const askSelection = vscode.commands.registerCommand("gakushuSochi.askSelection", async () => {
     const editor = vscode.window.activeTextEditor;

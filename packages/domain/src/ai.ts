@@ -1,6 +1,7 @@
 import type { CodeContext } from "./context.js";
 import type { ConceptFamiliarity } from "./history-import.js";
-import type { ConceptId, ConceptMastery } from "./profile.js";
+import type { LearningObjective } from "./learning-objective.js";
+import type { Concept, ConceptId, ConceptMastery } from "./profile.js";
 
 /**
  * 人格設定（persona）の最大長。
@@ -32,6 +33,17 @@ export interface ProfileSummary {
   familiarity?: ConceptFamiliarity[];
 }
 
+/**
+ * 利用者が手で作った学習マップのノードと「理解すること」（Issue #242）。
+ *
+ * 固定の一覧（`CONCEPTS`）に足して「既知の概念一覧」に載せ、質問で手作りのノードにも
+ * 理解度を積めるようにする。ノードの `language` はマップの ID で、言語では絞らない。
+ */
+export interface UserConcepts {
+  concepts: readonly Concept[];
+  objectives: readonly LearningObjective[];
+}
+
 /** VS Code に依存しない会話の1ターン。 */
 export interface ConversationTurn {
   role: "user" | "assistant";
@@ -50,6 +62,8 @@ export interface AIRequest {
    * 「何に答えるか」ではなく「どう答えるか」の口調にだけ効かせる。
    */
   persona?: string;
+  /** 利用者が手で作った学習マップのノード（#242）。取得できていなければキー自体を省略する。 */
+  userConcepts?: UserConcepts;
 }
 
 /** AI リクエストが失敗した理由。 */

@@ -14,10 +14,11 @@
  * 戻り値を使う。
  */
 
-import type { LearningEvent } from "@gakushu-sochi/domain";
+import type { LearningEvent, UserConcepts } from "@gakushu-sochi/domain";
 import * as Data from "effect/Data";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import { toUserConcepts } from "./user-concepts";
 
 /** 同期に使う設定。VS Codeの設定（package.jsonのcontributes.configuration）から読む値をここへ集約する。 */
 export interface SyncConfig {
@@ -323,6 +324,30 @@ export function deleteServerLearningData(
           deletedCount: body.deletedCount,
           resetAtMs: body.resetAtMs,
         });
+      }),
+    ),
+  );
+}
+
+export type UserConceptsOutcome = { ok: true; value: UserConcepts } | { ok: false; reason: string };
+
+/**
+ * 利用者が手で作った学習マップのノードを読む（`GET /v1/learning-maps:concepts`、Issue #242）。
+ *
+ * サーバーは更新の新しいマップから合計 100 ノードまで返す（プロンプトの長さを抑えるため）。
+ * 学習データを送る経路ではないので、送信の同意は見ない（ログインは要る）。
+ * `syncEvent` と同じく例外を投げず、失敗は理由付きの `ok: false` で返す。
+ */
+export function fetchUserConcepts(
+  config: Pick<SyncConfig, "apiBaseUrl" | "apiToken">,
+): Promise<UserConceptsOutcome> {
+  return runToOutcome(
+    requestJson(config, "/v1/learning-maps:concepts", { method: "GET" }).pipe(
+      Effect.flatMap((json) => {
+        const value = toUserConcepts(json);
+        return value === undefined
+          ? Effect.fail(new MalformedResponse({ detail: "concepts の形が契約と違います" }))
+          : Effect.succeed<UserConceptsOutcome>({ ok: true, value });
       }),
     ),
   );
