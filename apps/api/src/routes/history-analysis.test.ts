@@ -4,7 +4,13 @@ import { createAuth, type AuthVariables } from "../auth/middleware.js";
 import { AuthVerificationError, type AuthVerifier } from "../auth/verifier.js";
 import { AI_USAGE_LIMITS } from "../contract/ai-usage.js";
 import { InMemoryAiUsageRepository } from "../repository/ai-usage.js";
-import { InMemoryIdentityRepository } from "../repository/memory.js";
+import {
+  createInMemoryRepositoryStore,
+  InMemoryIdentityRepository,
+  InMemoryLearningEventRepository,
+  InMemoryLearningEvidenceRepository,
+} from "../repository/memory.js";
+import { InMemoryMasteryOverrideRepository } from "../repository/mastery-overrides.js";
 import { createAiRoute } from "./ai.js";
 import type { HistoryAnalysisResponse } from "../contract/history-import.js";
 
@@ -34,6 +40,7 @@ let usage: InMemoryAiUsageRepository;
 let app: Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>;
 
 beforeEach(() => {
+  const store = createInMemoryRepositoryStore();
   usage = new InMemoryAiUsageRepository();
   app = new Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>();
   app.use(
@@ -47,7 +54,10 @@ beforeEach(() => {
       model: env.GEMINI_MODEL,
       fetch: (input, init) => globalThis.fetch(input, init),
       usage,
-      identity: new InMemoryIdentityRepository(),
+      identity: new InMemoryIdentityRepository(store),
+      events: new InMemoryLearningEventRepository(store),
+      evidence: new InMemoryLearningEvidenceRepository(store),
+      overrides: new InMemoryMasteryOverrideRepository(),
       now: () => new Date("2026-09-22T10:00:00.000Z"),
     })),
   );

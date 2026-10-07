@@ -336,7 +336,8 @@ test("質問で触れた「理解すること」を question_asked として記�
   });
 
   // 満点の項目をプロンプトから除けるよう、手元の習熟度を AI へ渡す。
-  expect(askedRequests[0]?.profile).toEqual({ masteries: [mastery] });
+  // 再発した Concept の一覧も渡す（このテストのプロファイルにはイベントが無いので空）。
+  expect(askedRequests[0]?.profile).toEqual({ masteries: [mastery], recurringConceptIds: [] });
   const events = recordEvent.mock.calls.map(([, , event]) => event as LearningEvent);
   expect(events.map((event) => event.type)).toEqual(["question_asked", "answer_viewed"]);
   expect(events[0]).toEqual(

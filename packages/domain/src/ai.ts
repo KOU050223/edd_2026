@@ -1,4 +1,5 @@
 import type { CodeContext } from "./context.js";
+import type { ConceptFamiliarity } from "./history-import.js";
 import type { ConceptId, ConceptMastery } from "./profile.js";
 
 /**
@@ -11,10 +12,24 @@ import type { ConceptId, ConceptMastery } from "./profile.js";
  */
 export const PERSONA_MAX_LENGTH = 500;
 
-/** 回答の調整に必要な学習者プロファイルの要約。 */
+/**
+ * 回答の調整に必要な学習者プロファイルの要約（Issue #216）。
+ *
+ * 長期履歴そのものではなく、現在の質問に関係する Concept と再発状況などの
+ * 最小限の要約を渡す方針（docs/architecture.md「Phase 2」）。
+ * `learner-position.ts` の `buildLearnerPositionLines` がプロンプト向けの
+ * 行へ変換する。
+ */
 export interface ProfileSummary {
+  /** 観測のある Concept の習熟度。`unobserved` は「判断材料がない」なので載せない。 */
   masteries: ConceptMastery[];
+  /** 直近で同じエラーが再発した Concept。`recentlyRecurredConceptIds` で導出する。 */
   recurringConceptIds?: ConceptId[];
+  /**
+   * 外部履歴由来の「触れた形跡」（Issue #157）。
+   * Evidence はサーバーだけが持つため、クライアント側の要約では省略する。
+   */
+  familiarity?: ConceptFamiliarity[];
 }
 
 /** VS Code に依存しない会話の1ターン。 */

@@ -17,9 +17,11 @@ import {
   InMemoryConversationRepository,
   InMemoryIdentityRepository,
   InMemoryLearningEventRepository,
+  InMemoryLearningEvidenceRepository,
   InMemoryPersonalCheckRepository,
   type InMemoryRepositoryStore,
 } from "../repository/memory.js";
+import { InMemoryMasteryOverrideRepository } from "../repository/mastery-overrides.js";
 import { createAiRoute } from "./ai.js";
 import { createChecksRoute, parseModelList } from "./checks.js";
 
@@ -125,6 +127,9 @@ function buildApp(
       fetch: (input, init) => globalThis.fetch(input, init),
       usage,
       identity,
+      events,
+      evidence: new InMemoryLearningEvidenceRepository(store),
+      overrides: new InMemoryMasteryOverrideRepository(),
       now: () => NOW,
     })),
   );
