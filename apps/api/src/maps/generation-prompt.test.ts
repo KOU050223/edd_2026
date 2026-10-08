@@ -52,6 +52,22 @@ describe("buildSkeletonPrompt", () => {
     expect(prompt).toContain("go.defer|defer|理解済み");
     expect(prompt).toContain("所有権|学習中");
   });
+
+  it("一本道にせず、独立して学べる概念は同じ前提から枝分かれさせるよう頼む", () => {
+    const prompt = buildSkeletonPrompt({
+      request: { kind: "field", theme: "Unity", level: "basic" },
+      candidates: [],
+      knownLabels: [],
+    });
+
+    expect(prompt).toContain("同じ前提から枝分かれさせ、一本道にしない");
+    // 出力の例も、1つの前提から2つに分かれる形にする（例が一本道だと、AI もそれに倣う）。
+    const example = JSON.parse(prompt.split("\n").find((line) => line.startsWith('{"title"'))!) as {
+      nodes: { prerequisite?: string }[];
+    };
+    const children = example.nodes.filter((node) => node.prerequisite === "n1");
+    expect(children.length).toBeGreaterThanOrEqual(2);
+  });
 });
 
 describe("buildObjectivesPrompt", () => {
