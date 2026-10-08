@@ -160,152 +160,207 @@ export async function generateCreationChecks(
       },
     };
   }
-  /** 上流へ送る前に止めるとき。頼んだ回数を戻して、印を外す。 */
-  const giveBack = () => deps.maps.releaseCreationChecks(userId, mapId, { refundAttempt: true });
-
-  await deps.identity.ensureUser({ userId, nowMs: now.getTime() });
-  const before = await generation.usage.get({ userId, monthKey, dayKey });
-  if (before.monthlyTokens >= AI_USAGE_LIMITS.monthlyTokens) {
-    console.warn("ai usage token safety valve reached", { userId, monthKey });
-    await giveBack();
-    return { status: 429, body: limitReached("tokens", now, "checks") };
-  }
-  const { reserved, usage: after } = await generation.usage.reserve({
-    userId,
-    monthKey,
-    dayKey,
-    updatedAt: now.toISOString(),
-    amount: CREATION_CHECKS_USAGE_COST,
-    limits:
-      generation.enforceUsageLimits === false
-        ? { dailyRequests: Number.MAX_SAFE_INTEGER, monthlyRequests: Number.MAX_SAFE_INTEGER }
-        : {
-            dailyRequests: AI_USAGE_LIMITS.dailyRequests,
-            monthlyRequests: AI_USAGE_LIMITS.monthlyRequests,
-          },
-  });
-  if (!reserved) {
-    await giveBack();
-    const kind: AiUsageLimitKind =
-      after.monthlyRequests + CREATION_CHECKS_USAGE_COST > AI_USAGE_LIMITS.monthlyRequests
-        ? "monthly"
-        : "daily";
-    return { status: 429, body: limitReached(kind, now, "checks") };
-  }
-
-  // 上流を待つ間に学習データが削除されたら、削除前に作り始めた問題を保存しない。
-  const startedAtMs = now.getTime();
-  const outcomes = await Promise.all(
-    batches.map(async (batch, index) => {
-      const label = `map-checks:${String(index + 1)}`;
-      const prompt = prompts[index]!;
-      const upstream = await requestCheckGeneration({
-        fetch: generation.fetch,
-        apiKey,
-        models,
-        prompt,
-        maxOutputTokens: CREATION_CHECKS_MAX_OUTPUT_TOKENS,
-        retryDelaysMs: generation.retryDelaysMs ?? UPSTREAM_RETRY_DELAYS_MS,
-        conceptId: label,
-      });
-      if (!upstream.ok) return { saved: [] as PersonalConceptCheck[], failed: batch.length };
-      const generated = readGeneratedText(upstream.raw);
-      // 本文が使えなくても課金は起きるので、判定より先に足す（取れなければ上界の見積もり）。
-      await generation.usage.addTokens({
-        userId,
-        monthKey,
-        dayKey,
-        tokens:
-          generated.totalTokens ?? estimateInputTokens(prompt) + CREATION_CHECKS_MAX_OUTPUT_TOKENS,
-        updatedAt: now.toISOString(),
-      });
-      if (!generated.ok) {
-        console.error("creation checks response was not usable", {
-          label,
-          reason: generated.reason,
-          detail: generated.detail,
-        });
-        return { saved: [], failed: batch.length };
-      }
-      const parsed = parseCreationChecks(
-        generated.text,
-        batch.map((target) => target.input.id),
-      );
-      if (!parsed.ok) {
-        console.error("creation checks were rejected", {
-          label,
-          reason: parsed.reason,
-          detail: parsed.detail,
-        });
-        return { saved: [], failed: batch.length };
-      }
-      const saved: PersonalConceptCheck[] = [];
-      let failed = 0;
-      for (const [position, result] of parsed.results.entries()) {
-        if (!result.ok) {
-          console.error("a creation check was rejected", {
-            label,
-            position,
-            reason: result.reason,
-            detail: result.detail,
-          });
-          failed++;
-          continue;
-        }
-        const target = batch[position]!;
-        const check: PersonalConceptCheck = {
-          ...result.check,
-          scope: "objective",
-          objectiveId: target.objective.id,
-          level,
-          model: generated.modelVersion ?? upstream.model,
-          generatedAt: now.toISOString(),
-        };
-        const stored = await deps.generation.checks.put(userId, check, startedAtMs, {
-          mapId,
-          origin: "map_creation",
-        });
-        if (!stored.saved) {
-          // 生成の間にマップ・ノード・項目か、学習データが消された。消したものの問題は残さない。
-          console.info("a creation check was discarded", { label, reason: stored.reason });
-          failed++;
-          continue;
-        }
-        saved.push(check);
-      }
-      return { saved, failed };
-    }),
-  );
-
-  const checks = outcomes.flatMap((outcome) => outcome.saved);
-  const failedCount = outcomes.reduce((sum, outcome) => sum + outcome.failed, 0);
-  if (checks.length === 0) {
-    // 上流へは送ったので、頼んだ回数は戻さない。印だけ外して、残りの回数で頼み直せるようにする。
-    await deps.maps.releaseCreationChecks(userId, mapId, { refundAttempt: false });
-    const attempts = (await deps.maps.get(userId, mapId))?.creationChecks?.attempts;
-    const retryable = attempts !== undefined && attempts < MAX_CREATION_CHECK_ATTEMPTS;
-    return {
-      status: 502,
-      body: {
-        error: "creation checks failed",
-        message: retryable
-          ? "確認問題を作れませんでした。もう一度だけ作り直せます。"
-          : "確認問題を作れませんでした。問題は確認問題の画面から1組ずつ作れます。",
-        retryable,
-      },
+  // 権利を取ったあとに例外が出ても、印と回数を残したままにしない（PR #284 の CodeRabbit のレビュー）。
+  // `settled` は印の後始末（戻す・外す・作成済みにする）を済ませたか。
+  let settled = false;
+  let sentUpstream = false;
+  let savedAny = false;
+  try {
+    /** 上流へ送る前に止めるとき。頼んだ回数を戻して、印を外す。 */
+    const giveBack = async () => {
+      await deps.maps.releaseCreationChecks(userId, mapId, { refundAttempt: true });
+      settled = true;
     };
+
+    await deps.identity.ensureUser({ userId, nowMs: now.getTime() });
+    const before = await generation.usage.get({ userId, monthKey, dayKey });
+    if (before.monthlyTokens >= AI_USAGE_LIMITS.monthlyTokens) {
+      console.warn("ai usage token safety valve reached", { userId, monthKey });
+      await giveBack();
+      return { status: 429, body: limitReached("tokens", now, "checks") };
+    }
+    const { reserved, usage: after } = await generation.usage.reserve({
+      userId,
+      monthKey,
+      dayKey,
+      updatedAt: now.toISOString(),
+      amount: CREATION_CHECKS_USAGE_COST,
+      limits:
+        generation.enforceUsageLimits === false
+          ? { dailyRequests: Number.MAX_SAFE_INTEGER, monthlyRequests: Number.MAX_SAFE_INTEGER }
+          : {
+              dailyRequests: AI_USAGE_LIMITS.dailyRequests,
+              monthlyRequests: AI_USAGE_LIMITS.monthlyRequests,
+            },
+    });
+    if (!reserved) {
+      await giveBack();
+      const kind: AiUsageLimitKind =
+        after.monthlyRequests + CREATION_CHECKS_USAGE_COST > AI_USAGE_LIMITS.monthlyRequests
+          ? "monthly"
+          : "daily";
+      return { status: 429, body: limitReached(kind, now, "checks") };
+    }
+
+    // 上流を待つ間に学習データが削除されたら、削除前に作り始めた問題を保存しない。
+    const startedAtMs = now.getTime();
+    sentUpstream = true;
+    // 1つが例外で止まっても他を待つ。待たずに後始末をすると、そのあとに保存された組が残るのに
+    // 状態が「未作成」のままになる。
+    const results = await Promise.allSettled(
+      batches.map(async (batch, index) => {
+        const label = `map-checks:${String(index + 1)}`;
+        const prompt = prompts[index]!;
+        const upstream = await requestCheckGeneration({
+          fetch: generation.fetch,
+          apiKey,
+          models,
+          prompt,
+          maxOutputTokens: CREATION_CHECKS_MAX_OUTPUT_TOKENS,
+          retryDelaysMs: generation.retryDelaysMs ?? UPSTREAM_RETRY_DELAYS_MS,
+          conceptId: label,
+        });
+        if (!upstream.ok) return { saved: [] as PersonalConceptCheck[], failed: batch.length };
+        const generated = readGeneratedText(upstream.raw);
+        // 本文が使えなくても課金は起きるので、判定より先に足す（取れなければ上界の見積もり）。
+        await generation.usage.addTokens({
+          userId,
+          monthKey,
+          dayKey,
+          tokens:
+            generated.totalTokens ??
+            estimateInputTokens(prompt) + CREATION_CHECKS_MAX_OUTPUT_TOKENS,
+          updatedAt: now.toISOString(),
+        });
+        if (!generated.ok) {
+          console.error("creation checks response was not usable", {
+            label,
+            reason: generated.reason,
+            detail: generated.detail,
+          });
+          return { saved: [], failed: batch.length };
+        }
+        const parsed = parseCreationChecks(
+          generated.text,
+          batch.map((target) => target.input.id),
+        );
+        if (!parsed.ok) {
+          console.error("creation checks were rejected", {
+            label,
+            reason: parsed.reason,
+            detail: parsed.detail,
+          });
+          return { saved: [], failed: batch.length };
+        }
+        const saved: PersonalConceptCheck[] = [];
+        let failed = 0;
+        for (const [position, result] of parsed.results.entries()) {
+          if (!result.ok) {
+            console.error("a creation check was rejected", {
+              label,
+              position,
+              reason: result.reason,
+              detail: result.detail,
+            });
+            failed++;
+            continue;
+          }
+          const target = batch[position]!;
+          const check: PersonalConceptCheck = {
+            ...result.check,
+            scope: "objective",
+            objectiveId: target.objective.id,
+            level,
+            model: generated.modelVersion ?? upstream.model,
+            generatedAt: now.toISOString(),
+          };
+          const stored = await deps.generation.checks.put(userId, check, startedAtMs, {
+            mapId,
+            origin: "map_creation",
+          });
+          if (!stored.saved) {
+            // 生成の間にマップ・ノード・項目か、学習データが消された。消したものの問題は残さない。
+            console.info("a creation check was discarded", { label, reason: stored.reason });
+            failed++;
+            continue;
+          }
+          saved.push(check);
+          savedAny = true;
+        }
+        return { saved, failed };
+      }),
+    );
+    const outcomes = results.map((result) => {
+      // 例外は飲み込まずにそのまま伝える。後始末は finally で行う。
+      if (result.status === "rejected") throw result.reason;
+      return result.value;
+    });
+
+    const checks = outcomes.flatMap((outcome) => outcome.saved);
+    const failedCount = outcomes.reduce((sum, outcome) => sum + outcome.failed, 0);
+    if (checks.length === 0) {
+      // 上流へは送ったので、頼んだ回数は戻さない。印だけ外して、残りの回数で頼み直せるようにする。
+      await deps.maps.releaseCreationChecks(userId, mapId, { refundAttempt: false });
+      settled = true;
+      const attempts = (await deps.maps.get(userId, mapId))?.creationChecks?.attempts;
+      const retryable = attempts !== undefined && attempts < MAX_CREATION_CHECK_ATTEMPTS;
+      return {
+        status: 502,
+        body: {
+          error: "creation checks failed",
+          message: retryable
+            ? "確認問題を作れませんでした。もう一度だけ作り直せます。"
+            : "確認問題を作れませんでした。問題は確認問題の画面から1組ずつ作れます。",
+          retryable,
+        },
+      };
+    }
+    const completed = await deps.maps.completeCreationChecks(userId, mapId, now.toISOString());
+    settled = true;
+    if (!completed) {
+      // 作っている間にマップが消された。問題もマップと一緒に消えている。
+      return { status: 404, body: { error: "learning map not found" } };
+    }
+    console.info("creation checks completed", {
+      mapId,
+      saved: checks.length,
+      failed: failedCount,
+      skipped: skippedCount,
+    });
+    return { status: 200, body: { checks, failedCount, skippedCount } };
+  } finally {
+    if (!settled) {
+      await settleAfterThrow(deps, userId, mapId, {
+        sentUpstream,
+        savedAny,
+        nowIso: now.toISOString(),
+      });
+    }
   }
-  if (!(await deps.maps.completeCreationChecks(userId, mapId, now.toISOString()))) {
-    // 作っている間にマップが消された。問題もマップと一緒に消えている。
-    return { status: 404, body: { error: "learning map not found" } };
+}
+
+/**
+ * 権利を取ったあとに例外が出たときの後始末。保存できた組があれば作成済みにし、
+ * 無ければ印を外す（上流へ送る前なら頼んだ回数も戻す）。
+ *
+ * 後始末の失敗はログに残し、元の例外をそのまま伝える（後始末の失敗で原因を上書きしない）。
+ * 印は有効期間を過ぎれば無視されるので、後始末に失敗しても固まりはしない。
+ */
+async function settleAfterThrow(
+  deps: GenerateLearningMapDeps,
+  userId: string,
+  mapId: string,
+  state: { sentUpstream: boolean; savedAny: boolean; nowIso: string },
+): Promise<void> {
+  try {
+    if (state.savedAny) {
+      await deps.maps.completeCreationChecks(userId, mapId, state.nowIso);
+    } else {
+      await deps.maps.releaseCreationChecks(userId, mapId, { refundAttempt: !state.sentUpstream });
+    }
+  } catch (cause) {
+    console.error("creation checks could not be settled after a failure", { mapId, cause });
   }
-  console.info("creation checks completed", {
-    mapId,
-    saved: checks.length,
-    failed: failedCount,
-    skipped: skippedCount,
-  });
-  return { status: 200, body: { checks, failedCount, skippedCount } };
 }
 
 /** 作成時の問題を頼む1回分。 */

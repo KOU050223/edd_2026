@@ -564,6 +564,54 @@ describe("POST /v1/learning-maps/:id/checks:generate（#247）", () => {
     expect(await usedRequests()).toBe(MAP_GENERATION_USAGE_COST);
   });
 
+  it("上流へ送る前に例外が出たら、印を外し、頼んだ回数も戻す", async () => {
+    const map = await generatedMap(3);
+    vi.spyOn(usage, "reserve").mockRejectedValueOnce(new Error("d1 is down"));
+
+    const res = await send("POST", `/learning-maps/${map.id}/checks:generate`);
+
+    expect(res.status).toBe(500);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect((await maps.get("user-a", map.id))?.creationChecks).toMatchObject({
+      attempts: 0,
+      startedAtMs: null,
+      doneAt: null,
+    });
+  });
+
+  it("一部を保存したあとに例外が出たら、保存できた組を残して作成済みにする", async () => {
+    const map = await generatedMap(4);
+    const put = checks.put.bind(checks);
+    let calls = 0;
+    vi.spyOn(checks, "put").mockImplementation((...args) => {
+      calls++;
+      return calls === 1 ? put(...args) : Promise.reject(new Error("d1 is down"));
+    });
+
+    const res = await send("POST", `/learning-maps/${map.id}/checks:generate`);
+
+    expect(res.status).toBe(500);
+    expect(await checks.listMapCreationChecks("user-a")).toHaveLength(1);
+    expect((await maps.get("user-a", map.id))?.creationChecks).toMatchObject({
+      doneAt: NOW.toISOString(),
+      startedAtMs: null,
+    });
+  });
+
+  it("上流へ送ったあと、保存する前に例外が出たら、印だけ外す", async () => {
+    const map = await generatedMap(2);
+    vi.spyOn(usage, "addTokens").mockRejectedValue(new Error("d1 is down"));
+
+    const res = await send("POST", `/learning-maps/${map.id}/checks:generate`);
+
+    expect(res.status).toBe(500);
+    expect((await maps.get("user-a", map.id))?.creationChecks).toMatchObject({
+      attempts: 1,
+      startedAtMs: null,
+      doneAt: null,
+    });
+  });
+
   it("途中で止まった要求の印は、有効期間を過ぎたら無視して頼める", async () => {
     const map = await generatedMap(1);
     await maps.claimCreationChecks("user-a", map.id, {
