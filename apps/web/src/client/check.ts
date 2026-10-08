@@ -234,23 +234,29 @@ function isGenerationConsent(value: unknown): value is CheckGenerationConsent {
   );
 }
 
+/**
+ * 生成への同意の状態を読む。`path` は確認問題（既定）か、マップの AI 生成
+ * （`MAP_GENERATION_CONSENT_PATH`、#243）。どちらも同じ形で返る。
+ */
 export async function fetchGenerationConsent(
   fetcher: typeof fetch = fetch,
   sessionRetries: boolean | number = false,
+  path: string = CHECK_GENERATION_CONSENT_PATH,
 ): Promise<CheckGenerationConsent> {
-  const body = await requestJson<unknown>(CHECK_GENERATION_CONSENT_PATH, fetcher, sessionRetries);
+  const body = await requestJson<unknown>(path, fetcher, sessionRetries);
   if (!isGenerationConsent(body)) throw new ApiError("unavailable");
   return body;
 }
 
-/** 「今後表示しない」を記録する、または取り消す。 */
+/** 「今後表示しない」を記録する、または取り消す。`path` は {@link fetchGenerationConsent} と同じ。 */
 export async function changeGenerationConsent(
   change: { grant: number } | "revoke",
   fetcher: typeof fetch = fetch,
+  path: string = CHECK_GENERATION_CONSENT_PATH,
 ): Promise<CheckGenerationConsent> {
   let response: Response;
   try {
-    response = await fetcher(CHECK_GENERATION_CONSENT_PATH, {
+    response = await fetcher(path, {
       method: change === "revoke" ? "DELETE" : "PUT",
       ...(change === "revoke"
         ? {}

@@ -55,9 +55,19 @@ export interface LearningMapSummary {
   updatedAt: string;
 }
 
+/**
+ * 作成時の確認問題の状態（#247）。AI で作るときに「確認問題も作る」を選んだマップだけが持つ。
+ *
+ * - `pending`: まだ作っていない（または1回失敗した）。作れる。
+ * - `done`: 作成済み。
+ * - `exhausted`: 頼める回数を使い切った。
+ */
+export type CreationChecksStatus = "pending" | "done" | "exhausted";
+
 export interface LearningMapView extends Omit<LearningMapSummary, "nodeCount"> {
   nodes: LearningMapNodeView[];
   edges: { from: string; to: string }[];
+  creationChecks?: { status: CreationChecksStatus };
 }
 
 /**

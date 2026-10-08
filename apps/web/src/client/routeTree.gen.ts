@@ -20,6 +20,7 @@ import { Route as FramedHistoryConversationIdRouteImport } from './routes/_frame
 import { Route as FramedMapLanguageRouteImport } from './routes/_framed/map.$language'
 import { Route as FramedMapsIndexRouteImport } from './routes/_framed/maps.index'
 import { Route as FramedMapsMapIdRouteImport } from './routes/_framed/maps.$mapId'
+import { Route as FramedMapsGenerateRouteImport } from './routes/_framed/maps.generate'
 import { Route as FramedSettingsIndexRouteImport } from './routes/_framed/settings/index'
 import { Route as FramedSettingsBillingRouteImport } from './routes/_framed/settings/billing'
 import { Route as FramedSettingsDataRouteImport } from './routes/_framed/settings/data'
@@ -81,6 +82,11 @@ const FramedMapsMapIdRoute = FramedMapsMapIdRouteImport.update({
   path: '/maps/$mapId',
   getParentRoute: () => FramedRouteRoute,
 } as any)
+const FramedMapsGenerateRoute = FramedMapsGenerateRouteImport.update({
+  id: '/maps/generate',
+  path: '/maps/generate',
+  getParentRoute: () => FramedRouteRoute,
+} as any)
 const FramedSettingsIndexRoute = FramedSettingsIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -116,6 +122,7 @@ export interface FileRoutesByFullPath {
   '/history/$conversationId': typeof FramedHistoryConversationIdRoute
   '/map/$language': typeof FramedMapLanguageRoute
   '/maps/$mapId': typeof FramedMapsMapIdRoute
+  '/maps/generate': typeof FramedMapsGenerateRoute
   '/settings/billing': typeof FramedSettingsBillingRoute
   '/settings/data': typeof FramedSettingsDataRoute
   '/settings/usage': typeof FramedSettingsUsageRoute
@@ -132,6 +139,7 @@ export interface FileRoutesByTo {
   '/history/$conversationId': typeof FramedHistoryConversationIdRoute
   '/map/$language': typeof FramedMapLanguageRoute
   '/maps/$mapId': typeof FramedMapsMapIdRoute
+  '/maps/generate': typeof FramedMapsGenerateRoute
   '/settings/billing': typeof FramedSettingsBillingRoute
   '/settings/data': typeof FramedSettingsDataRoute
   '/settings/usage': typeof FramedSettingsUsageRoute
@@ -151,6 +159,7 @@ export interface FileRoutesById {
   '/_framed/history/$conversationId': typeof FramedHistoryConversationIdRoute
   '/_framed/map/$language': typeof FramedMapLanguageRoute
   '/_framed/maps/$mapId': typeof FramedMapsMapIdRoute
+  '/_framed/maps/generate': typeof FramedMapsGenerateRoute
   '/_framed/settings/billing': typeof FramedSettingsBillingRoute
   '/_framed/settings/data': typeof FramedSettingsDataRoute
   '/_framed/settings/usage': typeof FramedSettingsUsageRoute
@@ -170,6 +179,7 @@ export interface FileRouteTypes {
     | '/history/$conversationId'
     | '/map/$language'
     | '/maps/$mapId'
+    | '/maps/generate'
     | '/settings/billing'
     | '/settings/data'
     | '/settings/usage'
@@ -186,6 +196,7 @@ export interface FileRouteTypes {
     | '/history/$conversationId'
     | '/map/$language'
     | '/maps/$mapId'
+    | '/maps/generate'
     | '/settings/billing'
     | '/settings/data'
     | '/settings/usage'
@@ -204,6 +215,7 @@ export interface FileRouteTypes {
     | '/_framed/history/$conversationId'
     | '/_framed/map/$language'
     | '/_framed/maps/$mapId'
+    | '/_framed/maps/generate'
     | '/_framed/settings/billing'
     | '/_framed/settings/data'
     | '/_framed/settings/usage'
@@ -297,6 +309,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof FramedMapsMapIdRouteImport
       parentRoute: typeof FramedRouteRoute
     }
+    '/_framed/maps/generate': {
+      id: '/_framed/maps/generate'
+      path: '/maps/generate'
+      fullPath: '/maps/generate'
+      preLoaderRoute: typeof FramedMapsGenerateRouteImport
+      parentRoute: typeof FramedRouteRoute
+    }
     '/_framed/settings/': {
       id: '/_framed/settings/'
       path: '/'
@@ -360,6 +379,7 @@ interface FramedRouteRouteChildren {
   FramedHistoryConversationIdRoute: typeof FramedHistoryConversationIdRoute
   FramedMapLanguageRoute: typeof FramedMapLanguageRoute
   FramedMapsMapIdRoute: typeof FramedMapsMapIdRoute
+  FramedMapsGenerateRoute: typeof FramedMapsGenerateRoute
   FramedHistoryIndexRoute: typeof FramedHistoryIndexRoute
   FramedMapsIndexRoute: typeof FramedMapsIndexRoute
   FramedMapsMapIdEditRoute: typeof FramedMapsMapIdEditRoute
@@ -373,6 +393,7 @@ const FramedRouteRouteChildren: FramedRouteRouteChildren = {
   FramedHistoryConversationIdRoute: FramedHistoryConversationIdRoute,
   FramedMapLanguageRoute: FramedMapLanguageRoute,
   FramedMapsMapIdRoute: FramedMapsMapIdRoute,
+  FramedMapsGenerateRoute: FramedMapsGenerateRoute,
   FramedHistoryIndexRoute: FramedHistoryIndexRoute,
   FramedMapsIndexRoute: FramedMapsIndexRoute,
   FramedMapsMapIdEditRoute: FramedMapsMapIdEditRoute,

@@ -110,6 +110,9 @@ export function buildSkeletonPrompt(input: SkeletonPromptInput): string {
     "既存の概念と同じ内容のノードは新しく作らず、conceptId でその ID を参照する。",
     "利用者が理解済みの概念は、要るなら参照で置き、それを前提に先へ進む構成にする。",
     "前提は各ノード1つまで。最初に学ぶノードは前提なし。nodes は学ぶ順に並べ、前提は自分より前のノードにする。",
+    // 例と指示が一本道だけだと、AI は毎回「直前のノード」を前提にし、一本道のマップを返した（PR #285）。
+    "前提は、そのノードを学ぶのに本当に必要なノードにする（直前のノードとは限らない）。" +
+      "互いに独立して学べる概念は、同じ前提から枝分かれさせ、一本道にしない。",
     `表示名は ${String(MAX_NODE_LABEL_LENGTH)} 文字以内、概要は ${String(GENERATED_SUMMARY_TARGET_LENGTH)} 文字以内。`,
     `題名は ${String(MAX_MAP_TITLE_LENGTH)} 文字以内、説明は ${String(MAX_MAP_DESCRIPTION_LENGTH)} 文字以内。すべて日本語。`,
     "",
@@ -121,6 +124,7 @@ export function buildSkeletonPrompt(input: SkeletonPromptInput): string {
       nodes: [
         { key: "n1", label: "表示名", summary: "概要" },
         { key: "n2", conceptId: "既存の概念の ID", prerequisite: "n1" },
+        { key: "n3", label: "表示名", summary: "概要", prerequisite: "n1" },
       ],
     }),
     "key は n1, n2, … と振る。新しいノードは label と summary、参照のノードは conceptId だけを持つ。",
