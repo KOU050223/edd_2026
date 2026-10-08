@@ -40,6 +40,7 @@ import type {
   StoredEventInput,
   StoredImportSessionInput,
   StoredLearningMap,
+  StoredLearningObjective,
   StoredMapContent,
   StoredOwnMapNode,
 } from "./types.js";
@@ -78,6 +79,8 @@ export interface InMemoryRepositoryStore {
   readonly personalChecksByUser: Map<string, Map<string, PersonalConceptCheck>>;
   /** userId -> 生成への同意。D1 の check_generation_consents に対応する。 */
   readonly checkGenerationConsents: Map<string, ConsentRecord>;
+  /** userId -> 学習マップの AI 生成への同意。D1 の map_generation_consents に対応する。 */
+  readonly mapGenerationConsents: Map<string, ConsentRecord>;
   /** mapId -> マップ（ノード・線・項目込み）。D1 の learning_maps とその下の表に対応する。 */
   readonly learningMaps: Map<string, InMemoryLearningMap>;
 }
@@ -102,6 +105,7 @@ export function createInMemoryRepositoryStore(): InMemoryRepositoryStore {
     conceptChecks: new Map(),
     personalChecksByUser: new Map(),
     checkGenerationConsents: new Map(),
+    mapGenerationConsents: new Map(),
     learningMaps: new Map(),
   };
 }
@@ -264,6 +268,7 @@ export class InMemoryIdentityRepository implements IdentityRepository {
     // user_concept_checks / check_generation_consents も CASCADE で参照する（#236）。
     this.store.personalChecksByUser.delete(userId);
     this.store.checkGenerationConsents.delete(userId);
+    this.store.mapGenerationConsents.delete(userId);
     // learning_maps も CASCADE で参照し、ノード・線・項目はマップから CASCADE で消える（#242）。
     for (const [mapId, map] of this.store.learningMaps) {
       if (map.ownerUserId === userId) this.store.learningMaps.delete(mapId);
@@ -674,21 +679,32 @@ export class InMemoryPersonalCheckRepository implements PersonalCheckRepository 
 
 /** `CheckGenerationConsentRepository` のインメモリ実装。テスト用。 */
 export class InMemoryCheckGenerationConsentRepository implements CheckGenerationConsentRepository {
-  constructor(private readonly store: InMemoryRepositoryStore = createInMemoryRepositoryStore()) {}
+  constructor(
+    private readonly store: InMemoryRepositoryStore = createInMemoryRepositoryStore(),
+    private readonly kind:
+      "checkGenerationConsents" | "mapGenerationConsents" = "checkGenerationConsents",
+  ) {}
 
   get(userId: string): Promise<ConsentRecord | null> {
-    const record = this.store.checkGenerationConsents.get(userId);
+    const record = this.store[this.kind].get(userId);
     return Promise.resolve(record === undefined ? null : { ...record });
   }
 
   put(userId: string, record: ConsentRecord): Promise<void> {
-    this.store.checkGenerationConsents.set(userId, { ...record });
+    this.store[this.kind].set(userId, { ...record });
     return Promise.resolve();
   }
 
   delete(userId: string): Promise<void> {
-    this.store.checkGenerationConsents.delete(userId);
+    this.store[this.kind].delete(userId);
     return Promise.resolve();
+  }
+}
+
+/** 学習マップの AI 生成の同意。形は確認問題の同意と同じで、記録の置き場所だけが違う。 */
+export class InMemoryMapGenerationConsentRepository extends InMemoryCheckGenerationConsentRepository {
+  constructor(store: InMemoryRepositoryStore = createInMemoryRepositoryStore()) {
+    super(store, "mapGenerationConsents");
   }
 }
 
@@ -707,6 +723,7 @@ export class InMemoryLearningMapRepository implements LearningMapRepository {
     params: {
       id: string;
       content: StoredMapContent;
+      objectives?: readonly StoredLearningObjective[];
       nowIso: string;
       nowMs: number;
       maxMaps: number;
@@ -714,6 +731,22 @@ export class InMemoryLearningMapRepository implements LearningMapRepository {
   ): Promise<{ created: boolean }> {
     if (this.ownedMaps(ownerUserId).length >= params.maxMaps) {
       return Promise.resolve({ created: false });
+    }
+    // D1 では項目がノードを外部キーで参照し、無いノードを指すと batch ごと失敗する。
+    const ownIds = new Set(
+      params.content.nodes.filter((node) => node.kind === "own").map((node) => node.conceptId),
+    );
+    const objectives = new Map<string, StoredLearningObjective[]>();
+    for (const objective of params.objectives ?? []) {
+      if (!ownIds.has(objective.conceptId)) {
+        return Promise.reject(
+          new Error(`objective points to a node not in this map: ${objective.conceptId}`),
+        );
+      }
+      objectives.set(objective.conceptId, [
+        ...(objectives.get(objective.conceptId) ?? []),
+        { ...objective },
+      ]);
     }
     this.store.learningMaps.set(params.id, {
       ...structuredClone(params.content),
@@ -723,7 +756,7 @@ export class InMemoryLearningMapRepository implements LearningMapRepository {
       createdAt: params.nowIso,
       updatedAt: params.nowIso,
       updatedAtMs: params.nowMs,
-      objectives: new Map(),
+      objectives,
     });
     return Promise.resolve({ created: true });
   }

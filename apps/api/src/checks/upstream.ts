@@ -165,7 +165,12 @@ export interface UpstreamRequest {
   models: readonly AllowedModel[];
   prompt: string;
   retryDelaysMs: readonly number[];
-  /** ログに載せるため。 */
+  /**
+   * 出力の上限（tokens）。省略は `AI_USAGE_LIMITS.outputTokensPerRequest`。
+   * マップの生成（`maps/generate.ts`）だけが、1回で多くのノードを作るために広げる。
+   */
+  maxOutputTokens?: number;
+  /** ログに載せるため。マップの生成では何を作る呼び出しか（例: `map:skeleton`）。 */
   conceptId: string;
 }
 
@@ -318,7 +323,7 @@ export function requestCheckGeneration(request: UpstreamRequest): Promise<Upstre
               generationConfig: {
                 temperature: TEMPERATURE,
                 // 出力上限は常に送る。上流の既定値で走らせると1回あたりの単価が決まらない。
-                maxOutputTokens: AI_USAGE_LIMITS.outputTokensPerRequest,
+                maxOutputTokens: request.maxOutputTokens ?? AI_USAGE_LIMITS.outputTokensPerRequest,
                 // JSON を要求する。コードブロックの囲みが来ないようにするための指定で、
                 // 受理側（`response.ts`）は囲みを剥がさずに拒否する。
                 responseMimeType: "application/json",

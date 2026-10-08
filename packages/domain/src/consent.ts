@@ -131,6 +131,17 @@ export function createConsentRecord(grantedAt: string): ConsentRecord {
  */
 export const CHECK_GENERATION_CONSENT_VERSION = 1;
 
+/**
+ * 学習マップの AI 生成で AI へ送る内容の同意（#243）。
+ *
+ * 確認問題（{@link CHECK_GENERATION_CONSENT_VERSION}）と同じ形で、**マップを作るその場で**確認する。
+ * 送るものが違う（本人の理解度を送る）ので、文面と版は別に持つ。
+ *
+ * 版の履歴:
+ * - 1: テーマ・目標・技術レベルと、既存の Concept の表示名・本人の理解度を送る（#243）
+ */
+export const MAP_GENERATION_CONSENT_VERSION = 1;
+
 /** 確認問題の生成で、1組の材料に載せる自力解決した質問の最大件数。 */
 export const CHECK_MATERIAL_MAX_QUESTIONS = 3;
 
@@ -147,4 +158,16 @@ export const CHECK_GENERATION_NOTICE = [
   "選択したコードと AI の回答は送りません。",
   "作った問題はあなたの学習データとして保存し、学習データの削除や退会で一緒に消えます。",
   "選んだ答えは保存しません。1組作るごとに AI の利用回数を1回使います。",
+].join("\n");
+
+/** 学習マップを AI で作る前に示す文面。docs/data-privacy.md「学習マップの生成」と揃える。 */
+export const MAP_GENERATION_NOTICE = [
+  "学習マップを作るため、次の内容を運営が契約する AI（Google Gemini）へ送ります。",
+  "・入力したテーマ・目標と、選んだ技術レベル",
+  "・マップに入れられる既存の概念（用意された概念と、あなたが作ったマップのノード）の表示名と、" +
+    "それぞれのあなたの理解度（理解済み・学習中・未着手）",
+  "・あなたが「理解済み」「学習中」の概念の表示名",
+  "質問の本文・選択したコード・AI の回答は送りません。",
+  "作ったマップはあなたのマップとして保存し、マップの削除や退会で消えます。",
+  "1つのマップを作るごとに AI の利用回数を 5 回使います。",
 ].join("\n");

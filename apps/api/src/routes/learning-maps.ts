@@ -1,5 +1,7 @@
 /**
  * `/v1/learning-maps`（Issue #242 / Web/18）。利用者が手で作る学習マップの作成・編集・削除。
+ * AI でマップを作る `POST /v1/learning-maps:generate` と、その同意の
+ * `GET` / `PUT` / `DELETE /v1/map-generation-consent` もここに置く（#243 / Web/19）。
  *
  * 対象のユーザーは `c.get("user").userId` だけから決める（routes/account.ts と同じ規律）。
  * 他人のマップは取得・編集・削除とも 404 にする（存在を隠す）。
@@ -8,24 +10,34 @@
 import { Hono, type Context } from "hono";
 import { HTTPException } from "hono/http-exception";
 import * as v from "valibot";
-import type { Concept, LearningObjective } from "@gakushu-sochi/domain";
+import {
+  MAP_GENERATION_CONSENT_VERSION,
+  type Concept,
+  type ConsentRecord,
+  type LearningObjective,
+} from "@gakushu-sochi/domain";
 import type { AuthVariables } from "../auth/middleware.js";
+import { rateLimit } from "../auth/rate-limit.js";
 import {
   MAX_CLIENT_CONCEPTS,
   MAX_OWN_NODES,
   MAX_MAPS_PER_USER,
+  generateLearningMapSchema,
   learningMapContentSchema,
   learningObjectivesInputSchema,
+  type GenerateLearningMapResponse,
   type LearningMapView,
   type LearningObjectiveSource,
   type LearningObjectiveView,
   type ListClientMapConceptsResponse,
   type ListLearningMapsResponse,
+  type MapGenerationConsentBody,
   type PutLearningObjectivesResponse,
   type ReferencedConcept,
   type SaveLearningMapResponse,
 } from "../contract/learning-maps.js";
 import { newMapId, resolveMapContent } from "../maps/content.js";
+import { generateLearningMap, type MapGenerationDeps } from "../maps/generate.js";
 import type {
   IdentityRepository,
   LearningMapRepository,
@@ -44,6 +56,11 @@ export interface LearningMapsDeps {
   newKey: () => string;
   nowIso: () => string;
   nowMs: () => number;
+  /**
+   * AI でマップを作るための依存（#243）。無ければ生成と同意の口は 503 を返す。
+   * 手で作るマップのテストでは渡さない。
+   */
+  generation?: MapGenerationDeps;
 }
 
 export type LearningMapsDepsResolver = (env: CloudflareBindings) => LearningMapsDeps;
@@ -77,6 +94,20 @@ async function parseBody<TSchema extends v.GenericSchema>(
 
 function notFound(): never {
   throw new HTTPException(404, { message: "learning map not found" });
+}
+
+/** AI の生成の依存が無い。運営側の設定漏れ。 */
+function generationNotConfigured(): never {
+  throw new HTTPException(503, { message: "map generation is not configured" });
+}
+
+function consentBody(record: ConsentRecord | null): MapGenerationConsentBody {
+  const granted = record !== null && record.version === MAP_GENERATION_CONSENT_VERSION;
+  return {
+    version: MAP_GENERATION_CONSENT_VERSION,
+    granted,
+    ...(granted ? { grantedAt: record.grantedAt } : {}),
+  };
 }
 
 function toObjectiveView(objective: StoredLearningObjective): LearningObjectiveView {
@@ -217,6 +248,69 @@ export function createLearningMapsRoute(resolve: LearningMapsDepsResolver) {
       })),
     };
     return c.json(body, 200, { "cache-control": "no-store" });
+  });
+
+  // `/learning-maps*`（生成の口を含む）は `app.ts` が回数を制限している。ここで重ねると1回が2回と数えられる
+  // （PR #283 のレビュー）。同意の口は `app.ts` の対象外なので、ここで制限する。
+  // 認証（`app.ts` の `/v1/*`）の後に走るので userId で数えられる。
+  app.use(
+    "/map-generation-consent",
+    rateLimit((env) => env.PROFILE_RATE_LIMITER),
+  );
+
+  app.post("/learning-maps:generate", async (c) => {
+    const userId = c.get("user").userId;
+    const input = await parseBody(c, generateLearningMapSchema);
+    const deps = resolve(c.env);
+    const generation = deps.generation ?? generationNotConfigured();
+    const outcome = await generateLearningMap({ ...deps, generation }, userId, input, c.req.path);
+    if (outcome.status !== 201) return c.json(outcome.body, outcome.status);
+    const map = await deps.maps.get(userId, outcome.mapId);
+    // 作った直後に読めないなら、書き込みか読み取りが壊れている。空の応答で隠さない。
+    if (map === null) throw new Error("generated learning map could not be read back");
+    const body: GenerateLearningMapResponse = { map: await toView(deps, userId, map) };
+    return c.json(body, 201);
+  });
+
+  app.get("/map-generation-consent", async (c) => {
+    const generation = resolve(c.env).generation ?? generationNotConfigured();
+    const record = await generation.consents.get(c.get("user").userId);
+    return c.json(consentBody(record), 200, { "cache-control": "no-store" });
+  });
+
+  app.put("/map-generation-consent", async (c) => {
+    const { version } = await parseBody(
+      c,
+      v.strictObject({ version: v.pipe(v.number(), v.integer()) }),
+    );
+    if (version !== MAP_GENERATION_CONSENT_VERSION) {
+      // 古い文面を見て押した同意を、今の文面への同意として記録しない（確認問題と同じ）。
+      return c.json(
+        {
+          error: "consent_outdated",
+          message:
+            "確認の文面が更新されました。ページを再読み込みして、最新の内容を確認してください。",
+        },
+        409,
+      );
+    }
+    const userId = c.get("user").userId;
+    const deps = resolve(c.env);
+    const generation = deps.generation ?? generationNotConfigured();
+    const now = generation.now();
+    await deps.identity.ensureUser({ userId, nowMs: now.getTime() });
+    const record: ConsentRecord = {
+      version: MAP_GENERATION_CONSENT_VERSION,
+      grantedAt: now.toISOString(),
+    };
+    await generation.consents.put(userId, record);
+    return c.json(consentBody(record), 200, { "cache-control": "no-store" });
+  });
+
+  app.delete("/map-generation-consent", async (c) => {
+    const generation = resolve(c.env).generation ?? generationNotConfigured();
+    await generation.consents.delete(c.get("user").userId);
+    return c.json(consentBody(null), 200, { "cache-control": "no-store" });
   });
 
   app.get("/learning-maps", async (c) => {
