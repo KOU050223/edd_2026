@@ -271,10 +271,6 @@ export function createLearningMapsRoute(resolve: LearningMapsDepsResolver) {
     "/map-generation-consent",
     rateLimit((env) => env.PROFILE_RATE_LIMITER),
   );
-  app.use(
-    "/learning-maps/:id/checks:generate",
-    rateLimit((env) => env.PROFILE_RATE_LIMITER),
-  );
 
   // 作成時の確認問題（#247）。AI で作ったマップを保存したあと、Web が続けて呼ぶ。
   app.post("/learning-maps/:id/checks:generate", async (c) => {

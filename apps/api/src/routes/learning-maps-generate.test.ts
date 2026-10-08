@@ -301,9 +301,12 @@ describe("POST /v1/learning-maps:generate", () => {
     expect((await maps.listByOwner("user-a")).map((map) => map.id)).toEqual([source.id]);
   });
 
-  it("生成の口はルートで回数を数えない（`app.ts` の `/v1/learning-maps*` が数える）", async () => {
+  it("生成と作成時の問題の口はルートで回数を数えない（`app.ts` の `/v1/learning-maps*` が数える）", async () => {
     limiterCalls.count = 0;
-    await send("POST", "/learning-maps:generate", GOAL_REQUEST);
+    const { map } = (await (
+      await send("POST", "/learning-maps:generate", GOAL_REQUEST)
+    ).json()) as GenerateLearningMapResponse;
+    await send("POST", `/learning-maps/${map.id}/checks:generate`);
     expect(limiterCalls.count).toBe(0);
 
     // 同意の口は `app.ts` の対象外なので、ルートで数える。
