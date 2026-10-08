@@ -1,6 +1,6 @@
 import { createFileRoute, Link, useBlocker, useRouter } from "@tanstack/react-router";
 import { CONCEPTS } from "@gakushu-sochi/domain";
-import { useMemo, useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState, type TextareaHTMLAttributes } from "react";
 import { ApiError, createSubmitGuard } from "../../api.js";
 import { toErrorText } from "../../errors.js";
 import { layoutTrees } from "../../learning-map.js";
@@ -33,7 +33,7 @@ import {
   removeNode,
   toContentRequest,
   setPrerequisite,
-  textareaRows,
+  fitTextareaHeight,
   updateOwnNode,
   objectiveItemsFrom,
   objectiveProblems,
@@ -52,6 +52,58 @@ interface ReferenceCandidate {
   label: string;
   /** 領域名か、元のマップの題名。 */
   area: string;
+}
+
+/**
+ * 中身に合わせて伸びる入力欄（#286）。描いた中身の高さを測り、`minRows`〜`maxRows` 行に収める。
+ * 欄の幅が変わると折り返しも変わるので、幅の変化でも測り直す。
+ */
+function AutoTextarea({
+  minRows,
+  maxRows,
+  value,
+  ...props
+}: Omit<TextareaHTMLAttributes<HTMLTextAreaElement>, "rows" | "value"> & {
+  minRows: number;
+  maxRows: number;
+  value: string;
+}) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => {
+    const element = ref.current;
+    if (element === null) return;
+    const fit = () => {
+      const style = getComputedStyle(element);
+      const px = (value: string) => Number.parseFloat(value) || 0;
+      const fontSize = px(style.fontSize);
+      // `line-height: normal` は数値にならないので、文字の大きさから見積もる。
+      const lineHeight = px(style.lineHeight) || fontSize * 1.5;
+      // 縮める方向にも合わせるため、一度高さを外してから測る。
+      element.style.height = "auto";
+      const { height, scroll } = fitTextareaHeight(
+        {
+          scrollHeight: element.scrollHeight,
+          lineHeight,
+          padding: px(style.paddingTop) + px(style.paddingBottom),
+          frame: px(style.borderTopWidth) + px(style.borderBottomWidth),
+        },
+        { min: minRows, max: maxRows },
+      );
+      element.style.height = `${String(height)}px`;
+      element.style.overflowY = scroll ? "auto" : "hidden";
+    };
+    fit();
+    // 自分で高さを変えたときにも通知が来るので、幅が変わったときだけ測り直す。
+    let width = element.clientWidth;
+    const observer = new ResizeObserver(() => {
+      if (element.clientWidth === width) return;
+      width = element.clientWidth;
+      fit();
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [value, minRows, maxRows]);
+  return <textarea ref={ref} rows={minRows} value={value} {...props} />;
 }
 
 /** 保存の失敗を、利用者が何をすればよいか分かる文面にする（RULE-004）。 */
@@ -258,10 +310,11 @@ function NodeEditor({
           </label>
           <label>
             概要（確認問題を作るときに AI へ渡します）
-            <textarea
+            <AutoTextarea
               value={node.summary}
               maxLength={EDITOR_LIMITS.summary}
-              rows={textareaRows(node.summary, { min: 3, max: 6 })}
+              minRows={3}
+              maxRows={8}
               disabled={disabled}
               onChange={(event) =>
                 onChange(updateOwnNode(draft, node.ref, { summary: event.target.value }))
@@ -516,11 +569,11 @@ function MapEditor() {
         </label>
         <label>
           説明（任意）
-          <textarea
+          <AutoTextarea
             value={draft.description}
             maxLength={EDITOR_LIMITS.description}
-            // 中身に合わせて伸ばす。固定の行数では長い説明が切れて読めない（#286）。
-            rows={textareaRows(draft.description)}
+            minRows={2}
+            maxRows={8}
             disabled={busy}
             onChange={(event) => change({ ...draft, description: event.target.value })}
           />

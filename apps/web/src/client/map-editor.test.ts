@@ -21,7 +21,7 @@ import {
   setPrerequisite,
   updateOwnNode,
   type MapDraft,
-  textareaRows,
+  fitTextareaHeight,
 } from "./map-editor.js";
 
 const MAP: LearningMapView = {
@@ -209,10 +209,22 @@ test("「理解すること」の下書きの変更・消える項目・保存�
   ).toEqual([`項目は ${String(EDITOR_LIMITS.objectives)} 個までです。`]);
 });
 
-test("入力欄の行数は中身に合わせて伸び、上限と下限に収まる（#286）", () => {
-  expect(textareaRows("")).toBe(2);
-  expect(textareaRows("あ".repeat(100))).toBe(3);
-  expect(textareaRows("1行目\n2行目\n3行目")).toBe(3);
-  expect(textareaRows("あ".repeat(400))).toBe(8);
-  expect(textareaRows("短い", { min: 3, max: 6 })).toBe(3);
+test("入力欄の高さは、測った中身の高さに合わせ、行数の上限と下限に収める（#286）", () => {
+  const metrics = { lineHeight: 20, padding: 16, frame: 2 };
+  const rows = { min: 3, max: 6 };
+  // 中身が短ければ3行分（20 * 3 + 余白 16 + 枠 2）。
+  expect(fitTextareaHeight({ ...metrics, scrollHeight: 36 }, rows)).toEqual({
+    height: 78,
+    scroll: false,
+  });
+  // 5行に折り返したなら、その高さまで伸ばす（行数は文字数ではなく描いた高さで決まる）。
+  expect(fitTextareaHeight({ ...metrics, scrollHeight: 116 }, rows)).toEqual({
+    height: 118,
+    scroll: false,
+  });
+  // 6行を超えたら6行で止め、欄の中をスクロールさせる。
+  expect(fitTextareaHeight({ ...metrics, scrollHeight: 300 }, rows)).toEqual({
+    height: 138,
+    scroll: true,
+  });
 });
