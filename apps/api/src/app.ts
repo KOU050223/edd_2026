@@ -7,6 +7,7 @@ import { rateLimit } from "./auth/rate-limit.js";
 import {
   D1AiUsageRepository,
   D1UserPlanRepository,
+  D1FixedMapCreatorRepository,
   D1AreaCompletionRepository,
   D1AuditLogRepository,
   D1CheckGenerationConsentRepository,
@@ -36,6 +37,7 @@ import { createUserSettingsRoute } from "./routes/user-settings.js";
 import { createConversationsRoute } from "./routes/conversations.js";
 import { createConversationLearningEventsRoute } from "./routes/conversation-learning-events.js";
 import { createLearningMapsRoute } from "./routes/learning-maps.js";
+import { createFixedMapsRoute } from "./routes/fixed-maps.js";
 import { randomKey } from "./maps/content.js";
 
 /** Cloudflare Worker から提供する HTTP API。 */
@@ -175,6 +177,11 @@ app.use(
 // 頻度の性質は Profile と同じなので同じ上限を使う。
 app.use(
   "/v1/learning-maps*",
+  rateLimit((env) => env.PROFILE_RATE_LIMITER),
+);
+// 言語別マップの項目の作り直し（#245）。使うのは作成者だけで、頻度は学習マップの編集と同じ。
+app.use(
+  "/v1/fixed-maps*",
   rateLimit((env) => env.PROFILE_RATE_LIMITER),
 );
 
@@ -380,6 +387,32 @@ app.route(
       consents: new D1MapGenerationConsentRepository(env.DB),
       events: new D1LearningEventRepository(env.DB),
       overrides: new D1MasteryOverrideRepository(env.DB),
+      enforceUsageLimits: env.CHECK_GENERATION_LIMITS !== "off",
+      now: () => new Date(),
+    },
+  })),
+);
+
+// 言語別マップの「理解すること」の作り直し（#245）。作成者だけが使える。
+// 回数上限とモデルはマップの AI 生成と同じ設定を使う。
+app.route(
+  "/v1",
+  createFixedMapsRoute((env) => ({
+    identity: new D1IdentityRepository(env.DB),
+    maps: new D1LearningMapRepository(env.DB),
+    creators: new D1FixedMapCreatorRepository(env.DB),
+    audit: new D1AuditLogRepository(env.DB),
+    fixedConcepts: CONCEPTS,
+    newKey: randomKey,
+    nowIso: () => new Date().toISOString(),
+    nowMs: () => Date.now(),
+    generation: {
+      apiKey: env.GEMINI_API_KEY,
+      model: env.GEMINI_MODEL,
+      models: parseModelList(env.CHECK_MODELS),
+      fetch: (input, init) => globalThis.fetch(input, init),
+      usage: new D1AiUsageRepository(env.DB),
+      plans: new D1UserPlanRepository(env.DB),
       enforceUsageLimits: env.CHECK_GENERATION_LIMITS !== "off",
       now: () => new Date(),
     },

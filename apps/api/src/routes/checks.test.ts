@@ -467,6 +467,29 @@ describe("POST /v1/checks:generate", () => {
     );
   });
 
+  it("生成の間に作成者が固定の項目を消したら、その項目の組を書き戻さない（#245）", async () => {
+    const harness = buildApp(OBJECTIVES);
+    const fetchMock = stubUpstream(generatedCheck());
+    const upstream = fetchMock.getMockImplementation() as () => Promise<Response>;
+    // 上流を待っている間に、作成者が確定でこの項目を消す。
+    fetchMock.mockImplementationOnce(async () => {
+      await harness.maps.replaceFixedObjectives({
+        expectedRevision: null,
+        revision: "r1",
+        conceptId: CONCEPT_ID,
+        objectives: [{ ...OBJECTIVES[1]!, source: "manual" }],
+        nowIso: NOW.toISOString(),
+      });
+      return upstream();
+    });
+    silenceInfo();
+
+    const response = await generate(harness, OBJECTIVE_BASIC);
+
+    expect(response.status).toBe(409);
+    expect(await harness.checks.listByConcept("user-a", CONCEPT_ID)).toEqual([]);
+  });
+
   it("項目ごとに別の組として保存し、同じ項目で作り直すと上書きする", async () => {
     stubUpstream(generatedCheck());
     silenceInfo();

@@ -34,10 +34,13 @@ export interface ProfileSummary {
 }
 
 /**
- * 利用者が手で作った学習マップのノードと「理解すること」（Issue #242）。
+ * 利用者ごとに API から読む Concept と「理解すること」（Issue #242、#245）。
  *
- * 固定の一覧（`CONCEPTS`）に足して「既知の概念一覧」に載せ、質問で手作りのノードにも
- * 理解度を積めるようにする。ノードの `language` はマップの ID で、言語では絞らない。
+ * `concepts` は利用者が手で作った学習マップのノード。固定の一覧（`CONCEPTS`）に足して
+ * 「既知の概念一覧」に載せ、質問で手作りのノードにも理解度を積めるようにする。
+ * ノードの `language` はマップの ID で、言語では絞らない。
+ *
+ * `objectives` は固定の Concept の項目（API の表にある。#245）と、手作りのノードの項目。
  */
 export interface UserConcepts {
   concepts: readonly Concept[];

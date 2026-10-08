@@ -70,7 +70,7 @@ type AppContext = Context<{ Bindings: CloudflareBindings; Variables: AuthVariabl
  * 本文を読んで検証する。拒否の理由には入力値を載せず、
  * こちらが書いた定型文とパスだけを返す（routes/conversations.ts と同じ）。
  */
-async function parseBody<TSchema extends v.GenericSchema>(
+export async function parseBody<TSchema extends v.GenericSchema>(
   c: AppContext,
   schema: TSchema,
 ): Promise<v.InferOutput<TSchema>> {
@@ -243,7 +243,7 @@ export function createLearningMapsRoute(resolve: LearningMapsDepsResolver) {
   }
 
   // VS Code が AI へ渡す「既知の概念一覧」に加える。参照のノードは元の Concept が
-  // 一覧に入っているので返さない。Web の編集画面は参照の候補として `?limit=` で全部読む。
+  // 一覧に入っているので返さない。固定の Concept の項目も一緒に返す（#245）。Web の編集画面は参照の候補として `?limit=` で全部読む。
   app.get("/learning-maps:concepts", async (c) => {
     const userId = c.get("user").userId;
     const raw = c.req.query("limit");
@@ -255,8 +255,16 @@ export function createLearningMapsRoute(resolve: LearningMapsDepsResolver) {
       });
     }
     const deps = resolve(c.env);
-    const nodes = await deps.maps.listOwnNodes(userId, limit);
+    const [nodes, fixedObjectives] = await Promise.all([
+      deps.maps.listOwnNodes(userId, limit),
+      deps.maps.listFixedObjectives(),
+    ]);
     const body: ListClientMapConceptsResponse = {
+      fixedObjectives: fixedObjectives.map(({ id, conceptId, label }) => ({
+        id,
+        conceptId,
+        label,
+      })),
       concepts: nodes.map((node) => ({
         id: node.conceptId,
         label: node.label,

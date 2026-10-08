@@ -5,7 +5,6 @@
 
 import {
   CONCEPTS,
-  MOCK_LEARNING_OBJECTIVES,
   type Concept as DomainConcept,
   type LearningObjective,
 } from "@gakushu-sochi/domain";
@@ -20,6 +19,7 @@ import {
   requestJson,
 } from "./api.js";
 import { toErrorText } from "./errors.js";
+import { fetchFixedMaps, objectivesByConcept } from "./fixed-maps.js";
 import { mapIdOfConcept } from "./learning-maps.js";
 import {
   attachFamiliarity,
@@ -72,6 +72,18 @@ export interface AreaCompletions {
 export async function loadLearningMap(): Promise<{
   profile: MapProfile | null;
   overrides: MasteryOverrides | null;
+  /**
+   * 固定の Concept の「理解すること」（#245。API の表にある）。Concept ID → 項目。
+   * 読むのにログインが要るので、未ログインでは空。
+   */
+  fixedObjectives: ReadonlyMap<string, readonly LearningObjective[]>;
+  /** 自分が作成者になっている言語。未ログインでは空。 */
+  editableLanguages: readonly string[];
+  /**
+   * 固定の項目を読めなかった理由。項目は詳細の補足なので、地図は出したうえで画面に出す
+   * （RULE-004。PR #293 のレビュー）。読めなければ項目も編集の導線も空。
+   */
+  fixedObjectivesError?: string;
   /** 達成の記録。未ログイン、または読めなかったときは `undefined`。 */
   completions?: AreaCompletions;
   /** 記録を読めなかった理由。地図は出したうえで画面に出す（RULE-004）。 */
@@ -80,18 +92,32 @@ export async function loadLearningMap(): Promise<{
   const retry = takeLoginRetry();
   let profile: MapProfile;
   let overrides: MasteryOverrides;
+  let fixed: Awaited<ReturnType<typeof fetchFixedMaps>> | undefined;
+  let fixedObjectivesError: string | undefined;
   try {
-    [profile, overrides] = await Promise.all([
+    [profile, overrides, fixed] = await Promise.all([
       requestJson<MapProfile>("/api/v1/learning-profile", fetch, retry),
       requestJson<MasteryOverrides>(OVERRIDES_PATH, fetch, retry),
+      fetchFixedMaps(fetch, retry).catch((error: unknown) => {
+        // ログインとセッションの失敗は地図と同じく扱う（下の catch と呼び出し元へ通す）。
+        if (
+          error instanceof ApiError &&
+          (error.kind === "session_expired" || error.kind === "login_required")
+        )
+          throw error;
+        fixedObjectivesError = toErrorText(error);
+        return undefined;
+      }),
     ]);
   } catch (error) {
     // 未ログインは失敗ではない（Issue #182）。地図の形は Concept の定義だけで
     // 描けるので、profile 無しのまま画面へ進み、画面側で導線を出す。
     if (error instanceof ApiError && error.kind === "login_required")
-      return { profile: null, overrides: null };
+      return { profile: null, overrides: null, fixedObjectives: new Map(), editableLanguages: [] };
     throw error;
   }
+  const fixedObjectives = objectivesByConcept(fixed?.objectives ?? []);
+  const editableLanguages = fixed?.editableLanguages ?? [];
 
   // 分野コンプリートの判定はサーバーが行う（apps/api/src/routes/area-completions.ts）。
   // これは POST なので、同意の記録が無いと Worker が 403 で止める（#174）。
@@ -110,7 +136,15 @@ export async function loadLearningMap(): Promise<{
       throw error;
     completionsError = toErrorText(error);
   }
-  return { profile, overrides, completions, completionsError };
+  return {
+    profile,
+    overrides,
+    fixedObjectives,
+    editableLanguages,
+    ...(fixedObjectivesError === undefined ? {} : { fixedObjectivesError }),
+    completions,
+    completionsError,
+  };
 }
 
 /**
@@ -145,16 +179,6 @@ export const AREAS = conceptAreas(TREES);
 export const CONCEPT_BY_ID: ReadonlyMap<string, DomainConcept> = new Map(
   CONCEPTS.map((concept) => [concept.id, concept]),
 );
-// 「理解すること」（#224）。固定の一覧は、生成の口ができるまで Go だけのモックを表示する。
-/** 固定の一覧の「理解すること」はモックなので、見出しにそう添える。 */
-export const FIXED_OBJECTIVES_NOTE = "仮データ";
-export const OBJECTIVES_BY_CONCEPT: ReadonlyMap<string, readonly LearningObjective[]> = (() => {
-  const byConcept = new Map<string, LearningObjective[]>();
-  for (const objective of MOCK_LEARNING_OBJECTIVES) {
-    byConcept.set(objective.conceptId, [...(byConcept.get(objective.conceptId) ?? []), objective]);
-  }
-  return byConcept;
-})();
 
 // 応答は観測済みの Concept だけなので、定義の全件と突き合わせて未観測を補う。
 // 手動上書きは補ったあとに重ねる。未観測の Concept も手動で確認済みにできる。

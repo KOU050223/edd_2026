@@ -12,7 +12,6 @@ import {
   applyEvent,
   createEmptyProfile,
   LEARNER_PROFILE_VERSION,
-  MOCK_LEARNING_OBJECTIVES,
   type LearnerProfile,
   type LearningEvent,
   type LearningObjective,
@@ -114,12 +113,12 @@ export async function recordEvent(
   context: vscode.ExtensionContext,
   profile: LearnerProfile,
   event: LearningEvent,
-  onError?: (error: unknown) => void,
+  onError: ((error: unknown) => void) | undefined,
   /**
    * 「理解すること」の一覧。サーバーの導出（apps/api の deriveMasteryFromEvents）と同じく、
-   * 固定の Concept の項目に、利用者が手で作ったマップのノードの項目を足したもの（#242）。
+   * 固定の Concept の項目に、利用者が手で作ったマップのノードの項目を足したもの（#242、#245）。
    */
-  objectives: readonly LearningObjective[] = MOCK_LEARNING_OBJECTIVES,
+  objectives: readonly LearningObjective[],
 ): Promise<LearnerProfile> {
   // 渡さないと、項目を持つ Concept まで回数による判定で畳み込まれ、サーバーと意味がずれる。
   const updated = applyEvent(profile, event, objectives);

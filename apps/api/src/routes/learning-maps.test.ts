@@ -526,11 +526,18 @@ describe("消したものの確認問題を消す（#242、2026-10-07 の決定�
     return all.map((check) => [check.conceptId, check.objectiveId ?? "concept"]);
   }
 
-  async function putCheck(conceptId: string, objectiveId?: string, userId = "user-a") {
+  /** 手作りのノードの組は、本番（checks/generate.ts）と同じくマップの ID を渡して保存する。 */
+  async function putCheck(
+    conceptId: string,
+    objectiveId?: string,
+    userId = "user-a",
+    mapId?: string,
+  ) {
     await new InMemoryPersonalCheckRepository(store).put(
       userId,
       personalCheck(conceptId, objectiveId),
       0,
+      mapId === undefined ? undefined : { mapId },
     );
   }
 
@@ -580,8 +587,8 @@ describe("消したものの確認問題を消す（#242、2026-10-07 の決定�
       await send("PUT", path, "token-a", { objectives: [{ label: "let" }, { label: "mut" }] })
     ).json()) as PutLearningObjectivesResponse;
     const [keep, drop] = created.objectives.map((objective) => objective.id) as [string, string];
-    await putCheck(node, keep);
-    await putCheck(node, drop);
+    await putCheck(node, keep, "user-a", map.id);
+    await putCheck(node, drop, "user-a", map.id);
 
     await send("PUT", path, "token-a", { objectives: [{ id: keep, label: "let" }] });
 
@@ -636,6 +643,10 @@ test("VS Code 向けの一覧は、参照ではないノードを更新の新し
     await send("GET", "/v1/learning-maps:concepts", "token-b")
   ).json()) as ListClientMapConceptsResponse;
   expect(empty.concepts).toEqual([]);
+  // 固定の Concept の項目（#245）は、自分のノードが無くても全件返す。
+  expect(empty.fixedObjectives).toEqual([
+    { id: "go.defer:execution_timing", conceptId: "go.defer", label: "実行タイミング" },
+  ]);
 });
 
 test("VS Code 向けの一覧は既定で 100 件、`limit` で自分のノードを全部まで読める", async () => {

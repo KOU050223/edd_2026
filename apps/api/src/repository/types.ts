@@ -450,6 +450,18 @@ export interface UserPlanRepository {
 }
 
 /**
+ * 言語別マップの作成者（#245 の決定 N4、migrations/0018_fixed_map_creators.sql）。
+ *
+ * **読むだけ。** 作成者は手で SQL を流して入れる。変える口を作ると、誰でも自分を作成者にできてしまう。
+ */
+export interface FixedMapCreatorRepository {
+  /** その言語のマップの作成者か。 */
+  isCreator(language: string, userId: string): Promise<boolean>;
+  /** 作成者になっている言語（昇順）。 */
+  languagesOf(userId: string): Promise<string[]>;
+}
+
+/**
  * 監査ログへ記録する操作（Issue #122）。
  *
  * 対象は利用者の不可逆な操作だけにする。学習イベント本体は `learning_events` が
@@ -463,7 +475,9 @@ export type AuditAction =
   | "learning_evidence.deleted"
   | "conversations.exported"
   | "conversations.deleted"
-  | "concept_checks.exported";
+  | "concept_checks.exported"
+  /** 言語別マップの作成者が、固定の Concept の「理解すること」を置き換えた（#245）。全利用者に効く。 */
+  | "fixed_objectives.replaced";
 
 /** 監査ログの1件。 */
 export interface AuditLogEntry {
@@ -552,6 +566,9 @@ export interface PersonalCheckRepository {
    * 参照ではないそのノードがあり、狙った項目もまだあるときだけ書く。無ければ
    * `reason: "target-removed"` を返す。生成の間にマップ・ノード・項目が消されたら、
    * 消したものの問題を後から書き戻さないため。
+   * `mapId` を渡さずに項目を狙った組（固定の Concept の項目、#245）も、その項目が
+   * 固定の項目（`map_id` が NULL）としてまだあるときだけ書く。作成者が確定で消した項目の問題を
+   * 書き戻さないため。
    *
    * `origin` はその組をいつ作ったか（#247）。省略は `on_demand`。同じ狙いを作り直すと
    * 書いた側の値で上書きされる（作成時の組を解くときに作り直せば `on_demand` に戻る）。
@@ -756,4 +773,33 @@ export interface LearningMapRepository {
    * どの利用者にも属さない。並びは Concept ID の順、Concept の中は保存した順。
    */
   listFixedObjectives(): Promise<StoredLearningObjective[]>;
+
+  /**
+   * 固定の Concept 1つの「理解すること」をまとめて置き換える（#245 の決定 M6）。並びは渡した順。
+   *
+   * 渡さなかった項目は消え、それを狙った確認問題も**全利用者の分**を消す（マップのノードの
+   * {@link replaceObjectives} と同じ扱い）。学習イベントの `objective_ids` は消さない
+   * （学習の記録は残し、理解度は補填しない：#223）。
+   * 作成者かどうかは呼び出し側が確かめる。
+   *
+   * 呼び出し側は {@link getFixedObjectives} で読んだ版を `expectedRevision` に渡す。読んでから書くまでの
+   * 間に別の置き換えが入って版が変わっていたら、何も書かずに `false` を返す（PR #293 のレビュー。
+   * 読んだ一覧で ID を確かめたのに、別の置き換えで消えた項目を書き戻さないため）。
+   * 判定と書き込みは1つのトランザクションで行う。書けたら版を `revision` にする。
+   */
+  replaceFixedObjectives(params: {
+    conceptId: string;
+    expectedRevision: string | null;
+    revision: string;
+    objectives: readonly { id: string; label: string; source: LearningObjectiveSource }[];
+    nowIso: string;
+  }): Promise<boolean>;
+
+  /**
+   * 固定の Concept 1つの「理解すること」（保存した順）と、その版（migrations/0018 の
+   * fixed_objective_revisions）。一度も置き換えていなければ版は `null`。
+   */
+  getFixedObjectives(
+    conceptId: string,
+  ): Promise<{ objectives: StoredLearningObjective[]; revision: string | null }>;
 }
