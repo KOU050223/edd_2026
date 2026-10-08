@@ -312,3 +312,17 @@ export function toObjectivesRequest(items: readonly ObjectiveItem[]): ObjectiveI
     label: item.label.trim(),
   }));
 }
+
+/**
+ * 入力欄の行数を、中身に合わせて決める（#286: 説明が3行で切れて読めなかった）。
+ * 1行あたりの文字数は、日本語で欄の幅に入るおおよその数。改行はそのまま1行と数える。
+ */
+export function textareaRows(
+  text: string,
+  { charsPerRow = 40, min = 2, max = 8 }: { charsPerRow?: number; min?: number; max?: number } = {},
+): number {
+  const rows = text
+    .split("\n")
+    .reduce((sum, line) => sum + Math.max(1, Math.ceil(line.length / charsPerRow)), 0);
+  return Math.min(max, Math.max(min, rows));
+}

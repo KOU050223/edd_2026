@@ -21,6 +21,7 @@ import {
   setPrerequisite,
   updateOwnNode,
   type MapDraft,
+  textareaRows,
 } from "./map-editor.js";
 
 const MAP: LearningMapView = {
@@ -206,4 +207,12 @@ test("「理解すること」の下書きの変更・消える項目・保存�
   expect(
     objectiveProblems(Array.from({ length: EDITOR_LIMITS.objectives + 1 }, () => ({ label: "a" }))),
   ).toEqual([`項目は ${String(EDITOR_LIMITS.objectives)} 個までです。`]);
+});
+
+test("入力欄の行数は中身に合わせて伸び、上限と下限に収まる（#286）", () => {
+  expect(textareaRows("")).toBe(2);
+  expect(textareaRows("あ".repeat(100))).toBe(3);
+  expect(textareaRows("1行目\n2行目\n3行目")).toBe(3);
+  expect(textareaRows("あ".repeat(400))).toBe(8);
+  expect(textareaRows("短い", { min: 3, max: 6 })).toBe(3);
 });

@@ -326,6 +326,7 @@ export function SkillTree({
   next,
   selected,
   onSelect,
+  followSelected = false,
 }: {
   tree: MapTree;
   /** 見出し。省略すると領域名。手で作ったマップは題名を渡す（#242）。 */
@@ -335,6 +336,11 @@ export function SkillTree({
   next: ReadonlySet<string>;
   selected: string | undefined;
   onSelect: (conceptId: string) => void;
+  /**
+   * 選んだノードが見えるところまで、木の中だけをスクロールする（ページは動かさない）。
+   * 一覧から選ぶ編集画面（#286）で使う。地図の画面では、押したノードはもう見えているので使わない。
+   */
+  followSelected?: boolean;
 }) {
   const width = nodeX(tree.depths - 1) + NODE_WIDTH;
   const height = nodeY(tree.rows - 1) + NODE_HEIGHT;
@@ -350,6 +356,25 @@ export function SkillTree({
       nodeX(currentDepth) + NODE_WIDTH / 2 - element.clientWidth / 2,
     );
   }, [currentDepth]);
+  const selectedNode = selected === undefined ? undefined : position.get(selected);
+  const selectedDepth = followSelected ? selectedNode?.depth : undefined;
+  const selectedRow = followSelected ? selectedNode?.row : undefined;
+  useEffect(() => {
+    const element = scroller.current;
+    if (!element || selectedDepth === undefined || selectedRow === undefined) return;
+    const left = nodeX(selectedDepth);
+    const top = nodeY(selectedRow);
+    // 見えているなら動かさない。見えていなければ、そのノードを中央へ寄せる。
+    const visibleX =
+      left >= element.scrollLeft && left + NODE_WIDTH <= element.scrollLeft + element.clientWidth;
+    const visibleY =
+      top >= element.scrollTop && top + NODE_HEIGHT <= element.scrollTop + element.clientHeight;
+    element.scrollTo({
+      left: visibleX ? element.scrollLeft : left + NODE_WIDTH / 2 - element.clientWidth / 2,
+      top: visibleY ? element.scrollTop : top + NODE_HEIGHT / 2 - element.clientHeight / 2,
+      behavior: "smooth",
+    });
+  }, [selectedDepth, selectedRow]);
   return (
     <section className="tree">
       <h2>{title ?? languageLabel[tree.language] ?? tree.language}</h2>
