@@ -227,6 +227,11 @@ export interface ClientMapConcept {
 
 export interface ListClientMapConceptsResponse {
   concepts: ClientMapConcept[];
+  /**
+   * 固定の Concept（言語別マップ）の「理解すること」（#245）。VS Code が理解度の導出と
+   * プロンプトに使う。`limit` に関係なく全件。
+   */
+  fixedObjectives: { id: string; conceptId: string; label: string }[];
 }
 
 /**

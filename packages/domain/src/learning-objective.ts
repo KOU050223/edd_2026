@@ -4,8 +4,9 @@ import { isConceptId, type ConceptId } from "./profile.js";
  * Concept（学習マップのノード）の中で「理解すること」の1項目（設計/05 #224）。
  *
  * 理解度はこの項目ごとに積み上げ（設計/04 #223）、確認問題もこの項目を狙って出す（Web/13 #226）。
- * 本来は Concept の `summary` を入力に AI で生成して保存するが、生成の口はまだ無い。
- * それまでは {@link MOCK_LEARNING_OBJECTIVES} を使う。
+ * 固定の Concept（言語別マップ）の項目は API の表にあり、その言語のマップの作成者が AI で作り直して
+ * 手で直す（#245）。手で作ったマップのノードの項目はマップと一緒に保存する（#242）。
+ * クライアントは API から読む。
  */
 export interface LearningObjective {
   /**

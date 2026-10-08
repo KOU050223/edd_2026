@@ -9,7 +9,6 @@
 
 import {
   checkTargetOf,
-  MOCK_LEARNING_OBJECTIVES,
   type CheckLevel,
   type ConsentRecord,
   type PersonalConceptCheck,
@@ -93,7 +92,8 @@ export interface InMemoryRepositoryStore {
   readonly learningMaps: Map<string, InMemoryLearningMap>;
   /**
    * 固定の Concept の「理解すること」。D1 の learning_objectives のうち map_id が NULL の行
-   * （migrations/0017_fixed_objectives.sql）に対応する。既定はマイグレーションで入れた Go の項目。
+   * （migrations/0017_fixed_objectives.sql）に対応する。既定は空。テストが要る分を入れる
+   * （マイグレーションの Go の項目は `maps/test-fixed-objectives.ts`）。
    */
   readonly fixedObjectives: StoredLearningObjective[];
 }
@@ -121,10 +121,7 @@ export function createInMemoryRepositoryStore(): InMemoryRepositoryStore {
     checkGenerationConsents: new Map(),
     mapGenerationConsents: new Map(),
     learningMaps: new Map(),
-    fixedObjectives: MOCK_LEARNING_OBJECTIVES.map((objective) => ({
-      ...objective,
-      source: "manual",
-    })),
+    fixedObjectives: [],
   };
 }
 

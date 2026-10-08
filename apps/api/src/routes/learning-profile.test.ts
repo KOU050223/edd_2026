@@ -21,6 +21,7 @@ import {
   TEST_MAP_NODE,
   TEST_MAP_OBJECTIVES,
 } from "../maps/test-map.js";
+import { migratedFixedObjectives } from "../maps/test-fixed-objectives.js";
 
 let store: InMemoryRepositoryStore;
 let events: InMemoryLearningEventRepository;
@@ -35,6 +36,8 @@ const NOW = "2026-09-06T00:00:00.000Z";
 
 beforeEach(() => {
   store = createInMemoryRepositoryStore();
+  // 固定の Concept の項目は D1 の表にある（#245）。マイグレーションで入れた Go の項目を入れる。
+  store.fixedObjectives.push(...migratedFixedObjectives());
   events = new InMemoryLearningEventRepository(store);
   evidence = new InMemoryLearningEvidenceRepository(store);
   sessions = new InMemoryImportSessionRepository(store);

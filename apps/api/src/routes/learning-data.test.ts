@@ -3,7 +3,6 @@ import { Hono } from "hono";
 import {
   LEARNER_PROFILE_VERSION,
   deriveMasteryFromEvents,
-  MOCK_LEARNING_OBJECTIVES,
   type LearnerProfile,
   type LearningEvent,
 } from "@gakushu-sochi/domain";
@@ -29,6 +28,7 @@ import { seedTestMap, TEST_MAP_ID, TEST_MAP_NODE, TEST_MAP_OBJECTIVES } from "..
 import { createLearningDataRoute, type DeleteLearningEventsResponse } from "./learning-data.js";
 import { createLearningEventsRoute } from "./learning-events.js";
 import { createLearningProfileRoute } from "./learning-profile.js";
+import { migratedFixedObjectives } from "../maps/test-fixed-objectives.js";
 
 let store: InMemoryRepositoryStore;
 let identity: InMemoryIdentityRepository;
@@ -53,6 +53,8 @@ beforeEach(() => {
   // D1 と同じく1つのストアを共有させる。退会の CASCADE と同じで、
   // 片方だけ新しく作るとテスト実装だけが実際と違う振る舞いになる。
   store = createInMemoryRepositoryStore();
+  // 固定の Concept の項目は D1 の表にある（#245）。マイグレーションで入れた Go の項目を入れる。
+  store.fixedObjectives.push(...migratedFixedObjectives());
   identity = new InMemoryIdentityRepository(store);
   events = new InMemoryLearningEventRepository(store);
   evidence = new InMemoryLearningEvidenceRepository(store);
@@ -145,7 +147,7 @@ test("エクスポートは自分のイベントを LearnerProfile の形で返�
   expect(body).toEqual({
     version: LEARNER_PROFILE_VERSION,
     updatedAt: NOW,
-    mastery: deriveMasteryFromEvents(mine, MOCK_LEARNING_OBJECTIVES),
+    mastery: deriveMasteryFromEvents(mine, migratedFixedObjectives()),
     events: mine,
   });
 });

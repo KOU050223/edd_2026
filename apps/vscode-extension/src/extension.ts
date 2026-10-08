@@ -3,7 +3,6 @@ import * as vscode from "vscode";
 import {
   CONVERSATION_HISTORY_OPT_IN_NOTICE,
   createEmptyProfile,
-  MOCK_LEARNING_OBJECTIVES,
   PERSONA_MAX_LENGTH,
   recentlyRecurredConceptIds,
   type CodeContext,
@@ -385,9 +384,13 @@ export function activate(context: vscode.ExtensionContext): void {
     return loading;
   }
 
-  /** 理解度の導出に使う「理解すること」。固定の Concept の項目に、手作りのノードの項目を足す。 */
+  /**
+   * 理解度の導出に使う「理解すること」。固定の Concept の項目と手作りのノードの項目で、
+   * どちらも API から読む（#245）。読めていないあいだは空で、回数による判定になる。
+   * サーバーは項目で導出するので、次にサーバーの理解度を読んだときに揃う。
+   */
   function knownObjectives(): readonly LearningObjective[] {
-    return [...MOCK_LEARNING_OBJECTIVES, ...(userConcepts?.objectives ?? [])];
+    return userConcepts?.objectives ?? [];
   }
 
   /**

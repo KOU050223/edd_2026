@@ -98,6 +98,22 @@ export const putFixedObjectivesSchema = v.strictObject({
 
 export type PutFixedObjectivesInput = v.InferOutput<typeof putFixedObjectivesSchema>;
 
+/** 固定の Concept の「理解すること」の1項目。 */
+export interface FixedObjectiveView extends LearningObjectiveView {
+  conceptId: string;
+}
+
+/**
+ * `GET /v1/fixed-maps` の応答。Web が言語別マップの項目を表示し、作成者に編集の導線を出すのに使う。
+ * 固定の項目は全言語で数百件までなので、まとめて返す。
+ */
+export interface ListFixedMapsResponse {
+  /** Concept ID の順、Concept の中は保存した順。 */
+  objectives: FixedObjectiveView[];
+  /** 自分が作成者になっている言語。編集の導線はこの言語にだけ出す（決定 N6）。 */
+  editableLanguages: string[];
+}
+
 export interface PutFixedObjectivesResponse {
   objectives: LearningObjectiveView[];
 }

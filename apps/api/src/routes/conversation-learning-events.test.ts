@@ -11,6 +11,7 @@ import {
 import { createConversationLearningEventsRoute } from "./conversation-learning-events.js";
 import type { ConversationLearningEventsResponse } from "../contract/conversation-learning-events.js";
 import { seedTestMap, TEST_MAP_NODE, TEST_MAP_OBJECTIVES } from "../maps/test-map.js";
+import { migratedFixedObjectives } from "../maps/test-fixed-objectives.js";
 
 let events: InMemoryLearningEventRepository;
 let maps: InMemoryLearningMapRepository;
@@ -20,6 +21,8 @@ const ENV = {};
 
 beforeEach(() => {
   const store = createInMemoryRepositoryStore();
+  // 固定の Concept の項目は D1 の表にある（#245）。マイグレーションで入れた Go の項目を入れる。
+  store.fixedObjectives.push(...migratedFixedObjectives());
   events = new InMemoryLearningEventRepository(store);
   maps = new InMemoryLearningMapRepository(store);
   app = new Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>();

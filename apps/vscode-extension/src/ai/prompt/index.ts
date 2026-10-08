@@ -1,7 +1,6 @@
 import {
   buildLearnerPositionLines,
   CONCEPTS,
-  MOCK_LEARNING_OBJECTIVES,
   type AIRequest,
   type Concept,
   type LearningObjective,
@@ -67,8 +66,9 @@ export function knownObjectivesFor(request: AIRequest): readonly LearningObjecti
       values.set(id, value);
     }
   }
-  // 固定の Concept の項目（今はモック）と、手で作ったマップのノードの項目（#242）。
-  return [...MOCK_LEARNING_OBJECTIVES, ...(request.userConcepts?.objectives ?? [])].filter(
+  // 固定の Concept の項目（#245）と、手で作ったマップのノードの項目（#242）。どちらも API から読む。
+  // まだ読めていなければ項目は無く、AI には objectiveIds を空にさせる。
+  return (request.userConcepts?.objectives ?? []).filter(
     (objective) => conceptIds.has(objective.conceptId) && (values.get(objective.id) ?? 0) < 1,
   );
 }

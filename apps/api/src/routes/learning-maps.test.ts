@@ -636,6 +636,10 @@ test("VS Code 向けの一覧は、参照ではないノードを更新の新し
     await send("GET", "/v1/learning-maps:concepts", "token-b")
   ).json()) as ListClientMapConceptsResponse;
   expect(empty.concepts).toEqual([]);
+  // 固定の Concept の項目（#245）は、自分のノードが無くても全件返す。
+  expect(empty.fixedObjectives).toEqual([
+    { id: "go.defer:execution_timing", conceptId: "go.defer", label: "実行タイミング" },
+  ]);
 });
 
 test("VS Code 向けの一覧は既定で 100 件、`limit` で自分のノードを全部まで読める", async () => {

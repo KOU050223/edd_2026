@@ -13,6 +13,7 @@ import type { AuthVariables } from "../auth/middleware.js";
 import {
   generateFixedObjectivesSchema,
   putFixedObjectivesSchema,
+  type ListFixedMapsResponse,
   type PutFixedObjectivesResponse,
 } from "../contract/fixed-maps.js";
 import type { LearningObjectiveSource } from "../contract/learning-maps.js";
@@ -68,6 +69,26 @@ export function createFixedMapsRoute(resolve: FixedMapsDepsResolver) {
     }
     return concepts;
   }
+
+  // 固定の項目は誰でも読める（理解度の表示と確認問題に使う）。編集できる言語は本人の分だけ返す。
+  app.get("/fixed-maps", async (c) => {
+    const userId = c.get("user").userId;
+    const deps = resolve(c.env);
+    const [objectives, editableLanguages] = await Promise.all([
+      deps.maps.listFixedObjectives(),
+      deps.creators.languagesOf(userId),
+    ]);
+    const body: ListFixedMapsResponse = {
+      objectives: objectives.map(({ id, conceptId, label, source }) => ({
+        id,
+        conceptId,
+        label,
+        source,
+      })),
+      editableLanguages,
+    };
+    return c.json(body, 200, { "cache-control": "no-store" });
+  });
 
   app.post("/fixed-maps/:language/objectives:generate", async (c) => {
     const userId = c.get("user").userId;

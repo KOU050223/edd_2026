@@ -4,8 +4,6 @@ import {
   CompleteBadge,
   CONCEPT_BY_ID,
   ConceptDetail,
-  FIXED_OBJECTIVES_NOTE,
-  OBJECTIVES_BY_CONCEPT,
   LINKS,
   loadLearningMap,
   languageLabel,
@@ -25,7 +23,8 @@ import { findCurrentPosition, summarizeTree } from "../../learning-map.js";
  */
 function LanguageMap() {
   const { language } = Route.useParams();
-  const { profile, overrides, completions } = Route.useLoaderData();
+  const { profile, overrides, fixedObjectives, editableLanguages, completions } =
+    Route.useLoaderData();
   // 未ログインでは profile が無い。地図の形は見せたまま、記録や修正の導線だけを畳む。
   const loggedIn = profile !== null;
   const { concept: selectedId } = Route.useSearch();
@@ -90,6 +89,12 @@ function LanguageMap() {
         {!summary.complete && tree.nodes.some((node) => node.conceptId === current) && (
           <em className="badge">現在地</em>
         )}
+        {/* この言語のマップの作成者にだけ出す（#245 の決定 N6）。API も作成者以外は 403 にする。 */}
+        {editableLanguages.includes(language) && (
+          <Link to="/map/$language/objectives" params={{ language }} className="link">
+            項目を編集
+          </Link>
+        )}
       </p>
       {summary.complete && (
         <section className="celebrate" role="status">
@@ -146,8 +151,7 @@ function LanguageMap() {
           <ConceptDetail
             concept={selected}
             summary={CONCEPT_BY_ID.get(selected.conceptId)?.summary}
-            objectives={OBJECTIVES_BY_CONCEPT.get(selected.conceptId) ?? []}
-            objectivesNote={FIXED_OBJECTIVES_NOTE}
+            objectives={fixedObjectives.get(selected.conceptId) ?? []}
             links={LINKS.get(selected.conceptId)}
             concepts={concepts}
             isCurrent={selected.conceptId === current}

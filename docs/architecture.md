@@ -189,7 +189,7 @@ Client が観測する事実
 | Check Content  | `GET /v1/checks` / `POST /v1/checks:generate` / `GET /v1/checks:export` / `GET/PUT/DELETE /v1/check-generation-consent`                                                       | 確認問題（2問1組）を利用者ごとに生成・保存する。生成は利用者が選んだときだけで、`ai_usage` に1組1回数える（#236）      |
 | Conversations  | `PUT /v1/conversations/:id` / `GET /v1/conversations(/:id)` / `DELETE /v1/conversations(/:id)` / `GET /v1/conversations:export` / `GET /v1/conversations/:id/learning-events` | 質問履歴の本文。オプトイン時のみ保存（[`conversation-history.md`](conversation-history.md)）                           |
 | Learning Maps  | `GET/POST /v1/learning-maps` / `GET/PUT/DELETE /v1/learning-maps/:id` / `PUT /v1/learning-maps/:id/nodes/:conceptId/objectives` / `GET /v1/learning-maps:concepts`            | 利用者が手で作る木の形の学習マップと、そのノードの「理解すること」（#242）。最初は作成者だけのもの                     |
-| Fixed Maps     | `POST /v1/fixed-maps/:language/objectives:generate` / `PUT /v1/fixed-maps/:language/concepts/:conceptId/objectives`                                                           | 言語別マップの「理解すること」を、その言語の作成者（`fixed_map_creators`）が AI で作り直し、手で直して確定する（#245） |
+| Fixed Maps     | `GET /v1/fixed-maps` / `POST /v1/fixed-maps/:language/objectives:generate` / `PUT /v1/fixed-maps/:language/concepts/:conceptId/objectives`                                    | 言語別マップの「理解すること」を、その言語の作成者（`fixed_map_creators`）が AI で作り直し、手で直して確定する（#245） |
 | Data Rights    | `GET /v1/learning-events:export` / `DELETE /v1/learning-events` / `DELETE /v1/me`                                                                                             | 自分の学習データを取り出す／消す／退会（[`data-privacy.md`](data-privacy.md)）                                         |
 
 端末をユーザーへ結びつける処理は Identity の責務であり、独立した `/devices` という

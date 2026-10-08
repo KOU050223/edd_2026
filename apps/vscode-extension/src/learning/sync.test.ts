@@ -505,6 +505,7 @@ test("自分のマップのノードは、トークン付き・リダイレク�
           objectives: [],
         },
       ],
+      fixedObjectives: [],
     }),
   );
   vi.stubGlobal("fetch", fetchMock);

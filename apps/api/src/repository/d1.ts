@@ -976,6 +976,14 @@ export class D1FixedMapCreatorRepository implements FixedMapCreatorRepository {
       .first<{ found: number }>();
     return row !== null;
   }
+
+  async languagesOf(userId: string): Promise<string[]> {
+    const rows = await this.db
+      .prepare(`SELECT language FROM fixed_map_creators WHERE user_id = ? ORDER BY language`)
+      .bind(userId)
+      .all<{ language: string }>();
+    return rows.results.map((row) => row.language);
+  }
 }
 
 /**

@@ -230,7 +230,13 @@ test("記録したイベントは読み直しても残る", async () => {
   // 再現できないため、保存した globalState を loadProfile で読み直して代える。
   const context = mutableContext();
 
-  const updated = await recordEvent(context, loadProfile(context), eventWith("go.defer"));
+  const updated = await recordEvent(
+    context,
+    loadProfile(context),
+    eventWith("go.defer"),
+    undefined,
+    [],
+  );
 
   expect(updated.events).toHaveLength(1);
   // 同じ globalState を読み直す = 次回起動時に loadProfile が見る値。
@@ -242,11 +248,13 @@ test("「理解すること」を持つ Concept は、触れた項目の理解�
   // objectives が作られない。
   const context = mutableContext();
 
-  const updated = await recordEvent(context, loadProfile(context), {
-    ...eventWith("go.defer"),
-    type: "question_asked",
-    objectiveIds: ["go.defer:lifo_order"],
-  });
+  const updated = await recordEvent(
+    context,
+    loadProfile(context),
+    { ...eventWith("go.defer"), type: "question_asked", objectiveIds: ["go.defer:lifo_order"] },
+    undefined,
+    [{ id: "go.defer:lifo_order", conceptId: "go.defer", label: "実行順" }],
+  );
 
   expect(updated.mastery["go.defer"]?.objectives?.["go.defer:lifo_order"]).toBe(0.05);
 });
@@ -270,6 +278,7 @@ test("保存に失敗しても例外を外へ出さず、更新後のプロフ�
     createEmptyProfile("2026-09-21T00:00:00.000Z"),
     eventWith("go.slice"),
     onError,
+    [],
   );
 
   // 失敗を握りつぶさず onError へ通知したうえで、今セッション分は反映された値を返す。

@@ -6,6 +6,7 @@ import { stubAuth } from "../auth/test-auth.js";
 import { planLimits, utcDayKey, utcMonthKey } from "../contract/ai-usage.js";
 import type {
   GenerateFixedObjectivesResponse,
+  ListFixedMapsResponse,
   PutFixedObjectivesResponse,
 } from "../contract/fixed-maps.js";
 import { InMemoryAiUsageRepository } from "../repository/ai-usage.js";
@@ -154,6 +155,32 @@ function send(method: string, path: string, body?: unknown, token = "token-a") {
 async function usedRequests() {
   return (await usage.get({ userId: "user-a", ...USAGE_KEYS })).dailyRequests;
 }
+
+describe("GET /v1/fixed-maps", () => {
+  it("固定の項目の全件と、自分が作成者の言語を返す", async () => {
+    creators.add("ts", "user-a");
+
+    const res = await send("GET", "/fixed-maps");
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as ListFixedMapsResponse;
+    expect(body.editableLanguages).toEqual(["go", "ts"]);
+    expect(body.objectives).toEqual([
+      { id: "go.defer:timing", conceptId: "go.defer", label: "実行タイミング", source: "manual" },
+      { id: "go.defer:lifo", conceptId: "go.defer", label: "実行順", source: "manual" },
+      { id: "go.defer:named", conceptId: "go.defer", label: "名前付き戻り値", source: "manual" },
+    ]);
+  });
+
+  it("作成者でない人にも項目は返し、編集できる言語は空", async () => {
+    const body = (await (
+      await send("GET", "/fixed-maps", undefined, "token-b")
+    ).json()) as ListFixedMapsResponse;
+
+    expect(body.editableLanguages).toEqual([]);
+    expect(body.objectives).toHaveLength(3);
+  });
+});
 
 describe("POST /v1/fixed-maps/:language/objectives:generate", () => {
   it("今ある項目を AI に渡し、引き継ぐ・新しく作る・消えるの差分を返す。保存はしない", async () => {

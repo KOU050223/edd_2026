@@ -41,10 +41,10 @@ import {
 } from "../../check.js";
 import { checkResultEvent, recordCheckResult, type CheckCorrectness } from "../../check-result.js";
 import { ErrorPanel } from "../../errors.js";
+import { fetchFixedMaps, objectivesByConcept } from "../../fixed-maps.js";
 import {
   AREAS,
   CONCEPT_BY_ID,
-  OBJECTIVES_BY_CONCEPT,
   languageLabel,
   overlaidConcepts,
   type MapProfile,
@@ -849,26 +849,30 @@ export const Route = createFileRoute("/_framed/check/$conceptId")({
     // 読むだけで、AI は呼ばない。生成は利用者が「作る」を押したときだけ。
     const retry = takeLoginRetry();
     const mapId = mapIdOfConcept(params.conceptId);
-    const [checks, profile, overrides, consent, map] = await Promise.all([
+    const [checks, profile, overrides, consent, map, fixed] = await Promise.all([
       fetchSavedChecks(params.conceptId, fetch, retry),
       requestJson<MapProfile>("/api/v1/learning-profile", fetch, retry),
       requestJson<MasteryOverrides>("/api/v1/mastery-overrides", fetch, retry),
       fetchGenerationConsent(fetch, retry),
       // 手で作ったノードは、そのマップから定義を引く（#242）。他人のマップは 404 になる。
       mapId === undefined ? undefined : fetchLearningMap(mapId, fetch, retry),
+      // 固定の Concept の項目は API の表から読む（#245）。
+      mapId === undefined ? fetchFixedMaps(fetch, retry) : undefined,
     ]);
 
     // 対象の Concept と同じ領域（手で作ったノードならそのマップ）の定義・項目・見出し。
     let area: { definitions: readonly DomainConcept[]; objectives: readonly LearningObjective[] };
     let areaName: string;
     if (map === undefined) {
+      // 上で `mapId === undefined` のときに読んでいる。
+      if (fixed === undefined) throw new Error("fixed objectives were not loaded");
       const definition = CONCEPT_BY_ID.get(params.conceptId);
       if (definition === undefined) throw new ApiError("not_found");
       area = {
         definitions: [...CONCEPT_BY_ID.values()].filter(
           (candidate) => candidate.language === definition.language,
         ),
-        objectives: OBJECTIVES_BY_CONCEPT.get(params.conceptId) ?? [],
+        objectives: objectivesByConcept(fixed.objectives).get(params.conceptId) ?? [],
       };
       areaName = languageLabel[definition.language] ?? definition.language;
     } else {

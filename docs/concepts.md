@@ -185,8 +185,9 @@ Concept を1つ足すたびに型ファイルが変更され、並行して動�
 | まだ持たない                            | 「status の判定」以降の回数による判定（従来） |
 
 固定の Concept（言語別マップ）の一覧は D1 の `learning_objectives`（`map_id` が NULL の行）にあり、
-API はそこから読む（#245）。Go の分は `packages/domain/src/learning-objectives.mock.ts` の手で起こした項目を
-同じ ID で移した（`apps/api/migrations/0017_fixed_objectives.sql`）。Web と VS Code はまだそのモックを読んでいる。
+API はそこから読む（#245）。Go の分は手で起こしたモックを同じ ID で移した（`apps/api/migrations/0017_fixed_objectives.sql`）。
+その言語のマップの作成者（`fixed_map_creators`）が AI で作り直し、手で直して確定する。
+Web は `GET /v1/fixed-maps`、VS Code は `GET /v1/learning-maps:concepts` の `fixedObjectives` で読む。
 
 利用者が手で作った学習マップ（#242）のノードも Concept として扱う。API は導出のたびに、
 固定の一覧へその利用者のマップのノードと「理解すること」を足した一覧を使う

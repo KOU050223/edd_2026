@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { CONCEPTS, MOCK_LEARNING_OBJECTIVES } from "@gakushu-sochi/domain";
+import { CONCEPTS } from "@gakushu-sochi/domain";
+import { migratedFixedObjectives } from "./test-fixed-objectives.js";
 import { AI_USAGE_LIMITS, estimateInputTokens } from "../contract/ai-usage.js";
 import {
   MAX_GENERATION_GOAL_LENGTH,
@@ -27,10 +28,16 @@ const LONGEST_REQUEST: MapGenerationRequest = {
 };
 
 describe("buildSkeletonPrompt", () => {
+  // 今、項目を持つのはマイグレーションで入れた Go だけ。作成者が他の言語の項目を作ると候補が増え、
+  // 全言語では上限を超える（約 11,000 tokens）。そのときは `fitSkeletonPrompt` が後ろの候補から落とす。
   it("固定の Concept の候補（項目を持つものすべて）を載せても、入力の上限に収まる", () => {
-    const withObjectives = new Set(MOCK_LEARNING_OBJECTIVES.map((item) => item.conceptId));
+    const withObjectives = new Set(migratedFixedObjectives().map((item) => item.conceptId));
     const candidates = CONCEPTS.filter((concept) => withObjectives.has(concept.id)).map(
-      (concept) => ({ id: concept.id, label: concept.label, status: "learning" as const }),
+      (concept) => ({
+        id: concept.id,
+        label: concept.label,
+        status: "learning" as const,
+      }),
     );
     expect(candidates.length).toBeGreaterThan(0);
 

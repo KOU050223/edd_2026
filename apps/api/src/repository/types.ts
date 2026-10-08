@@ -457,6 +457,8 @@ export interface UserPlanRepository {
 export interface FixedMapCreatorRepository {
   /** その言語のマップの作成者か。 */
   isCreator(language: string, userId: string): Promise<boolean>;
+  /** 作成者になっている言語（昇順）。 */
+  languagesOf(userId: string): Promise<string[]>;
 }
 
 /**

@@ -25,6 +25,7 @@ import { Route as FramedSettingsIndexRouteImport } from './routes/_framed/settin
 import { Route as FramedSettingsBillingRouteImport } from './routes/_framed/settings/billing'
 import { Route as FramedSettingsDataRouteImport } from './routes/_framed/settings/data'
 import { Route as FramedSettingsUsageRouteImport } from './routes/_framed/settings/usage'
+import { Route as FramedMapLanguageObjectivesRouteImport } from './routes/_framed/map.$language_.objectives'
 import { Route as FramedMapsMapIdEditRouteImport } from './routes/_framed/maps.$mapId_.edit'
 
 const FramedRouteRoute = FramedRouteRouteImport.update({
@@ -107,6 +108,12 @@ const FramedSettingsUsageRoute = FramedSettingsUsageRouteImport.update({
   path: '/usage',
   getParentRoute: () => FramedSettingsRouteRoute,
 } as any)
+const FramedMapLanguageObjectivesRoute =
+  FramedMapLanguageObjectivesRouteImport.update({
+    id: '/map/$language_/objectives',
+    path: '/map/$language/objectives',
+    getParentRoute: () => FramedRouteRoute,
+  } as any)
 const FramedMapsMapIdEditRoute = FramedMapsMapIdEditRouteImport.update({
   id: '/maps/$mapId_/edit',
   path: '/maps/$mapId/edit',
@@ -129,6 +136,7 @@ export interface FileRoutesByFullPath {
   '/history/': typeof FramedHistoryIndexRoute
   '/maps/': typeof FramedMapsIndexRoute
   '/settings/': typeof FramedSettingsIndexRoute
+  '/map/$language/objectives': typeof FramedMapLanguageObjectivesRoute
   '/maps/$mapId/edit': typeof FramedMapsMapIdEditRoute
 }
 export interface FileRoutesByTo {
@@ -146,6 +154,7 @@ export interface FileRoutesByTo {
   '/history': typeof FramedHistoryIndexRoute
   '/maps': typeof FramedMapsIndexRoute
   '/settings': typeof FramedSettingsIndexRoute
+  '/map/$language/objectives': typeof FramedMapLanguageObjectivesRoute
   '/maps/$mapId/edit': typeof FramedMapsMapIdEditRoute
 }
 export interface FileRoutesById {
@@ -166,6 +175,7 @@ export interface FileRoutesById {
   '/_framed/history/': typeof FramedHistoryIndexRoute
   '/_framed/maps/': typeof FramedMapsIndexRoute
   '/_framed/settings/': typeof FramedSettingsIndexRoute
+  '/_framed/map/$language_/objectives': typeof FramedMapLanguageObjectivesRoute
   '/_framed/maps/$mapId_/edit': typeof FramedMapsMapIdEditRoute
 }
 export interface FileRouteTypes {
@@ -186,6 +196,7 @@ export interface FileRouteTypes {
     | '/history/'
     | '/maps/'
     | '/settings/'
+    | '/map/$language/objectives'
     | '/maps/$mapId/edit'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -203,6 +214,7 @@ export interface FileRouteTypes {
     | '/history'
     | '/maps'
     | '/settings'
+    | '/map/$language/objectives'
     | '/maps/$mapId/edit'
   id:
     | '__root__'
@@ -222,6 +234,7 @@ export interface FileRouteTypes {
     | '/_framed/history/'
     | '/_framed/maps/'
     | '/_framed/settings/'
+    | '/_framed/map/$language_/objectives'
     | '/_framed/maps/$mapId_/edit'
   fileRoutesById: FileRoutesById
 }
@@ -344,6 +357,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof FramedSettingsUsageRouteImport
       parentRoute: typeof FramedSettingsRouteRoute
     }
+    '/_framed/map/$language_/objectives': {
+      id: '/_framed/map/$language_/objectives'
+      path: '/map/$language/objectives'
+      fullPath: '/map/$language/objectives'
+      preLoaderRoute: typeof FramedMapLanguageObjectivesRouteImport
+      parentRoute: typeof FramedRouteRoute
+    }
     '/_framed/maps/$mapId_/edit': {
       id: '/_framed/maps/$mapId_/edit'
       path: '/maps/$mapId/edit'
@@ -382,6 +402,7 @@ interface FramedRouteRouteChildren {
   FramedMapsGenerateRoute: typeof FramedMapsGenerateRoute
   FramedHistoryIndexRoute: typeof FramedHistoryIndexRoute
   FramedMapsIndexRoute: typeof FramedMapsIndexRoute
+  FramedMapLanguageObjectivesRoute: typeof FramedMapLanguageObjectivesRoute
   FramedMapsMapIdEditRoute: typeof FramedMapsMapIdEditRoute
 }
 
@@ -396,6 +417,7 @@ const FramedRouteRouteChildren: FramedRouteRouteChildren = {
   FramedMapsGenerateRoute: FramedMapsGenerateRoute,
   FramedHistoryIndexRoute: FramedHistoryIndexRoute,
   FramedMapsIndexRoute: FramedMapsIndexRoute,
+  FramedMapLanguageObjectivesRoute: FramedMapLanguageObjectivesRoute,
   FramedMapsMapIdEditRoute: FramedMapsMapIdEditRoute,
 }
 

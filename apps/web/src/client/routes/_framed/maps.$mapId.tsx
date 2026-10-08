@@ -4,7 +4,6 @@ import { ApiError, createSubmitGuard, requestJson } from "../../api.js";
 import { toErrorText } from "../../errors.js";
 import {
   ConceptDetail,
-  FIXED_OBJECTIVES_NOTE,
   NARROW_LAYOUT,
   overlaidConcepts,
   parseConceptSearch,
@@ -237,12 +236,6 @@ function LearningMapPage() {
               objectives={defined.objectives.filter(
                 (objective) => objective.conceptId === selected.conceptId,
               )}
-              // 固定の Concept を参照したノードの項目は、固定の一覧のモック。
-              objectivesNote={
-                selectedNode.kind === "reference" && selectedNode.origin?.mapId === null
-                  ? FIXED_OBJECTIVES_NOTE
-                  : undefined
-              }
               note={referenceNote}
               fromMapId={mapId}
               links={links.get(selected.conceptId)}

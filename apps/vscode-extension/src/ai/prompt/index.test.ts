@@ -91,7 +91,27 @@ test("言語のConceptに加えて、領域横断のConceptも一覧に含める
 });
 
 describe("既知の項目一覧（設計/04 #223）", () => {
-  const goRequest = { context: { ...baseRequest.context, languageId: "go" } };
+  // 固定の Concept の項目は API から読み、userConcepts に載る（#245）。
+  const goRequest = {
+    context: { ...baseRequest.context, languageId: "go" },
+    userConcepts: {
+      concepts: [],
+      objectives: [
+        {
+          id: "go.variable_declaration:var_vs_short",
+          conceptId: "go.variable_declaration",
+          label: "var と := の使い分け",
+        },
+        {
+          id: "go.variable_declaration:type_inference",
+          conceptId: "go.variable_declaration",
+          label: "型が右辺から推論される",
+        },
+        // 言語で絞るので、ts の項目は go の質問では載らない。
+        { id: "ts.type_annotation:basic", conceptId: "ts.type_annotation", label: "型注釈" },
+      ],
+    },
+  };
 
   test("言語で絞った Concept の「理解すること」を一覧に載せる", () => {
     const ids = knownObjectivesFor(goRequest).map((objective) => objective.id);
@@ -99,6 +119,13 @@ describe("既知の項目一覧（設計/04 #223）", () => {
     expect(ids).toContain("go.variable_declaration:var_vs_short");
     expect(ids.every((id) => id.startsWith("go."))).toBe(true);
     expect(buildPrompt(goRequest)).toContain("go.variable_declaration:var_vs_short: var と :=");
+  });
+
+  test("項目をまだ読めていなければ一覧を出さず、objectiveIds を空にさせる", () => {
+    const withoutObjectives = { context: goRequest.context };
+
+    expect(knownObjectivesFor(withoutObjectives)).toEqual([]);
+    expect(buildPrompt(withoutObjectives)).toContain("objectiveIds は空配列にしてください");
   });
 
   test("項目を持たない言語では一覧を出さず、objectiveIds を空にさせる", () => {
