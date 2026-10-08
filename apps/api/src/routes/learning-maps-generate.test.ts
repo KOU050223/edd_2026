@@ -525,6 +525,20 @@ describe("POST /v1/learning-maps/:id/checks:generate（#247）", () => {
     expect((await send("POST", `/learning-maps/${map.id}/checks:generate`)).status).toBe(409);
   });
 
+  it("参照のノードだけのマップは、確認問題を頼んでいても作成時の問題の口を開けない", async () => {
+    skeletonText = JSON.stringify({
+      title: "参照だけ",
+      nodes: [{ key: "n1", conceptId: "go.defer" }],
+    });
+
+    const res = await send("POST", "/learning-maps:generate", GOAL_REQUEST);
+
+    expect(res.status).toBe(201);
+    const { map } = (await res.json()) as GenerateLearningMapResponse;
+    expect(map.creationChecks).toBeUndefined();
+    expect((await send("POST", `/learning-maps/${map.id}/checks:generate`)).status).toBe(409);
+  });
+
   it("一部の組が作れなくても、作れた組は保存して作成済みにする", async () => {
     const map = await generatedMap(4);
     const firstNode = map.nodes[0]!.conceptId;
