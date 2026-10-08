@@ -70,7 +70,7 @@ type AppContext = Context<{ Bindings: CloudflareBindings; Variables: AuthVariabl
  * 本文を読んで検証する。拒否の理由には入力値を載せず、
  * こちらが書いた定型文とパスだけを返す（routes/conversations.ts と同じ）。
  */
-async function parseBody<TSchema extends v.GenericSchema>(
+export async function parseBody<TSchema extends v.GenericSchema>(
   c: AppContext,
   schema: TSchema,
 ): Promise<v.InferOutput<TSchema>> {

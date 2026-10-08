@@ -26,14 +26,15 @@ Metrics と Workers Logs）に限り、外部の監視基盤へは出さない�
 
 「誰がいつ何をしたか」を追う記録。対象・保存先・保存期間は次のとおり。
 
-| 対象                                                       | 記録するもの           | 記録する場所                      |
-| ---------------------------------------------------------- | ---------------------- | --------------------------------- |
-| 学習履歴のエクスポート（`GET /v1/learning-events:export`） | userId、時刻、件数     | D1 `audit_log`                    |
-| 学習履歴の削除（`DELETE /v1/learning-events`）             | userId、時刻、削除件数 | D1 `audit_log`                    |
-| 会話履歴のエクスポート（`GET /v1/conversations:export`）   | userId、時刻、件数     | D1 `audit_log`                    |
-| 会話履歴の削除（`DELETE /v1/conversations(/:id)`）         | userId、時刻、削除件数 | D1 `audit_log`                    |
-| 退会（`DELETE /v1/me`）                                    | userId、時刻           | Workers Logs（`account deleted`） |
-| ログイン・ログアウト・トークン撤回                         | Auth0 側の記録         | Auth0 テナントログ                |
+| 対象                                                                                                        | 記録するもの                                   | 記録する場所                      |
+| ----------------------------------------------------------------------------------------------------------- | ---------------------------------------------- | --------------------------------- |
+| 学習履歴のエクスポート（`GET /v1/learning-events:export`）                                                  | userId、時刻、件数                             | D1 `audit_log`                    |
+| 学習履歴の削除（`DELETE /v1/learning-events`）                                                              | userId、時刻、削除件数                         | D1 `audit_log`                    |
+| 会話履歴のエクスポート（`GET /v1/conversations:export`）                                                    | userId、時刻、件数                             | D1 `audit_log`                    |
+| 会話履歴の削除（`DELETE /v1/conversations(/:id)`）                                                          | userId、時刻、削除件数                         | D1 `audit_log`                    |
+| 言語別マップの「理解すること」の確定（`PUT /v1/fixed-maps/:language/concepts/:conceptId/objectives`、#245） | userId、時刻、Concept、残した・消した項目の ID | D1 `audit_log`                    |
+| 退会（`DELETE /v1/me`）                                                                                     | userId、時刻                                   | Workers Logs（`account deleted`） |
+| ログイン・ログアウト・トークン撤回                                                                          | Auth0 側の記録                                 | Auth0 テナントログ                |
 
 - **保存先は D1 の `audit_log` テーブル**（`apps/api/migrations/0006_audit_log.sql`）。
   操作の記録は `AuditLogRepository`（`apps/api/src/repository/types.ts`）経由で追記する。
@@ -54,6 +55,8 @@ Metrics と Workers Logs）に限り、外部の監視基盤へは出さない�
   習熟度の手動上書き（`mastery_overrides`）や設定変更（`user_settings`）は
   取り消せる操作であり対象にしない。「いつ誰が変えたか」を追う必要が
   実際に出た時点で `AuditAction` へ足す。
+- **言語別マップの「理解すること」の確定は、利用者自身のデータではなく全利用者に効く操作**なので対象にする。
+  確定する前に記録し、書き換えが失敗した試行も行として残る。作成者が退会すると、その記録も一緒に消える。
 - 監査ログの記録に失敗したら例外として伝播させる（RULE-004）。記録だけ落として
   操作は成功、という状態は「追えない操作」を生む。
 - **記録は試行ごとに追記される。** たとえば `DELETE /v1/learning-events` で

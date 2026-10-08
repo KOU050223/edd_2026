@@ -75,6 +75,7 @@ import type {
   StoredOwnMapNode,
   UserPlanRepository,
   UserSettingsRepository,
+  FixedMapCreatorRepository,
 } from "./types.js";
 
 /** learning_events の1行。SELECT する列と対応させる。 */
@@ -961,6 +962,19 @@ export class D1UserPlanRepository implements UserPlanRepository {
       throw new Error(`unknown plan in user_plans: ${row.plan}`);
     }
     return row.plan as Plan;
+  }
+}
+
+/** `FixedMapCreatorRepository` の D1 実装（migrations/0018_fixed_map_creators.sql）。 */
+export class D1FixedMapCreatorRepository implements FixedMapCreatorRepository {
+  constructor(private readonly db: D1Database) {}
+
+  async isCreator(language: string, userId: string): Promise<boolean> {
+    const row = await this.db
+      .prepare(`SELECT 1 AS found FROM fixed_map_creators WHERE language = ? AND user_id = ?`)
+      .bind(language, userId)
+      .first<{ found: number }>();
+    return row !== null;
   }
 }
 
@@ -2229,6 +2243,62 @@ export class D1LearningMapRepository implements LearningMapRepository {
       )
       .all<LearningObjectiveRow>();
     return rows.results.map(toLearningObjective);
+  }
+
+  async replaceFixedObjectives(params: {
+    conceptId: string;
+    objectives: readonly { id: string; label: string; source: LearningObjectiveSource }[];
+    nowIso: string;
+  }): Promise<void> {
+    const { conceptId, nowIso } = params;
+    const objectives = JSON.stringify(params.objectives);
+    // 1つの batch（トランザクション）で書く。途中で失敗しても、項目と確認問題が食い違わない。
+    const [, , written] = await this.db.batch([
+      // 外す項目を狙った確認問題を、全利用者の分消す。
+      this.db
+        .prepare(
+          `DELETE FROM user_concept_checks
+           WHERE concept_id = ? AND objective_id IS NOT NULL
+             AND objective_id NOT IN (SELECT json_extract(value, '$.id') FROM json_each(?))`,
+        )
+        .bind(conceptId, objectives),
+      this.db
+        .prepare(
+          `DELETE FROM learning_objectives
+           WHERE map_id IS NULL AND concept_id = ?
+             AND id NOT IN (SELECT json_extract(value, '$.id') FROM json_each(?))`,
+        )
+        .bind(conceptId, objectives),
+      // 作った時刻は最初に入れたときのまま残す。
+      // ID が他の Concept やマップの項目と重なったら、concept_id に NULL を入れようとして
+      // NOT NULL 制約で文ごと失敗させる。batch ごと巻き戻るので、上の2つの DELETE も残らない
+      // （ON CONFLICT の WHERE で書き飛ばすと、DELETE だけが確定して項目が消える）。
+      // `WHERE true` は SELECT と ON CONFLICT の構文の曖昧さを避けるために要る（SQLite の upsert）。
+      this.db
+        .prepare(
+          `INSERT INTO learning_objectives
+             (id, concept_id, map_id, label, source, position, created_at, updated_at)
+           SELECT json_extract(value, '$.id'), ?, NULL, json_extract(value, '$.label'),
+                  json_extract(value, '$.source'), CAST(key AS INTEGER), ?, ?
+           FROM json_each(?)
+           WHERE true
+           ON CONFLICT (id) DO UPDATE SET
+             concept_id = CASE
+               WHEN learning_objectives.map_id IS NULL
+                 AND learning_objectives.concept_id = excluded.concept_id
+               THEN excluded.concept_id
+             END,
+             label = excluded.label,
+             source = excluded.source,
+             position = excluded.position,
+             updated_at = excluded.updated_at`,
+        )
+        .bind(conceptId, nowIso, nowIso, objectives),
+    ]);
+    // 書けなかった項目を「保存した」と返さない（RULE-004）。
+    if (changesOf(written) !== params.objectives.length) {
+      throw new Error(`fixed objectives were not all written: ${conceptId}`);
+    }
   }
 
   async listOwnNodes(ownerUserId: string, limit: number): Promise<StoredOwnMapNode[]> {

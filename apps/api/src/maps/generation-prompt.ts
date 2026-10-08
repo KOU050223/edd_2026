@@ -164,3 +164,55 @@ export function buildObjectivesPrompt(
     "上のノードをすべて、同じ key で1回ずつ含める。",
   ].join("\n");
 }
+
+/** 固定の Concept の「理解すること」を作り直すときに渡す1件（#245）。 */
+export interface FixedObjectiveTarget {
+  conceptId: string;
+  label: string;
+  summary: string;
+  /** 今ある項目。AI はこの中で同じ内容のものに同じ ID を付けて返す（決定 M5）。 */
+  existing: readonly { id: string; label: string }[];
+}
+
+/**
+ * 固定の言語別マップの Concept の「理解すること」を作り直させるプロンプト（#245）。
+ *
+ * 入力は運営が書いた Concept の定義と今ある項目だけで、利用者の入力は入らない。
+ */
+export function buildFixedObjectivesPrompt(
+  language: string,
+  targets: readonly FixedObjectiveTarget[],
+): string {
+  return [
+    "あなたは Gakushu Sochi の学習マップを作る講師です。",
+    `言語別の学習マップ「${language}」の各 Concept について、「理解すること」を作り直してください。`,
+    "",
+    "--- Concept（key|表示名|概要）と、今ある項目（- id|表示名） ---",
+    ...targets.flatMap((target) => [
+      [target.conceptId, target.label, target.summary].join("|"),
+      ...(target.existing.length === 0
+        ? ["- なし"]
+        : target.existing.map((objective) => `- ${objective.id}|${objective.label}`)),
+    ]),
+    "",
+    "--- 方針 ---",
+    "対象は、その言語を初めて学ぶ人から実務で使う人まで。",
+    "「理解すること」は、その Concept を学んだら説明・実践できるようになる1つの事柄。確認問題で確かめられる粒度にする。",
+    `各 Concept ${String(MIN_GENERATED_OBJECTIVES)}〜${String(MAX_GENERATED_OBJECTIVES)} 項目、1項目 ${String(MAX_OBJECTIVE_LABEL_LENGTH)} 文字以内、日本語。同じ Concept で重複させない。`,
+    "今ある項目と同じ内容の項目には、その id をそのまま付ける。表示名は直してよい。",
+    "新しい内容の項目には id を付けない。要らなくなった今ある項目は出力しない。",
+    "1つの id は1回だけ使う。その Concept の今ある項目に無い id は付けない。",
+    "",
+    "--- 出力形式 ---",
+    "次の形の JSON を1つだけ出力する。前後に説明文やコードブロックの囲みを付けない。",
+    JSON.stringify({
+      nodes: [
+        {
+          key: "lang.concept",
+          objectives: [{ id: "lang.concept:existing_item", label: "項目1" }, { label: "項目2" }],
+        },
+      ],
+    }),
+    "上の Concept をすべて、同じ key で1回ずつ含める。",
+  ].join("\n");
+}

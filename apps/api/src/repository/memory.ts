@@ -960,6 +960,35 @@ export class InMemoryLearningMapRepository implements LearningMapRepository {
     return Promise.resolve(true);
   }
 
+  replaceFixedObjectives(params: {
+    conceptId: string;
+    objectives: readonly { id: string; label: string; source: LearningObjectiveSource }[];
+    nowIso: string;
+  }): Promise<void> {
+    const { conceptId } = params;
+    // 外す項目を狙った確認問題を、全利用者の分消す（D1 と同じ）。
+    const keptIds = new Set(params.objectives.map((objective) => objective.id));
+    for (const userId of this.store.personalChecksByUser.keys()) {
+      this.dropChecks(
+        userId,
+        (check) =>
+          check.conceptId === conceptId &&
+          check.objectiveId !== undefined &&
+          !keptIds.has(check.objectiveId),
+      );
+    }
+    const others = this.store.fixedObjectives.filter(
+      (objective) => objective.conceptId !== conceptId,
+    );
+    this.store.fixedObjectives.splice(
+      0,
+      this.store.fixedObjectives.length,
+      ...others,
+      ...params.objectives.map((objective) => ({ ...objective, conceptId })),
+    );
+    return Promise.resolve();
+  }
+
   findOwnNodes(ownerUserId: string, conceptIds: readonly string[]): Promise<StoredOwnMapNode[]> {
     const wanted = new Set(conceptIds);
     return Promise.resolve(

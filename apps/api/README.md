@@ -73,6 +73,31 @@ wrangler が本番のアカウントへログインしていなくても、Cloud
 `database_id` が一致する `gakushu-sochi` を開き、「コンソール」に `--command` の中身の SQL を貼って実行する。
 別のアカウントに同じ名前の空のデータベースがあることがあるので、ID で確かめること。
 
+## 言語別マップの作成者を入れる
+
+言語別マップ（`packages/domain/concepts.md` の `language`）の「理解すること」を AI で作り直し、手で直せるのは、
+その言語のマップの作成者だけ（#245、`fixed_map_creators`）。作成者を変える API は無い。
+Auth0 の `sub` を公開リポジトリに書かないため、マイグレーションでは入れず、手で SQL を流す。
+
+1. 上の「プランを plus にする」の 1・2 と同じく、一度ログインして `user_id` を確かめる。
+   作り直しは AI の利用回数を使うので、作成者は plus にしておく。
+2. 次を実行する（`<language>` は `go` などの言語、`<user_id>` を置き換える）。
+   ダッシュボードの D1 コンソールでも、`--command` の中身をそのまま流せる。
+
+```bash
+npx wrangler d1 execute gakushu-sochi --remote --command "INSERT INTO fixed_map_creators (language, user_id, created_at) VALUES ('<language>', '<user_id>', datetime('now'))"
+```
+
+外すときは行を消す。
+
+```bash
+npx wrangler d1 execute gakushu-sochi --remote --command "DELETE FROM fixed_map_creators WHERE language = '<language>' AND user_id = '<user_id>'"
+```
+
+作成者が使う口は `POST /v1/fixed-maps/:language/objectives:generate`（作り直しの案を返す。保存しない）と
+`PUT /v1/fixed-maps/:language/concepts/:conceptId/objectives`（確定）。確定は全利用者の理解度と確認問題に効くので、
+監査ログ（`audit_log` の `fixed_objectives.replaced`）に残る。
+
 ## デプロイ先（メンバー間で統一する）
 
 本番は**1つのアカウントに固定**する。`wrangler.jsonc` の `account_id` がそれを強制する。

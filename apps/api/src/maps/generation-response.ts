@@ -221,3 +221,89 @@ function summarizeIssues(issues: readonly v.BaseIssue<unknown>[]): string {
     .map((issue) => `${v.getDotPath(issue) ?? "(root)"}: ${issue.message}`)
     .join("; ");
 }
+
+const fixedObjectivesSchema = v.object({
+  nodes: v.array(
+    v.object({
+      key: v.string(),
+      objectives: v.pipe(
+        v.array(
+          v.object({
+            id: v.optional(v.string()),
+            label: text(MAX_OBJECTIVE_LABEL_LENGTH),
+          }),
+        ),
+        v.minLength(MIN_GENERATED_OBJECTIVES),
+        v.maxLength(MAX_GENERATED_OBJECTIVES),
+      ),
+    }),
+  ),
+});
+
+/** 作り直した項目1件。`id` は引き継ぐ今の項目の ID。新しい項目は持たない。 */
+export interface FixedObjectiveCandidate {
+  id?: string;
+  label: string;
+}
+
+/**
+ * 固定の Concept の作り直した「理解すること」を読む（#245）。
+ *
+ * 頼んだ Concept のちょうど全部に項目があり、付いた ID がすべて**その Concept の今ある項目**で、
+ * 重ならないときだけ受理する（決定 M5）。知らない ID を新しい項目として扱い直すと、
+ * AI が作った ID が理解度の記録に紛れ込む。
+ *
+ * @param existing Concept ID → 今ある項目の ID。
+ * @returns Concept ID → 項目の並び。
+ */
+export function parseFixedObjectives(
+  text: string,
+  existing: ReadonlyMap<string, ReadonlySet<string>>,
+): MapParseResult<Map<string, FixedObjectiveCandidate[]>> {
+  const payload = parseJson(text);
+  if (!payload.ok) return payload;
+  const parsed = v.safeParse(fixedObjectivesSchema, payload.value);
+  if (!parsed.success) {
+    return { ok: false, reason: "objectives", detail: summarizeIssues(parsed.issues) };
+  }
+  const byConcept = new Map<string, FixedObjectiveCandidate[]>();
+  for (const node of parsed.output.nodes) {
+    const known = existing.get(node.key);
+    if (known === undefined || byConcept.has(node.key)) {
+      return {
+        ok: false,
+        reason: "objectives",
+        detail: `unexpected or duplicate key: ${node.key}`,
+      };
+    }
+    const labels = new Set(node.objectives.map((objective) => objective.label));
+    if (labels.size !== node.objectives.length) {
+      return { ok: false, reason: "objectives", detail: `duplicate objective: ${node.key}` };
+    }
+    const used = new Set<string>();
+    for (const objective of node.objectives) {
+      if (objective.id === undefined) continue;
+      if (!known.has(objective.id) || used.has(objective.id)) {
+        return {
+          ok: false,
+          reason: "objectives",
+          detail: `unknown or duplicate objective id: ${objective.id}`,
+        };
+      }
+      used.add(objective.id);
+    }
+    byConcept.set(
+      node.key,
+      node.objectives.map((objective) =>
+        objective.id === undefined
+          ? { label: objective.label }
+          : { id: objective.id, label: objective.label },
+      ),
+    );
+  }
+  const missing = [...existing.keys()].find((key) => !byConcept.has(key));
+  if (missing !== undefined) {
+    return { ok: false, reason: "objectives", detail: `missing node: ${missing}` };
+  }
+  return { ok: true, value: byConcept };
+}

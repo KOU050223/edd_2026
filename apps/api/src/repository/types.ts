@@ -450,6 +450,16 @@ export interface UserPlanRepository {
 }
 
 /**
+ * 言語別マップの作成者（#245 の決定 N4、migrations/0018_fixed_map_creators.sql）。
+ *
+ * **読むだけ。** 作成者は手で SQL を流して入れる。変える口を作ると、誰でも自分を作成者にできてしまう。
+ */
+export interface FixedMapCreatorRepository {
+  /** その言語のマップの作成者か。 */
+  isCreator(language: string, userId: string): Promise<boolean>;
+}
+
+/**
  * 監査ログへ記録する操作（Issue #122）。
  *
  * 対象は利用者の不可逆な操作だけにする。学習イベント本体は `learning_events` が
@@ -463,7 +473,9 @@ export type AuditAction =
   | "learning_evidence.deleted"
   | "conversations.exported"
   | "conversations.deleted"
-  | "concept_checks.exported";
+  | "concept_checks.exported"
+  /** 言語別マップの作成者が、固定の Concept の「理解すること」を置き換えた（#245）。全利用者に効く。 */
+  | "fixed_objectives.replaced";
 
 /** 監査ログの1件。 */
 export interface AuditLogEntry {
@@ -756,4 +768,18 @@ export interface LearningMapRepository {
    * どの利用者にも属さない。並びは Concept ID の順、Concept の中は保存した順。
    */
   listFixedObjectives(): Promise<StoredLearningObjective[]>;
+
+  /**
+   * 固定の Concept 1つの「理解すること」をまとめて置き換える（#245 の決定 M6）。並びは渡した順。
+   *
+   * 渡さなかった項目は消え、それを狙った確認問題も**全利用者の分**を消す（マップのノードの
+   * {@link replaceObjectives} と同じ扱い）。学習イベントの `objective_ids` は消さない
+   * （学習の記録は残し、理解度は補填しない：#223）。
+   * 作成者かどうかは呼び出し側が確かめる。
+   */
+  replaceFixedObjectives(params: {
+    conceptId: string;
+    objectives: readonly { id: string; label: string; source: LearningObjectiveSource }[];
+    nowIso: string;
+  }): Promise<void>;
 }

@@ -561,7 +561,7 @@ async function checkConsent(
 
 /** API キーと、送ってよいモデルの並びを確かめる（`checks/generate.ts` と同じ規則）。 */
 export function resolveUpstreamConfig(
-  generation: MapGenerationDeps,
+  generation: Pick<MapGenerationDeps, "apiKey" | "model" | "models">,
   path: string,
 ): Step<{ apiKey: string; models: AllowedModel[] }> {
   if (!generation.apiKey) {
@@ -680,27 +680,34 @@ export function notConfiguredBody() {
 
 /**
  * 上限到達時の応答。形は `POST /v1/ai/responses` と同じ（`AiUsageLimitBody`）。
- * `what` はマップそのものか、作成時の確認問題か（#247）。どちらも 5 回分を使う。
+ * `what` はマップそのものか、作成時の確認問題か（#247）、言語別マップの項目の作り直しか（#245）。
+ * `cost` は使う回数。マップと作成時の確認問題は 5 回分。
  */
 export function limitReached(
   kind: AiUsageLimitKind,
   now: Date,
-  what: "map" | "checks" = "map",
+  what: "map" | "checks" | "fixed-objectives" = "map",
+  cost: number = MAP_GENERATION_USAGE_COST,
 ): AiUsageLimitBody {
   const resetAt = kind === "daily" ? nextUtcDay(now) : nextUtcMonth(now);
   const when = kind === "daily" ? "明日 UTC 0時" : "翌月 UTC 1日 0時";
   const scope = kind === "daily" ? "今日" : "今月";
-  const action = what === "map" ? "マップを1つ作る" : "マップの確認問題を作る";
-  const alternative =
-    what === "map"
-      ? "手でマップを作るのは回数を使いません。"
-      : "確認問題は、あとから確認問題の画面で1組ずつ作れます。";
+  const action = {
+    map: "マップを1つ作る",
+    checks: "マップの確認問題を作る",
+    "fixed-objectives": "言語別マップの「理解すること」を作り直す",
+  }[what];
+  const alternative = {
+    map: "手でマップを作るのは回数を使いません。",
+    checks: "確認問題は、あとから確認問題の画面で1組ずつ作れます。",
+    "fixed-objectives": "作り直す Concept を減らすと、使う回数も減ります。",
+  }[what];
   return {
     error: "ai usage limit reached",
     limit: kind,
     resetAt: resetAt.toISOString(),
     message:
-      `${action}には AI の利用回数を ${String(MAP_GENERATION_USAGE_COST)} 回使いますが、` +
+      `${action}には AI の利用回数を ${String(cost)} 回使いますが、` +
       `${scope}の残りが足りません。${when}に回復します。${alternative}`,
   };
 }
