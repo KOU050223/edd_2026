@@ -336,6 +336,44 @@ describe("PUT /v1/fixed-maps/:language/concepts/:conceptId/objectives", () => {
     );
   });
 
+  it("読んでから書くまでの間に別の確定が入ったら、書かずに 409 を返す", async () => {
+    const read = maps.getFixedObjectives.bind(maps);
+    maps.getFixedObjectives = async (conceptId) => {
+      const current = await read(conceptId);
+      // この要求が読んだ直後に、別の確定が go.defer:lifo を消す。
+      await maps.replaceFixedObjectives({
+        conceptId,
+        expectedRevision: current.revision,
+        revision: "other",
+        objectives: [{ id: "go.defer:timing", label: "実行タイミング", source: "manual" }],
+        nowIso: NOW.toISOString(),
+      });
+      return current;
+    };
+
+    const res = await send("PUT", path, {
+      objectives: [
+        { id: "go.defer:timing", label: "実行タイミング" },
+        { id: "go.defer:lifo", label: "実行順" },
+      ],
+    });
+
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ error: "fixed objectives changed" });
+    // 先の確定で消えた項目を書き戻さない。
+    expect((await maps.listFixedObjectives()).map((objective) => objective.id)).toEqual([
+      "go.defer:timing",
+    ]);
+  });
+
+  it("確定を続けても、前の確定の版から読み直すので 409 にならない", async () => {
+    const body = { objectives: [{ id: "go.defer:timing", label: "実行タイミング" }] };
+    expect((await send("PUT", path, body)).status).toBe(200);
+    expect(
+      (await send("PUT", path, { objectives: [...body.objectives, { label: "足した" }] })).status,
+    ).toBe(200);
+  });
+
   it("表示名を手で書き換えた項目は、ID を保ったまま手書きになる", async () => {
     store.fixedObjectives[0] = { ...store.fixedObjectives[0]!, source: "ai" };
 

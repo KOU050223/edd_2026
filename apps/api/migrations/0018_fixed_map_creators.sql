@@ -14,3 +14,13 @@ CREATE TABLE fixed_map_creators (
   created_at TEXT NOT NULL,
   PRIMARY KEY (language, user_id)
 );
+
+-- ## fixed_objective_revisions
+--
+-- 固定の Concept の「理解すること」の版。確定（PUT .../concepts/:conceptId/objectives）のたびに
+-- 新しい値を振る。確定は今の項目を読んで ID を確かめてから書くので、その間に別の確定が入ったら
+-- 書かない（読んだときの版と違えば 409）。行が無いのは、まだ一度も確定していない Concept。
+CREATE TABLE fixed_objective_revisions (
+  concept_id TEXT PRIMARY KEY,
+  revision TEXT NOT NULL
+);

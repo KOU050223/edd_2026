@@ -135,11 +135,8 @@ export function createFixedMapsRoute(resolve: FixedMapsDepsResolver) {
       throw new HTTPException(404, { message: "concept not found" });
     }
 
-    const existing = new Map(
-      (await deps.maps.listFixedObjectives())
-        .filter((objective) => objective.conceptId === conceptId)
-        .map((objective) => [objective.id, objective]),
-    );
+    const current = await deps.maps.getFixedObjectives(conceptId);
+    const existing = new Map(current.objectives.map((objective) => [objective.id, objective]));
     const used = new Set<string>();
     const objectives: { id: string; label: string; source: LearningObjectiveSource }[] = [];
     for (const item of input.objectives) {
@@ -178,7 +175,24 @@ export function createFixedMapsRoute(resolve: FixedMapsDepsResolver) {
         removedIds: [...existing.keys()].filter((id) => !used.has(id)),
       },
     });
-    await deps.maps.replaceFixedObjectives({ conceptId, objectives, nowIso: deps.nowIso() });
+    const replaced = await deps.maps.replaceFixedObjectives({
+      conceptId,
+      expectedRevision: current.revision,
+      revision: deps.newKey(),
+      objectives,
+      nowIso: deps.nowIso(),
+    });
+    // 読んでから書くまでの間に、別の確定が入った。読んだ一覧で確かめた ID が今も正しいとは限らない。
+    if (!replaced) {
+      return c.json(
+        {
+          error: "fixed objectives changed",
+          message:
+            "ほかの操作で、この Concept の項目が変わりました。画面を読み込み直してから確定してください。",
+        },
+        409,
+      );
+    }
     const body: PutFixedObjectivesResponse = {
       objectives: objectives.map(({ id, label, source }) => ({ id, label, source })),
     };

@@ -1595,10 +1595,20 @@ export class D1PersonalCheckRepository implements PersonalCheckRepository {
          AND (? IS NULL OR EXISTS (
            SELECT 1 FROM learning_objectives WHERE id = ? AND map_id = ? AND concept_id = ?
          ))`;
-    const targetBindings =
-      target === undefined
-        ? []
-        : [target.mapId, conceptId, userId, objectiveId, objectiveId, target.mapId, conceptId];
+    // 固定の Concept の項目を狙った組なら、その項目がまだあることを同じ文で確かめる（#245）。
+    // 作成者が生成の間に項目を消すと、確定で消した問題が後から書き戻される（PR #293 のレビュー）。
+    const fixedObjectiveExists = `EXISTS (
+           SELECT 1 FROM learning_objectives WHERE id = ? AND map_id IS NULL AND concept_id = ?
+         )`;
+    const [guard, guardBindings] =
+      target !== undefined
+        ? [
+            targetExists,
+            [target.mapId, conceptId, userId, objectiveId, objectiveId, target.mapId, conceptId],
+          ]
+        : objectiveId !== null
+          ? [fixedObjectiveExists, [objectiveId, conceptId]]
+          : [undefined, []];
     const result = await this.db
       .prepare(
         `INSERT INTO user_concept_checks (
@@ -1610,7 +1620,7 @@ export class D1PersonalCheckRepository implements PersonalCheckRepository {
            SELECT 1 FROM learning_history_resets
            WHERE user_id = ? AND reset_at_ms >= ?
          )
-         ${target === undefined ? "" : `AND ${targetExists}`}
+         ${guard === undefined ? "" : `AND ${guard}`}
          ON CONFLICT (user_id, concept_id, target) DO UPDATE SET
            scope = excluded.scope,
            objective_id = excluded.objective_id,
@@ -1633,7 +1643,7 @@ export class D1PersonalCheckRepository implements PersonalCheckRepository {
         target?.origin ?? "on_demand",
         userId,
         startedAtMs,
-        ...targetBindings,
+        ...guardBindings,
       )
       .run();
     const changes = result.meta.changes;
@@ -1641,12 +1651,12 @@ export class D1PersonalCheckRepository implements PersonalCheckRepository {
       throw new Error("D1 insert result has no meta.changes");
     }
     if (changes > 0) return { saved: true };
-    if (target === undefined) return { saved: false, reason: "reset" };
+    if (guard === undefined) return { saved: false, reason: "reset" };
     // 書かなかった理由を応答の文面のために分ける。判定は書き込みと同じ文で済んでいるので、
     // ここで読み直した結果が書き込みの可否を左右することはない。
     const exists = await this.db
-      .prepare(`SELECT 1 AS found WHERE ${targetExists}`)
-      .bind(...targetBindings)
+      .prepare(`SELECT 1 AS found WHERE ${guard}`)
+      .bind(...guardBindings)
       .first<{ found: number }>();
     return { saved: false, reason: exists === null ? "target-removed" : "reset" };
   }
@@ -2253,35 +2263,74 @@ export class D1LearningMapRepository implements LearningMapRepository {
     return rows.results.map(toLearningObjective);
   }
 
+  async getFixedObjectives(
+    conceptId: string,
+  ): Promise<{ objectives: StoredLearningObjective[]; revision: string | null }> {
+    // 項目と版を同じトランザクションで読む。別々に読むと、間の置き換えで版と項目が食い違う。
+    const [objectives, revision] = await this.db.batch([
+      this.db
+        .prepare(
+          `SELECT id, concept_id, label, source FROM learning_objectives
+           WHERE map_id IS NULL AND concept_id = ?
+           ORDER BY position`,
+        )
+        .bind(conceptId),
+      this.db
+        .prepare(`SELECT revision FROM fixed_objective_revisions WHERE concept_id = ?`)
+        .bind(conceptId),
+    ]);
+    return {
+      objectives: rowsOf<LearningObjectiveRow>(objectives).map(toLearningObjective),
+      revision: rowsOf<{ revision: string }>(revision)[0]?.revision ?? null,
+    };
+  }
+
   async replaceFixedObjectives(params: {
     conceptId: string;
+    expectedRevision: string | null;
+    revision: string;
     objectives: readonly { id: string; label: string; source: LearningObjectiveSource }[];
     nowIso: string;
-  }): Promise<void> {
-    const { conceptId, nowIso } = params;
+  }): Promise<boolean> {
+    const { conceptId, nowIso, revision } = params;
     const objectives = JSON.stringify(params.objectives);
+    // 版を進められた（読んだときの版のままだった）ときだけ、残りの文が書く。
+    // 最初の文で版をこの書き込みの値にするので、残りの文はその値かどうかで判定できる。
+    const claimed = `EXISTS (
+      SELECT 1 FROM fixed_objective_revisions WHERE concept_id = ? AND revision = ?
+    )`;
     // 1つの batch（トランザクション）で書く。途中で失敗しても、項目と確認問題が食い違わない。
-    const [, , written] = await this.db.batch([
+    const [advanced, , , written] = await this.db.batch([
+      // 行が無ければ（まだ一度も置き換えていない）入れる。あれば、読んだときの版のときだけ進める。
+      this.db
+        .prepare(
+          `INSERT INTO fixed_objective_revisions (concept_id, revision) VALUES (?, ?)
+           ON CONFLICT (concept_id) DO UPDATE SET revision = excluded.revision
+           WHERE fixed_objective_revisions.revision IS ?`,
+        )
+        .bind(conceptId, revision, params.expectedRevision),
       // 外す項目を狙った確認問題を、全利用者の分消す。
       this.db
         .prepare(
           `DELETE FROM user_concept_checks
            WHERE concept_id = ? AND objective_id IS NOT NULL
-             AND objective_id NOT IN (SELECT json_extract(value, '$.id') FROM json_each(?))`,
+             AND objective_id NOT IN (SELECT json_extract(value, '$.id') FROM json_each(?))
+             AND ${claimed}`,
         )
-        .bind(conceptId, objectives),
+        .bind(conceptId, objectives, conceptId, revision),
       this.db
         .prepare(
           `DELETE FROM learning_objectives
            WHERE map_id IS NULL AND concept_id = ?
-             AND id NOT IN (SELECT json_extract(value, '$.id') FROM json_each(?))`,
+             AND id NOT IN (SELECT json_extract(value, '$.id') FROM json_each(?))
+             AND ${claimed}`,
         )
-        .bind(conceptId, objectives),
+        .bind(conceptId, objectives, conceptId, revision),
       // 作った時刻は最初に入れたときのまま残す。
       // ID が他の Concept やマップの項目と重なったら、concept_id に NULL を入れようとして
       // NOT NULL 制約で文ごと失敗させる。batch ごと巻き戻るので、上の2つの DELETE も残らない
       // （ON CONFLICT の WHERE で書き飛ばすと、DELETE だけが確定して項目が消える）。
-      // `WHERE true` は SELECT と ON CONFLICT の構文の曖昧さを避けるために要る（SQLite の upsert）。
+      // SELECT の WHERE は、SELECT と ON CONFLICT の構文の曖昧さを避けるためにも要る（SQLite の upsert）。
       this.db
         .prepare(
           `INSERT INTO learning_objectives
@@ -2289,7 +2338,7 @@ export class D1LearningMapRepository implements LearningMapRepository {
            SELECT json_extract(value, '$.id'), ?, NULL, json_extract(value, '$.label'),
                   json_extract(value, '$.source'), CAST(key AS INTEGER), ?, ?
            FROM json_each(?)
-           WHERE true
+           WHERE ${claimed}
            ON CONFLICT (id) DO UPDATE SET
              concept_id = CASE
                WHEN learning_objectives.map_id IS NULL
@@ -2301,12 +2350,15 @@ export class D1LearningMapRepository implements LearningMapRepository {
              position = excluded.position,
              updated_at = excluded.updated_at`,
         )
-        .bind(conceptId, nowIso, nowIso, objectives),
+        .bind(conceptId, nowIso, nowIso, objectives, conceptId, revision),
     ]);
+    // 読んだあとに別の置き換えが入った。どの文も書いていない。
+    if (changesOf(advanced) === 0) return false;
     // 書けなかった項目を「保存した」と返さない（RULE-004）。
     if (changesOf(written) !== params.objectives.length) {
       throw new Error(`fixed objectives were not all written: ${conceptId}`);
     }
+    return true;
   }
 
   async listOwnNodes(ownerUserId: string, limit: number): Promise<StoredOwnMapNode[]> {

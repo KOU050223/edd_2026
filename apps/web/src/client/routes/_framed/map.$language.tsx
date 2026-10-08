@@ -23,8 +23,14 @@ import { findCurrentPosition, summarizeTree } from "../../learning-map.js";
  */
 function LanguageMap() {
   const { language } = Route.useParams();
-  const { profile, overrides, fixedObjectives, editableLanguages, completions } =
-    Route.useLoaderData();
+  const {
+    profile,
+    overrides,
+    fixedObjectives,
+    fixedObjectivesError,
+    editableLanguages,
+    completions,
+  } = Route.useLoaderData();
   // 未ログインでは profile が無い。地図の形は見せたまま、記録や修正の導線だけを畳む。
   const loggedIn = profile !== null;
   const { concept: selectedId } = Route.useSearch();
@@ -128,6 +134,9 @@ function LanguageMap() {
         <section className="message error">
           <p>理解度の保存に失敗しました：{saveError}</p>
         </section>
+      )}
+      {fixedObjectivesError && (
+        <p className="hint">「理解すること」を読めませんでした：{fixedObjectivesError}</p>
       )}
       {!loggedIn && (
         // 最初に開く人がまず見る画面（Issue #182）。地図の形はログイン無しで

@@ -526,11 +526,18 @@ describe("消したものの確認問題を消す（#242、2026-10-07 の決定�
     return all.map((check) => [check.conceptId, check.objectiveId ?? "concept"]);
   }
 
-  async function putCheck(conceptId: string, objectiveId?: string, userId = "user-a") {
+  /** 手作りのノードの組は、本番（checks/generate.ts）と同じくマップの ID を渡して保存する。 */
+  async function putCheck(
+    conceptId: string,
+    objectiveId?: string,
+    userId = "user-a",
+    mapId?: string,
+  ) {
     await new InMemoryPersonalCheckRepository(store).put(
       userId,
       personalCheck(conceptId, objectiveId),
       0,
+      mapId === undefined ? undefined : { mapId },
     );
   }
 
@@ -580,8 +587,8 @@ describe("消したものの確認問題を消す（#242、2026-10-07 の決定�
       await send("PUT", path, "token-a", { objectives: [{ label: "let" }, { label: "mut" }] })
     ).json()) as PutLearningObjectivesResponse;
     const [keep, drop] = created.objectives.map((objective) => objective.id) as [string, string];
-    await putCheck(node, keep);
-    await putCheck(node, drop);
+    await putCheck(node, keep, "user-a", map.id);
+    await putCheck(node, drop, "user-a", map.id);
 
     await send("PUT", path, "token-a", { objectives: [{ id: keep, label: "let" }] });
 

@@ -185,7 +185,8 @@ export async function generateCheck(
     mapId === undefined ? undefined : { mapId },
   );
   if (!stored.saved && stored.reason === "target-removed") {
-    // 生成中に、手で作ったマップ・ノード・狙った項目が消された（#242）。消したものの問題は残さない。
+    // 生成中に、手で作ったマップ・ノード・狙った項目（固定の Concept の項目も。#245）が消された（#242）。
+    // 消したものの問題は残さない。
     console.info("generated check was discarded because its map node was removed", { conceptId });
     return {
       status: 409,

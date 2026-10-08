@@ -79,6 +79,11 @@ export async function loadLearningMap(): Promise<{
   fixedObjectives: ReadonlyMap<string, readonly LearningObjective[]>;
   /** 自分が作成者になっている言語。未ログインでは空。 */
   editableLanguages: readonly string[];
+  /**
+   * 固定の項目を読めなかった理由。項目は詳細の補足なので、地図は出したうえで画面に出す
+   * （RULE-004。PR #293 のレビュー）。読めなければ項目も編集の導線も空。
+   */
+  fixedObjectivesError?: string;
   /** 達成の記録。未ログイン、または読めなかったときは `undefined`。 */
   completions?: AreaCompletions;
   /** 記録を読めなかった理由。地図は出したうえで画面に出す（RULE-004）。 */
@@ -87,12 +92,22 @@ export async function loadLearningMap(): Promise<{
   const retry = takeLoginRetry();
   let profile: MapProfile;
   let overrides: MasteryOverrides;
-  let fixed: Awaited<ReturnType<typeof fetchFixedMaps>>;
+  let fixed: Awaited<ReturnType<typeof fetchFixedMaps>> | undefined;
+  let fixedObjectivesError: string | undefined;
   try {
     [profile, overrides, fixed] = await Promise.all([
       requestJson<MapProfile>("/api/v1/learning-profile", fetch, retry),
       requestJson<MasteryOverrides>(OVERRIDES_PATH, fetch, retry),
-      fetchFixedMaps(fetch, retry),
+      fetchFixedMaps(fetch, retry).catch((error: unknown) => {
+        // ログインとセッションの失敗は地図と同じく扱う（下の catch と呼び出し元へ通す）。
+        if (
+          error instanceof ApiError &&
+          (error.kind === "session_expired" || error.kind === "login_required")
+        )
+          throw error;
+        fixedObjectivesError = toErrorText(error);
+        return undefined;
+      }),
     ]);
   } catch (error) {
     // 未ログインは失敗ではない（Issue #182）。地図の形は Concept の定義だけで
@@ -101,8 +116,8 @@ export async function loadLearningMap(): Promise<{
       return { profile: null, overrides: null, fixedObjectives: new Map(), editableLanguages: [] };
     throw error;
   }
-  const fixedObjectives = objectivesByConcept(fixed.objectives);
-  const { editableLanguages } = fixed;
+  const fixedObjectives = objectivesByConcept(fixed?.objectives ?? []);
+  const editableLanguages = fixed?.editableLanguages ?? [];
 
   // 分野コンプリートの判定はサーバーが行う（apps/api/src/routes/area-completions.ts）。
   // これは POST なので、同意の記録が無いと Worker が 403 で止める（#174）。
@@ -126,6 +141,7 @@ export async function loadLearningMap(): Promise<{
     overrides,
     fixedObjectives,
     editableLanguages,
+    ...(fixedObjectivesError === undefined ? {} : { fixedObjectivesError }),
     completions,
     completionsError,
   };

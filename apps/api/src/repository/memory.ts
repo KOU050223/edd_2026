@@ -96,6 +96,8 @@ export interface InMemoryRepositoryStore {
    * （マイグレーションの Go の項目は `maps/test-fixed-objectives.ts`）。
    */
   readonly fixedObjectives: StoredLearningObjective[];
+  /** conceptId -> 版。D1 の fixed_objective_revisions に対応する。 */
+  readonly fixedObjectiveRevisions: Map<string, string>;
 }
 
 /** インメモリのマップ1件。 */
@@ -122,6 +124,7 @@ export function createInMemoryRepositoryStore(): InMemoryRepositoryStore {
     mapGenerationConsents: new Map(),
     learningMaps: new Map(),
     fixedObjectives: [],
+    fixedObjectiveRevisions: new Map(),
   };
 }
 
@@ -668,6 +671,15 @@ export class InMemoryPersonalCheckRepository implements PersonalCheckRepository 
       if (map?.ownerUserId !== userId || node?.kind !== "own" || !objectiveKept) {
         return Promise.resolve({ saved: false, reason: "target-removed" });
       }
+    } else if (
+      check.objectiveId !== undefined &&
+      !this.store.fixedObjectives.some(
+        (objective) =>
+          objective.id === check.objectiveId && objective.conceptId === check.conceptId,
+      )
+    ) {
+      // 固定の Concept の項目を狙った組は、その項目がまだあるときだけ書く（#245。D1 と同じ）。
+      return Promise.resolve({ saved: false, reason: "target-removed" });
     }
     let checks = this.store.personalChecksByUser.get(userId);
     if (checks === undefined) {
@@ -957,12 +969,30 @@ export class InMemoryLearningMapRepository implements LearningMapRepository {
     return Promise.resolve(true);
   }
 
+  getFixedObjectives(
+    conceptId: string,
+  ): Promise<{ objectives: StoredLearningObjective[]; revision: string | null }> {
+    return Promise.resolve({
+      objectives: structuredClone(
+        this.store.fixedObjectives.filter((objective) => objective.conceptId === conceptId),
+      ),
+      revision: this.store.fixedObjectiveRevisions.get(conceptId) ?? null,
+    });
+  }
+
   replaceFixedObjectives(params: {
     conceptId: string;
+    expectedRevision: string | null;
+    revision: string;
     objectives: readonly { id: string; label: string; source: LearningObjectiveSource }[];
     nowIso: string;
-  }): Promise<void> {
+  }): Promise<boolean> {
     const { conceptId } = params;
+    // 読んだあとに別の置き換えが入っていたら書かない（D1 と同じ）。
+    if ((this.store.fixedObjectiveRevisions.get(conceptId) ?? null) !== params.expectedRevision) {
+      return Promise.resolve(false);
+    }
+    this.store.fixedObjectiveRevisions.set(conceptId, params.revision);
     // 外す項目を狙った確認問題を、全利用者の分消す（D1 と同じ）。
     const keptIds = new Set(params.objectives.map((objective) => objective.id));
     for (const userId of this.store.personalChecksByUser.keys()) {
@@ -983,7 +1013,7 @@ export class InMemoryLearningMapRepository implements LearningMapRepository {
       ...others,
       ...params.objectives.map((objective) => ({ ...objective, conceptId })),
     );
-    return Promise.resolve();
+    return Promise.resolve(true);
   }
 
   findOwnNodes(ownerUserId: string, conceptIds: readonly string[]): Promise<StoredOwnMapNode[]> {

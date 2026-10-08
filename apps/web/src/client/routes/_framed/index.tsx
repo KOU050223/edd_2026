@@ -26,8 +26,14 @@ import { isOnExistingMap } from "../../learning-maps.js";
  * 地図に載らない Concept だけはここから直接詳細を開ける（`?concept=`）。
  */
 function AreaIndex() {
-  const { profile, overrides, fixedObjectives, completions, completionsError } =
-    Route.useLoaderData();
+  const {
+    profile,
+    overrides,
+    fixedObjectives,
+    fixedObjectivesError,
+    completions,
+    completionsError,
+  } = Route.useLoaderData();
   // 未ログインでは profile が無い。地図の形は見せたまま、記録や修正の導線だけを畳む。
   const loggedIn = profile !== null;
   const { concept: selectedId } = Route.useSearch();
@@ -98,6 +104,9 @@ function AreaIndex() {
         <section className="message error">
           <p>理解度の保存に失敗しました：{saveError}</p>
         </section>
+      )}
+      {fixedObjectivesError && (
+        <p className="hint">「理解すること」を読めませんでした：{fixedObjectivesError}</p>
       )}
       {completionsError && (
         <p className="hint">
