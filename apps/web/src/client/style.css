@@ -1395,7 +1395,7 @@ button.link.danger {
   width: 100%;
 }
 .map-create button,
-.editor button:not(.link):not(.editor-node-head):not(.node) {
+.editor button:not(.link):not(.editor-node-row):not(.node) {
   justify-self: start;
   border: 0;
   border-radius: 8px;
@@ -1406,62 +1406,109 @@ button.link.danger {
   cursor: pointer;
 }
 .map-create button:disabled,
-.editor button:not(.link):not(.editor-node-head):not(.node):disabled {
+.editor button:not(.link):not(.editor-node-row):not(.node):disabled {
   background: #cbd5e1;
   color: #475569;
   cursor: not-allowed;
 }
-/* 左に木のプレビュー、右にノードの一覧。狭い画面では縦に積む。 */
+/*
+ * 左に木のプレビュー、右に1行ずつのノード一覧と、選んだノードの編集欄（#286）。
+ * プレビューはスクロールしても見え続け、木の中だけを縦横にスクロールする。狭い画面では縦に積む。
+ */
 .editor-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(280px, 400px);
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 380px);
   gap: 16px;
   align-items: start;
 }
+.editor-preview {
+  position: sticky;
+  top: 12px;
+  min-width: 0;
+}
+.editor-preview .tree-scroll {
+  overflow: auto;
+  min-height: 240px;
+  max-height: calc(100vh - 120px);
+}
+.editor-side {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
 .editor-nodes {
   display: grid;
-  gap: 12px;
+  gap: 8px;
 }
 .editor-nodes h2 {
   font-size: 15px;
   margin: 0;
 }
-.editor-nodes > ul {
+/* 一覧は1行ずつ。長くなったら一覧の中だけをスクロールする。 */
+.editor-node-list {
   list-style: none;
-  padding: 0;
   margin: 0;
+  padding: 4px;
   display: grid;
-  gap: 8px;
-}
-.editor-node {
+  gap: 2px;
+  max-height: 40vh;
+  overflow-y: auto;
   background: #fff;
   border: 1px solid #e2e8f0;
   border-radius: 10px;
 }
-.editor-node.open {
-  border-color: #0f766e;
-}
-.editor-node-head {
+.editor-node-row {
   display: flex;
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 10px 12px;
-  background: none;
+  padding: 6px 10px;
   border: 0;
+  border-radius: 6px;
+  background: none;
+  color: inherit;
   font: inherit;
   text-align: left;
   cursor: pointer;
 }
-.editor-node-head span {
+.editor-node-row:hover {
+  background: #f1f5f9;
+}
+.editor-node-row.selected {
+  background: #ccfbf1;
+  font-weight: 600;
+}
+.editor-node-row span {
   flex: 1;
   min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.editor-reference-toggle summary {
+  cursor: pointer;
+  color: #0f766e;
+}
+.editor-reference-toggle[open] summary {
+  margin-bottom: 8px;
+}
+.editor-panel {
+  background: #fff;
+  border: 1px solid #0f766e;
+  border-radius: 10px;
+  padding: 12px;
+}
+.editor-node-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 15px;
   overflow-wrap: anywhere;
 }
 .editor-node-body {
   display: grid;
   gap: 12px;
-  padding: 0 12px 12px;
 }
 .editor-node-body fieldset {
   border: 0;
@@ -1518,5 +1565,11 @@ button.link.danger {
 @media (max-width: 600px) {
   .editor-layout {
     grid-template-columns: 1fr;
+  }
+  .editor-preview {
+    position: static;
+  }
+  .editor-preview .tree-scroll {
+    max-height: 50vh;
   }
 }

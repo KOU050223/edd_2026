@@ -1,10 +1,15 @@
 import { createFileRoute, Link, useBlocker, useRouter } from "@tanstack/react-router";
 import { CONCEPTS } from "@gakushu-sochi/domain";
-import { useMemo, useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState, type TextareaHTMLAttributes } from "react";
 import { ApiError, createSubmitGuard } from "../../api.js";
 import { toErrorText } from "../../errors.js";
 import { layoutTrees } from "../../learning-map.js";
-import { languageLabel, overlaidConcepts, SkillTree } from "../../learning-map-view.js";
+import {
+  languageLabel,
+  NARROW_LAYOUT,
+  overlaidConcepts,
+  SkillTree,
+} from "../../learning-map-view.js";
 import {
   fetchLearningMap,
   fetchOwnMapConcepts,
@@ -28,6 +33,7 @@ import {
   removeNode,
   toContentRequest,
   setPrerequisite,
+  fitTextareaHeight,
   updateOwnNode,
   objectiveItemsFrom,
   objectiveProblems,
@@ -46,6 +52,58 @@ interface ReferenceCandidate {
   label: string;
   /** 領域名か、元のマップの題名。 */
   area: string;
+}
+
+/**
+ * 中身に合わせて伸びる入力欄（#286）。描いた中身の高さを測り、`minRows`〜`maxRows` 行に収める。
+ * 欄の幅が変わると折り返しも変わるので、幅の変化でも測り直す。
+ */
+function AutoTextarea({
+  minRows,
+  maxRows,
+  value,
+  ...props
+}: Omit<TextareaHTMLAttributes<HTMLTextAreaElement>, "rows" | "value"> & {
+  minRows: number;
+  maxRows: number;
+  value: string;
+}) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => {
+    const element = ref.current;
+    if (element === null) return;
+    const fit = () => {
+      const style = getComputedStyle(element);
+      const px = (value: string) => Number.parseFloat(value) || 0;
+      const fontSize = px(style.fontSize);
+      // `line-height: normal` は数値にならないので、文字の大きさから見積もる。
+      const lineHeight = px(style.lineHeight) || fontSize * 1.5;
+      // 縮める方向にも合わせるため、一度高さを外してから測る。
+      element.style.height = "auto";
+      const { height, scroll } = fitTextareaHeight(
+        {
+          scrollHeight: element.scrollHeight,
+          lineHeight,
+          padding: px(style.paddingTop) + px(style.paddingBottom),
+          frame: px(style.borderTopWidth) + px(style.borderBottomWidth),
+        },
+        { min: minRows, max: maxRows },
+      );
+      element.style.height = `${String(height)}px`;
+      element.style.overflowY = scroll ? "auto" : "hidden";
+    };
+    fit();
+    // 自分で高さを変えたときにも通知が来るので、幅が変わったときだけ測り直す。
+    let width = element.clientWidth;
+    const observer = new ResizeObserver(() => {
+      if (element.clientWidth === width) return;
+      width = element.clientWidth;
+      fit();
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [value, minRows, maxRows]);
+  return <textarea ref={ref} rows={minRows} value={value} {...props} />;
 }
 
 /** 保存の失敗を、利用者が何をすればよいか分かる文面にする（RULE-004）。 */
@@ -208,24 +266,20 @@ function ReferencePicker({
   );
 }
 
-/** 1ノードの編集欄。 */
+/** 選んだ1ノードの編集欄。同時に出すのは1つだけ（#286: 一覧が縦に伸びすぎていた）。 */
 function NodeEditor({
   node,
   draft,
-  open,
   objectives,
   disabled,
-  onToggle,
   onChange,
 }: {
   node: DraftNode;
   draft: MapDraft;
-  open: boolean;
   /** 保存済みの手作りのノードの「理解すること」。新しいノード・参照のノードは `undefined`。 */
   objectives: Omit<Parameters<typeof ObjectivesEditor>[0], "disabled"> | undefined;
   /** 書き込みの最中。 */
   disabled: boolean;
-  onToggle: () => void;
   onChange: (draft: MapDraft) => void;
 }) {
   const nameOfRef = (ref: string) => {
@@ -235,93 +289,91 @@ function NodeEditor({
   const candidates = prerequisiteCandidates(draft, node.ref);
   const isNew = node.ref.startsWith("new:");
   return (
-    <li className={open ? "editor-node open" : "editor-node"}>
-      <button className="editor-node-head" aria-expanded={open} onClick={onToggle}>
-        <span>{node.label.trim() || "（無題）"}</span>
+    <div className="editor-node-body">
+      <h3 className="editor-node-title">
+        {node.label.trim() || "（無題）"}
         {node.kind === "reference" && <em className="badge">参照</em>}
         {isNew && <em className="badge">未保存</em>}
-      </button>
-      {open && (
-        <div className="editor-node-body">
-          {node.kind === "own" ? (
-            <>
-              <label>
-                表示名
-                <input
-                  value={node.label}
-                  maxLength={EDITOR_LIMITS.label}
-                  disabled={disabled}
-                  onChange={(event) =>
-                    onChange(updateOwnNode(draft, node.ref, { label: event.target.value }))
-                  }
-                />
-              </label>
-              <label>
-                概要（確認問題を作るときに AI へ渡します）
-                <textarea
-                  value={node.summary}
-                  maxLength={EDITOR_LIMITS.summary}
-                  rows={3}
-                  disabled={disabled}
-                  onChange={(event) =>
-                    onChange(updateOwnNode(draft, node.ref, { summary: event.target.value }))
-                  }
-                />
-              </label>
-            </>
-          ) : (
-            <p className="muted">
-              既存の Concept を参照しています。表示名・概要・「理解すること」は元のものを使い、
-              ここでは書き換えません。理解度も元の Concept のものが出ます。
-            </p>
-          )}
+      </h3>
+      {node.kind === "own" ? (
+        <>
           <label>
-            前提（先に学ぶノード。1つまで）
-            <select
-              // 前提を複数持つ古い保存は、選び直すまで「選び直す」を出す。
-              value={node.prerequisites.length === 1 ? node.prerequisites[0] : ""}
+            表示名
+            <input
+              value={node.label}
+              maxLength={EDITOR_LIMITS.label}
               disabled={disabled}
               onChange={(event) =>
-                onChange(setPrerequisite(draft, node.ref, event.target.value || undefined))
+                onChange(updateOwnNode(draft, node.ref, { label: event.target.value }))
               }
-            >
-              <option value="">
-                {node.prerequisites.length > 1 ? "（1つ選び直す）" : "なし（最初に学ぶ）"}
-              </option>
-              {candidates.map((candidate) => (
-                <option key={candidate.ref} value={candidate.ref}>
-                  {nameOfRef(candidate.ref)}
-                </option>
-              ))}
-            </select>
+            />
           </label>
-          {node.prerequisites.length > 1 && (
-            <p className="muted">
-              前提が {node.prerequisites.length} 個あります（
-              {node.prerequisites.map(nameOfRef).join("・")}）。1つ選び直してください。
-            </p>
-          )}
-          {node.kind === "own" &&
-            (objectives === undefined ? (
-              <p className="muted">「理解すること」は、マップを保存すると書けるようになります。</p>
-            ) : (
-              <ObjectivesEditor {...objectives} disabled={disabled && !objectives.saving} />
-            ))}
-          <button
-            className="link danger"
-            disabled={disabled}
-            onClick={() => onChange(removeNode(draft, node.ref))}
-          >
-            このノードを外す
-          </button>
-        </div>
+          <label>
+            概要（確認問題を作るときに AI へ渡します）
+            <AutoTextarea
+              value={node.summary}
+              maxLength={EDITOR_LIMITS.summary}
+              minRows={3}
+              maxRows={8}
+              disabled={disabled}
+              onChange={(event) =>
+                onChange(updateOwnNode(draft, node.ref, { summary: event.target.value }))
+              }
+            />
+          </label>
+        </>
+      ) : (
+        <p className="muted">
+          既存の Concept を参照しています。表示名・概要・「理解すること」は元のものを使い、
+          ここでは書き換えません。理解度も元の Concept のものが出ます。
+        </p>
       )}
-    </li>
+      <label>
+        前提（先に学ぶノード。1つまで）
+        <select
+          // 前提を複数持つ古い保存は、選び直すまで「選び直す」を出す。
+          value={node.prerequisites.length === 1 ? node.prerequisites[0] : ""}
+          disabled={disabled}
+          onChange={(event) =>
+            onChange(setPrerequisite(draft, node.ref, event.target.value || undefined))
+          }
+        >
+          <option value="">
+            {node.prerequisites.length > 1 ? "（1つ選び直す）" : "なし（最初に学ぶ）"}
+          </option>
+          {candidates.map((candidate) => (
+            <option key={candidate.ref} value={candidate.ref}>
+              {nameOfRef(candidate.ref)}
+            </option>
+          ))}
+        </select>
+      </label>
+      {node.prerequisites.length > 1 && (
+        <p className="muted">
+          前提が {node.prerequisites.length} 個あります（
+          {node.prerequisites.map(nameOfRef).join("・")}）。1つ選び直してください。
+        </p>
+      )}
+      {node.kind === "own" &&
+        (objectives === undefined ? (
+          <p className="muted">「理解すること」は、マップを保存すると書けるようになります。</p>
+        ) : (
+          <ObjectivesEditor {...objectives} disabled={disabled && !objectives.saving} />
+        ))}
+      <button
+        className="link danger"
+        disabled={disabled}
+        onClick={() => onChange(removeNode(draft, node.ref))}
+      >
+        このノードを外す
+      </button>
+    </div>
   );
 }
 
 /**
- * 学習マップの編集（Issue #242、フォーム型）。左に木のプレビュー、右にノードの一覧。
+ * 学習マップの編集（Issue #242、フォーム型）。左に木のプレビュー、右にノードの一覧と、
+ * 選んだノードの編集欄（#286 で、編集欄を一覧の中から1つのパネルへ出した）。
  *
  * ノードと線は下書きに持ち、「保存」でまとめて置き換える（`PUT /v1/learning-maps/:id`）。
  * 配置は保存しない。前提の段数から自動で組み立てる（`layoutTrees`）。
@@ -389,6 +441,21 @@ function MapEditor() {
   const previewConcepts = new Map(
     overlaidConcepts(null, null, preview).map((concept) => [concept.conceptId, concept]),
   );
+
+  const panel = useRef<HTMLElement>(null);
+  const openNode = draft.nodes.find((node) => node.ref === openRef);
+  const openSavedObjectives =
+    openNode?.kind === "own" ? savedObjectivesOf.get(openNode.ref) : undefined;
+
+  /** ノードを選ぶ。狭い画面では編集欄がプレビューの下に回るので、見えるところまで送る。 */
+  const select = (ref: string) => {
+    setOpenRef(ref);
+    if (window.matchMedia(NARROW_LAYOUT).matches) {
+      requestAnimationFrame(() =>
+        panel.current?.scrollIntoView({ behavior: "smooth", block: "start" }),
+      );
+    }
+  };
 
   const change = (next: MapDraft) => {
     setNotice(undefined);
@@ -502,88 +569,111 @@ function MapEditor() {
         </label>
         <label>
           説明（任意）
-          <textarea
+          <AutoTextarea
             value={draft.description}
             maxLength={EDITOR_LIMITS.description}
-            rows={2}
+            minRows={2}
+            maxRows={8}
             disabled={busy}
             onChange={(event) => change({ ...draft, description: event.target.value })}
           />
         </label>
       </div>
+      {/* 左にプレビュー（スクロールしても見え続ける）、右に1行ずつの一覧と選んだノードの編集欄（#286）。 */}
       <div className="editor-layout">
-        <div className="map">
+        <div className="editor-preview">
           {tree === undefined ? (
             <p className="hint">ノードを足すと、ここに木が組み上がります。</p>
           ) : (
             <SkillTree
               tree={tree}
-              title="プレビュー"
+              title="プレビュー（ノードを押すと右で直せます）"
               concepts={previewConcepts}
               current={undefined}
               next={new Set()}
               selected={openRef}
-              onSelect={setOpenRef}
+              onSelect={select}
+              followSelected
             />
           )}
         </div>
-        <div className="editor-nodes">
-          <h2>
-            ノード{" "}
-            <span className="muted">
-              {draft.nodes.length} / {EDITOR_LIMITS.nodes}
-            </span>
-          </h2>
-          <ul>
-            {draft.nodes.map((node) => {
-              const savedObjectives =
-                node.kind === "own" ? savedObjectivesOf.get(node.ref) : undefined;
-              return (
-                <NodeEditor
-                  key={node.ref}
-                  node={node}
-                  draft={draft}
-                  open={openRef === node.ref}
-                  objectives={
-                    savedObjectives === undefined
-                      ? undefined
-                      : {
-                          items: objectiveItemsOf(node.ref),
-                          saved: savedObjectives,
-                          saving: writing === node.ref,
-                          error: objectiveErrors[node.ref],
-                          onChange: (items) =>
-                            setObjectiveDrafts((current) => ({ ...current, [node.ref]: items })),
-                          onSave: () => saveObjectivesOf(node.ref),
-                        }
-                  }
-                  disabled={busy}
-                  onToggle={() =>
-                    setOpenRef((current) => (current === node.ref ? undefined : node.ref))
-                  }
-                  onChange={change}
-                />
-              );
-            })}
-          </ul>
-          <button
-            disabled={busy || draft.nodes.length >= EDITOR_LIMITS.nodes}
-            onClick={() => {
-              const added = addOwnNode(draft);
-              change(added.draft);
-              setOpenRef(added.ref);
-            }}
-          >
-            + ノードを足す
-          </button>
-          <ReferencePicker
-            candidates={candidates.filter((candidate) => !inDraft.has(candidate.id))}
-            disabled={busy || draft.nodes.length >= EDITOR_LIMITS.nodes}
-            onAdd={(candidate) => {
-              change(addReference(draft, candidate.id, candidate.label));
-              setOpenRef(candidate.id);
-            }}
-          />
+        <div className="editor-side">
+          <div className="editor-nodes">
+            <h2>
+              ノード{" "}
+              <span className="muted">
+                {draft.nodes.length} / {EDITOR_LIMITS.nodes}
+              </span>
+            </h2>
+            <ul className="editor-node-list">
+              {draft.nodes.map((node) => (
+                <li key={node.ref}>
+                  <button
+                    className={
+                      node.ref === openRef ? "editor-node-row selected" : "editor-node-row"
+                    }
+                    aria-current={node.ref === openRef ? "true" : undefined}
+                    onClick={() => select(node.ref)}
+                  >
+                    <span>{node.label.trim() || "（無題）"}</span>
+                    {node.kind === "reference" && <em className="badge">参照</em>}
+                    {node.ref.startsWith("new:") && <em className="badge">未保存</em>}
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <div className="editor-row">
+              <button
+                disabled={busy || draft.nodes.length >= EDITOR_LIMITS.nodes}
+                onClick={() => {
+                  const added = addOwnNode(draft);
+                  change(added.draft);
+                  select(added.ref);
+                }}
+              >
+                + ノードを足す
+              </button>
+            </div>
+            <details className="editor-reference-toggle">
+              <summary>既存の Concept を参照で足す</summary>
+              <ReferencePicker
+                candidates={candidates.filter((candidate) => !inDraft.has(candidate.id))}
+                disabled={busy || draft.nodes.length >= EDITOR_LIMITS.nodes}
+                onAdd={(candidate) => {
+                  change(addReference(draft, candidate.id, candidate.label));
+                  select(candidate.id);
+                }}
+              />
+            </details>
+          </div>
+          <section className="editor-panel" ref={panel} aria-label="選んだノード">
+            {openNode === undefined ? (
+              <p className="hint">
+                プレビューか一覧でノードを選ぶと、ここで表示名・概要・前提・「理解すること」を直せます。
+              </p>
+            ) : (
+              <NodeEditor
+                key={openNode.ref}
+                node={openNode}
+                draft={draft}
+                objectives={
+                  openSavedObjectives === undefined
+                    ? undefined
+                    : {
+                        items: objectiveItemsOf(openNode.ref),
+                        saved: openSavedObjectives,
+                        saving: writing === openNode.ref,
+                        error: objectiveErrors[openNode.ref],
+                        onChange: (items) =>
+                          setObjectiveDrafts((current) => ({ ...current, [openNode.ref]: items })),
+                        onSave: () => saveObjectivesOf(openNode.ref),
+                      }
+                }
+                disabled={busy}
+                onChange={change}
+              />
+            )}
+          </section>
         </div>
       </div>
       <div className="editor-save">

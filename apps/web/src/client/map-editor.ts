@@ -312,3 +312,23 @@ export function toObjectivesRequest(items: readonly ObjectiveItem[]): ObjectiveI
     label: item.label.trim(),
   }));
 }
+
+/**
+ * 入力欄の高さを、描いた中身の高さ（`scrollHeight`）に合わせて決める（#286）。
+ *
+ * 文字数から行数を見積もると、欄の幅（右の細い欄・広い欄・スマートフォン）で折り返しが変わり、
+ * 続きが隠れる（PR #287 のレビュー）。実際に測った高さを `minRows`〜`maxRows` 行に収め、
+ * 収まらない分だけ欄の中をスクロールさせる。
+ *
+ * @param metrics `scrollHeight` は中身と上下の余白の高さ。`frame` は上下の枠線の太さの合計。
+ */
+export function fitTextareaHeight(
+  metrics: { scrollHeight: number; lineHeight: number; padding: number; frame: number },
+  rows: { min: number; max: number },
+): { height: number; scroll: boolean } {
+  const { scrollHeight, lineHeight, padding, frame } = metrics;
+  const min = lineHeight * rows.min + padding + frame;
+  const max = lineHeight * rows.max + padding + frame;
+  const wanted = scrollHeight + frame;
+  return { height: Math.min(max, Math.max(min, wanted)), scroll: wanted > max };
+}
