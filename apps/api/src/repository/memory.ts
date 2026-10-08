@@ -9,6 +9,7 @@
 
 import {
   checkTargetOf,
+  MOCK_LEARNING_OBJECTIVES,
   type CheckLevel,
   type ConsentRecord,
   type PersonalConceptCheck,
@@ -90,6 +91,11 @@ export interface InMemoryRepositoryStore {
   readonly mapGenerationConsents: Map<string, ConsentRecord>;
   /** mapId -> マップ（ノード・線・項目込み）。D1 の learning_maps とその下の表に対応する。 */
   readonly learningMaps: Map<string, InMemoryLearningMap>;
+  /**
+   * 固定の Concept の「理解すること」。D1 の learning_objectives のうち map_id が NULL の行
+   * （migrations/0017_fixed_objectives.sql）に対応する。既定はマイグレーションで入れた Go の項目。
+   */
+  readonly fixedObjectives: StoredLearningObjective[];
 }
 
 /** インメモリのマップ1件。 */
@@ -115,6 +121,10 @@ export function createInMemoryRepositoryStore(): InMemoryRepositoryStore {
     checkGenerationConsents: new Map(),
     mapGenerationConsents: new Map(),
     learningMaps: new Map(),
+    fixedObjectives: MOCK_LEARNING_OBJECTIVES.map((objective) => ({
+      ...objective,
+      source: "manual",
+    })),
   };
 }
 
@@ -959,6 +969,15 @@ export class InMemoryLearningMapRepository implements LearningMapRepository {
 
   listOwnNodes(ownerUserId: string, limit: number): Promise<StoredOwnMapNode[]> {
     return Promise.resolve(this.allOwnNodes(ownerUserId).slice(0, limit));
+  }
+
+  /** D1 の ORDER BY concept_id, position と一致させる（sort は安定なので Concept の中の並びは保つ）。 */
+  listFixedObjectives(): Promise<StoredLearningObjective[]> {
+    return Promise.resolve(
+      structuredClone(this.store.fixedObjectives).sort((a, b) =>
+        a.conceptId < b.conceptId ? -1 : a.conceptId > b.conceptId ? 1 : 0,
+      ),
+    );
   }
 
   /** D1 の user_concept_checks から、条件に合う行を消す。 */

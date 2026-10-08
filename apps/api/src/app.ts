@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { CONCEPTS, MOCK_LEARNING_OBJECTIVES } from "@gakushu-sochi/domain";
+import { CONCEPTS } from "@gakushu-sochi/domain";
 import { cors } from "hono/cors";
 import { HTTPException } from "hono/http-exception";
 import { requireAuth, type AuthVariables } from "./auth/middleware.js";
@@ -258,6 +258,7 @@ app.route(
     events: new D1LearningEventRepository(env.DB),
     overrides: new D1MasteryOverrideRepository(env.DB),
     completions: new D1AreaCompletionRepository(env.DB),
+    maps: new D1LearningMapRepository(env.DB),
     // 定義は生成物の全件。テストだけが小さな一覧へ差し替える。
     definitions: CONCEPTS,
     nowIso: () => new Date().toISOString(),
@@ -364,7 +365,6 @@ app.route(
     identity: new D1IdentityRepository(env.DB),
     maps: new D1LearningMapRepository(env.DB),
     fixedConcepts: CONCEPTS,
-    fixedObjectives: MOCK_LEARNING_OBJECTIVES,
     newKey: randomKey,
     nowIso: () => new Date().toISOString(),
     nowMs: () => Date.now(),

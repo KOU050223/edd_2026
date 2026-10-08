@@ -22,7 +22,6 @@ import {
   MAP_GENERATION_CONSENT_VERSION,
   deriveMasteryFromEvents,
   type Concept,
-  type LearningObjective,
   type MasteryStatus,
 } from "@gakushu-sochi/domain";
 import {
@@ -121,7 +120,6 @@ export interface GenerateLearningMapDeps {
   identity: IdentityRepository;
   maps: LearningMapRepository;
   fixedConcepts: readonly Concept[];
-  fixedObjectives: readonly LearningObjective[];
   newKey: () => string;
 }
 
@@ -290,10 +288,7 @@ async function loadSkeletonInput(
   request: MapGenerationRequest,
 ): Promise<SkeletonPromptInput> {
   const [catalog, events, overrides] = await Promise.all([
-    loadUserConceptCatalog(deps.maps, userId, {
-      concepts: deps.fixedConcepts,
-      objectives: deps.fixedObjectives,
-    }),
+    loadUserConceptCatalog(deps.maps, userId, { concepts: deps.fixedConcepts }),
     deps.generation.events.listByUser(userId),
     deps.generation.overrides.listByUser(userId),
   ]);

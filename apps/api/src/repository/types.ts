@@ -750,4 +750,10 @@ export interface LearningMapRepository {
    * マップの中ではノードの並び（学習の順）に従う。
    */
   listOwnNodes(ownerUserId: string, limit: number): Promise<StoredOwnMapNode[]>;
+
+  /**
+   * 固定の Concept（言語別マップ）の「理解すること」の全件（migrations/0017_fixed_objectives.sql、#245）。
+   * どの利用者にも属さない。並びは Concept ID の順、Concept の中は保存した順。
+   */
+  listFixedObjectives(): Promise<StoredLearningObjective[]>;
 }

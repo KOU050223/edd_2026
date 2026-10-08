@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test } from "vitest";
 import { Hono } from "hono";
-import type { Concept, LearningObjective } from "@gakushu-sochi/domain";
+import type { Concept } from "@gakushu-sochi/domain";
 import type { AuthVariables } from "../auth/middleware.js";
 import { stubAuth } from "../auth/test-auth.js";
 import {
@@ -18,6 +18,7 @@ import {
   InMemoryPersonalCheckRepository,
   type InMemoryRepositoryStore,
 } from "../repository/memory.js";
+import type { StoredLearningObjective } from "../repository/types.js";
 import { personalCheck } from "../maps/test-map.js";
 import { createLearningMapsRoute } from "./learning-maps.js";
 
@@ -42,12 +43,19 @@ const FIXED_CONCEPTS: Concept[] = [
     source: { kind: "manual" },
   },
 ];
-const FIXED_OBJECTIVES: LearningObjective[] = [
-  { id: "go.defer:execution_timing", conceptId: "go.defer", label: "実行タイミング" },
+/** 固定の項目は表（migrations/0017_fixed_objectives.sql）から読む。テストはストアへ入れる。 */
+const FIXED_OBJECTIVES: StoredLearningObjective[] = [
+  {
+    id: "go.defer:execution_timing",
+    conceptId: "go.defer",
+    label: "実行タイミング",
+    source: "manual",
+  },
 ];
 
 beforeEach(() => {
   store = createInMemoryRepositoryStore();
+  store.fixedObjectives.splice(0, store.fixedObjectives.length, ...FIXED_OBJECTIVES);
   identity = new InMemoryIdentityRepository(store);
   maps = new InMemoryLearningMapRepository(store);
   keys = 0;
@@ -61,7 +69,6 @@ beforeEach(() => {
       // テストが途中で差し替えられるよう、リクエストのたびに今の値を読む。
       maps,
       fixedConcepts: FIXED_CONCEPTS,
-      fixedObjectives: FIXED_OBJECTIVES,
       // 呼ばれた順に k0000001, k0000002 … を返す。採番の結果をテストで言い当てられるようにする。
       newKey: () => `k${String(++keys).padStart(7, "0")}`,
       nowIso: () => new Date(nowMs).toISOString(),

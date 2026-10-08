@@ -1,7 +1,7 @@
 /**
  * 利用者ごとの Concept の一覧（Issue #242）。
  *
- * 固定の一覧（`concepts.md` から生成した {@link CONCEPTS} と「理解すること」のモック）に、
+ * 固定の一覧（`concepts.md` から生成した {@link CONCEPTS} と、表に入れた固定の「理解すること」）に、
  * その利用者が手で作ったマップのノードと項目を足す。手で作ったノードも Concept として扱い、
  * 理解度の導出・表示名・確認問題の入力に使う（#242「理解度・確認問題・VS Code」）。
  *
@@ -9,12 +9,7 @@
  * 分野コンプリートは言語別マップだけを対象にするので、この一覧を使わない。
  */
 
-import {
-  CONCEPTS,
-  MOCK_LEARNING_OBJECTIVES,
-  type Concept,
-  type LearningObjective,
-} from "@gakushu-sochi/domain";
+import { CONCEPTS, type Concept, type LearningObjective } from "@gakushu-sochi/domain";
 import { MAX_MAPS_PER_USER, MAX_NODES_PER_MAP } from "../contract/learning-maps.js";
 import type { LearningMapRepository } from "../repository/types.js";
 
@@ -34,18 +29,19 @@ export interface UserConceptCatalog {
 /**
  * 利用者の一覧を読む。
  *
- * @param fixed 固定の一覧。テストだけが小さな一覧へ差し替える。
+ * @param fixed 固定の Concept の一覧。テストだけが小さな一覧へ差し替える。
+ *   固定の項目は `maps` から読む（migrations/0017_fixed_objectives.sql、#245）。
  */
 export async function loadUserConceptCatalog(
   maps: LearningMapRepository,
   userId: string,
-  fixed: {
-    concepts?: readonly Concept[];
-    objectives?: readonly LearningObjective[];
-  } = {},
+  fixed: { concepts?: readonly Concept[] } = {},
 ): Promise<UserConceptCatalog> {
-  // 1人が持てるノードの最大数で読む。上限で切ると、古いマップのノードの理解度が消える。
-  const nodes = await maps.listOwnNodes(userId, MAX_MAPS_PER_USER * MAX_NODES_PER_MAP);
+  const [fixedObjectives, nodes] = await Promise.all([
+    maps.listFixedObjectives(),
+    // 1人が持てるノードの最大数で読む。上限で切ると、古いマップのノードの理解度が消える。
+    maps.listOwnNodes(userId, MAX_MAPS_PER_USER * MAX_NODES_PER_MAP),
+  ]);
   const mapTitles = new Map(nodes.map((node) => [node.mapId, node.mapTitle]));
 
   const concepts: Concept[] = [
@@ -61,15 +57,13 @@ export async function loadUserConceptCatalog(
     })),
   ];
   const objectives: LearningObjective[] = [
-    ...(fixed.objectives ?? MOCK_LEARNING_OBJECTIVES),
-    ...nodes.flatMap((node) =>
-      node.objectives.map((objective) => ({
-        id: objective.id,
-        conceptId: objective.conceptId,
-        label: objective.label,
-      })),
-    ),
-  ];
+    ...fixedObjectives,
+    ...nodes.flatMap((node) => node.objectives),
+  ].map((objective) => ({
+    id: objective.id,
+    conceptId: objective.conceptId,
+    label: objective.label,
+  }));
 
   return {
     concepts,

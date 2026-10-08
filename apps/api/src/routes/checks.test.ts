@@ -99,6 +99,11 @@ function buildApp(
   options: { enforceUsageLimits?: boolean; models?: readonly string[] } = {},
 ): Harness {
   const store = createInMemoryRepositoryStore();
+  store.fixedObjectives.splice(
+    0,
+    store.fixedObjectives.length,
+    ...objectives.map((objective) => ({ ...objective, source: "manual" as const })),
+  );
   const usage = new InMemoryAiUsageRepository();
   const plans = new InMemoryUserPlanRepository();
   const identity = new InMemoryIdentityRepository(store);
@@ -130,7 +135,6 @@ function buildApp(
       identity,
       audit: new InMemoryAuditLogRepository(store),
       maps,
-      objectives,
       ...options,
       now: () => NOW,
     })),

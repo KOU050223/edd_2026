@@ -96,7 +96,6 @@ export async function generateCreationChecks(
   // 狙う項目: 学習の順で手前のノード（参照は除く）から、各ノードの1項目目。
   const catalog = await loadUserConceptCatalog(deps.maps, userId, {
     concepts: deps.fixedConcepts,
-    objectives: deps.fixedObjectives,
   });
   const targets: CreationCheckTarget[] = [];
   for (const node of map.nodes) {

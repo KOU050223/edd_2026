@@ -237,9 +237,7 @@ async function resolveTarget(
     mapId: string | undefined;
   }>
 > {
-  const catalog = await loadUserConceptCatalog(deps.maps, userId, {
-    ...(deps.objectives === undefined ? {} : { objectives: deps.objectives }),
-  });
+  const catalog = await loadUserConceptCatalog(deps.maps, userId);
   // 固定の Concept は固定の一覧だけで前提・次を引く。手で作ったマップの線を混ぜると、
   // 同じ Concept でも利用者ごとにプロンプトが変わる。
   const fixed = CONCEPT_BY_ID.has(conceptId);

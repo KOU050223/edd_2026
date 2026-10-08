@@ -14,12 +14,7 @@
  */
 
 import { Hono } from "hono";
-import {
-  deriveMasteryFromEvents,
-  MOCK_LEARNING_OBJECTIVES,
-  type Concept,
-  type MasteryStatus,
-} from "@gakushu-sochi/domain";
+import { deriveMasteryFromEvents, type Concept, type MasteryStatus } from "@gakushu-sochi/domain";
 import {
   AREA_COMPLETIONS_RESPONSE_VERSION,
   type AreaCompletionsResponse,
@@ -29,6 +24,7 @@ import type {
   AreaCompletionRepository,
   IdentityRepository,
   LearningEventRepository,
+  LearningMapRepository,
   MasteryOverrideRepository,
 } from "../repository/types.js";
 
@@ -38,6 +34,8 @@ export interface AreaCompletionDeps {
   /** 手動上書きも判定に含める。利用者が手で確認済みにした分野も達成として扱う。 */
   overrides: MasteryOverrideRepository;
   completions: AreaCompletionRepository;
+  /** 固定の Concept の「理解すること」を読む（migrations/0017_fixed_objectives.sql）。 */
+  maps: LearningMapRepository;
   /** Concept の定義。テストで小さな一覧へ差し替えられるよう注入する。 */
   definitions: readonly Concept[];
   nowIso: () => string;
@@ -77,18 +75,17 @@ export function createAreaCompletionsRoute(resolve: AreaCompletionDepsResolver) 
   app.post("/area-completions:check", async (c) => {
     const userId = c.get("user").userId;
     const deps = resolve(c.env);
-    const [events, overrides, recorded] = await Promise.all([
+    const [events, overrides, recorded, objectives] = await Promise.all([
       deps.events.listByUser(userId),
       deps.overrides.listByUser(userId),
       deps.completions.listByUser(userId),
+      deps.maps.listFixedObjectives(),
     ]);
 
     // 習熟度は保存値ではなくイベントから導出し、その上へ手動上書きを重ねる。
     // 画面（apps/web の applyOverrides）と同じ重ね順にしないと、判定が食い違う。
     const statusOf = new Map<string, MasteryStatus>();
-    for (const mastery of Object.values(
-      deriveMasteryFromEvents(events, MOCK_LEARNING_OBJECTIVES),
-    )) {
+    for (const mastery of Object.values(deriveMasteryFromEvents(events, objectives))) {
       if (mastery !== undefined) statusOf.set(mastery.conceptId, mastery.status);
     }
     for (const [conceptId, override] of Object.entries(overrides)) {

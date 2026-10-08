@@ -2220,6 +2220,17 @@ export class D1LearningMapRepository implements LearningMapRepository {
     return this.withEdgesAndObjectives(rows.results);
   }
 
+  async listFixedObjectives(): Promise<StoredLearningObjective[]> {
+    const rows = await this.db
+      .prepare(
+        `SELECT id, concept_id, label, source FROM learning_objectives
+         WHERE map_id IS NULL
+         ORDER BY concept_id, position`,
+      )
+      .all<LearningObjectiveRow>();
+    return rows.results.map(toLearningObjective);
+  }
+
   async listOwnNodes(ownerUserId: string, limit: number): Promise<StoredOwnMapNode[]> {
     const rows = await this.db
       .prepare(

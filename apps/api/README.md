@@ -68,6 +68,11 @@ free へ戻すときは行を消す。
 npx wrangler d1 execute gakushu-sochi --remote --command "DELETE FROM user_plans WHERE user_id = '<user_id>'"
 ```
 
+wrangler が本番のアカウントへログインしていなくても、Cloudflare のダッシュボードから同じ SQL を流せる。
+左上で本番のアカウント（`wrangler.jsonc` の `account_id`）へ切り替え、Storage & Databases → D1 で
+`database_id` が一致する `gakushu-sochi` を開き、「コンソール」に `--command` の中身の SQL を貼って実行する。
+別のアカウントに同じ名前の空のデータベースがあることがあるので、ID で確かめること。
+
 ## デプロイ先（メンバー間で統一する）
 
 本番は**1つのアカウントに固定**する。`wrangler.jsonc` の `account_id` がそれを強制する。
