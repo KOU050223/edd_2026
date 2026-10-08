@@ -264,11 +264,9 @@ export function createLearningMapsRoute(resolve: LearningMapsDepsResolver) {
     return c.json(body, 200, { "cache-control": "no-store" });
   });
 
-  // AI を呼ぶ口と、その同意。認証（`app.ts` の `/v1/*`）の後に走るので userId で数えられる。
-  app.use(
-    "/learning-maps:generate",
-    rateLimit((env) => env.PROFILE_RATE_LIMITER),
-  );
+  // `/learning-maps*`（生成の口を含む）は `app.ts` が回数を制限している。ここで重ねると1回が2回と数えられる
+  // （PR #283 のレビュー）。同意の口は `app.ts` の対象外なので、ここで制限する。
+  // 認証（`app.ts` の `/v1/*`）の後に走るので userId で数えられる。
   app.use(
     "/map-generation-consent",
     rateLimit((env) => env.PROFILE_RATE_LIMITER),

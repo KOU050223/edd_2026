@@ -32,8 +32,13 @@ import { createLearningMapsRoute } from "./learning-maps.js";
 const NOW = new Date("2026-10-08T09:00:00.000Z");
 const USAGE_KEYS = { monthKey: utcMonthKey(NOW), dayKey: utcDayKey(NOW) };
 const TOKENS = { "token-a": "user-a" };
+/** 呼ばれた回数を数える、常に通す制限。 */
+const limiterCalls = { count: 0 };
 const PASSING_LIMITER = {
-  limit: () => Promise.resolve({ success: true }),
+  limit: () => {
+    limiterCalls.count++;
+    return Promise.resolve({ success: true });
+  },
 } as unknown as RateLimit;
 const ENV = { PROFILE_RATE_LIMITER: PASSING_LIMITER } as unknown as CloudflareBindings;
 
@@ -253,6 +258,57 @@ describe("POST /v1/learning-maps:generate", () => {
     expect(prompt).toContain("go.defer|defer|未着手");
     expect(prompt).not.toContain("go.goroutine");
     expect(prompt).toContain("<<<目標\nWeb API を作る\n目標>>>");
+  });
+
+  it("参照した自分のノードの「理解すること」が生成中に全部消されたら、マップを保存しない", async () => {
+    const created = await send("POST", "/learning-maps", {
+      title: "元のマップ",
+      nodes: [{ kind: "own", ref: "new:a", label: "所有権", summary: "持ち主は1つ。" }],
+    });
+    const { map: source, assigned } = (await created.json()) as {
+      map: LearningMapView;
+      assigned: Record<string, string>;
+    };
+    const referenced = assigned["new:a"]!;
+    await send("PUT", `/learning-maps/${source.id}/nodes/${referenced}/objectives`, {
+      objectives: [{ label: "代入で持ち主が移る" }],
+    });
+    skeletonText = JSON.stringify({
+      title: "Rust で CLI",
+      nodes: [
+        { key: "n1", conceptId: referenced },
+        { key: "n2", label: "引数", summary: "コマンドライン引数を読む。", prerequisite: "n1" },
+      ],
+    });
+    // 「理解すること」を作っている間に、別の端末で参照先の項目が全部消された。
+    objectivesFor = (requested) => {
+      void maps.replaceObjectives("user-a", {
+        mapId: source.id,
+        conceptId: referenced,
+        objectives: [],
+        nowIso: NOW.toISOString(),
+        nowMs: NOW.getTime(),
+      });
+      return JSON.stringify({
+        nodes: requested.map((key) => ({ key, objectives: ["a", "b"] })),
+      });
+    };
+
+    const res = await send("POST", "/learning-maps:generate", GOAL_REQUEST);
+
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ error: "map discarded by reference change" });
+    expect((await maps.listByOwner("user-a")).map((map) => map.id)).toEqual([source.id]);
+  });
+
+  it("生成の口はルートで回数を数えない（`app.ts` の `/v1/learning-maps*` が数える）", async () => {
+    limiterCalls.count = 0;
+    await send("POST", "/learning-maps:generate", GOAL_REQUEST);
+    expect(limiterCalls.count).toBe(0);
+
+    // 同意の口は `app.ts` の対象外なので、ルートで数える。
+    await send("GET", "/map-generation-consent");
+    expect(limiterCalls.count).toBe(1);
   });
 
   it("新しいノードは 10 個ずつに分けて、並列で「理解すること」を頼む", async () => {
