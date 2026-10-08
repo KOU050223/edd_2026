@@ -372,6 +372,7 @@ app.route(
       models: parseModelList(env.CHECK_MODELS),
       fetch: (input, init) => globalThis.fetch(input, init),
       usage: new D1AiUsageRepository(env.DB),
+      checks: new D1PersonalCheckRepository(env.DB),
       consents: new D1MapGenerationConsentRepository(env.DB),
       events: new D1LearningEventRepository(env.DB),
       overrides: new D1MasteryOverrideRepository(env.DB),

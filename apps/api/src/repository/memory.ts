@@ -9,6 +9,7 @@
 
 import {
   checkTargetOf,
+  type CheckLevel,
   type ConsentRecord,
   type PersonalConceptCheck,
 } from "@gakushu-sochi/domain";
@@ -40,6 +41,7 @@ import type {
   StoredEventInput,
   StoredImportSessionInput,
   StoredLearningMap,
+  CheckOrigin,
   StoredLearningObjective,
   StoredMapContent,
   StoredOwnMapNode,
@@ -77,6 +79,11 @@ export interface InMemoryRepositoryStore {
   readonly conceptChecks: Map<string, StoredConceptCheck>;
   /** userId -> (`conceptId` + 狙い -> 確認問題)。D1 の user_concept_checks に対応する。 */
   readonly personalChecksByUser: Map<string, Map<string, PersonalConceptCheck>>;
+  /**
+   * userId -> マップを作るときに作った組のキー（`personalChecksByUser` と同じキー）。
+   * D1 の user_concept_checks.origin = 'map_creation' に対応する（#247）。
+   */
+  readonly mapCreationCheckKeys: Map<string, Set<string>>;
   /** userId -> 生成への同意。D1 の check_generation_consents に対応する。 */
   readonly checkGenerationConsents: Map<string, ConsentRecord>;
   /** userId -> 学習マップの AI 生成への同意。D1 の map_generation_consents に対応する。 */
@@ -104,6 +111,7 @@ export function createInMemoryRepositoryStore(): InMemoryRepositoryStore {
     conversationsByUser: new Map(),
     conceptChecks: new Map(),
     personalChecksByUser: new Map(),
+    mapCreationCheckKeys: new Map(),
     checkGenerationConsents: new Map(),
     mapGenerationConsents: new Map(),
     learningMaps: new Map(),
@@ -267,6 +275,7 @@ export class InMemoryIdentityRepository implements IdentityRepository {
     this.store.conversationsByUser.delete(userId);
     // user_concept_checks / check_generation_consents も CASCADE で参照する（#236）。
     this.store.personalChecksByUser.delete(userId);
+    this.store.mapCreationCheckKeys.delete(userId);
     this.store.checkGenerationConsents.delete(userId);
     this.store.mapGenerationConsents.delete(userId);
     // learning_maps も CASCADE で参照し、ノード・線・項目はマップから CASCADE で消える（#242）。
@@ -633,7 +642,7 @@ export class InMemoryPersonalCheckRepository implements PersonalCheckRepository 
     userId: string,
     check: PersonalConceptCheck,
     startedAtMs: number,
-    target?: { mapId: string },
+    target?: { mapId: string; origin?: CheckOrigin },
   ): Promise<{ saved: true } | { saved: false; reason: "reset" | "target-removed" }> {
     // D1 実装と同じく、生成を始めたあとに学習データが削除されていたら書かない。
     const resetAtMs = this.store.historyResets.get(userId);
@@ -658,8 +667,31 @@ export class InMemoryPersonalCheckRepository implements PersonalCheckRepository 
       checks = new Map();
       this.store.personalChecksByUser.set(userId, checks);
     }
-    checks.set(JSON.stringify([check.conceptId, checkTargetOf(check)]), structuredClone(check));
+    const key = JSON.stringify([check.conceptId, checkTargetOf(check)]);
+    checks.set(key, structuredClone(check));
+    let creationKeys = this.store.mapCreationCheckKeys.get(userId);
+    if (creationKeys === undefined) {
+      creationKeys = new Set();
+      this.store.mapCreationCheckKeys.set(userId, creationKeys);
+    }
+    // 作り直すと書いた側の値で上書きされる（D1 の ON CONFLICT と同じ）。
+    if (target?.origin === "map_creation") creationKeys.add(key);
+    else creationKeys.delete(key);
     return Promise.resolve({ saved: true as const });
+  }
+
+  listMapCreationChecks(userId: string): Promise<PersonalConceptCheck[]> {
+    const keys = this.store.mapCreationCheckKeys.get(userId) ?? new Set<string>();
+    // 消された組のキーが残っていても、今ある組だけを返す。
+    const checks = [...(this.store.personalChecksByUser.get(userId) ?? [])]
+      .filter(([key]) => keys.has(key))
+      .map(([, check]) => check)
+      .sort(
+        (a, b) =>
+          a.conceptId.localeCompare(b.conceptId) ||
+          checkTargetOf(a).localeCompare(checkTargetOf(b)),
+      );
+    return Promise.resolve(structuredClone(checks));
   }
 
   listAllByUser(userId: string): Promise<PersonalConceptCheck[]> {
@@ -673,6 +705,7 @@ export class InMemoryPersonalCheckRepository implements PersonalCheckRepository 
   deleteAllByUser(userId: string): Promise<number> {
     const count = this.store.personalChecksByUser.get(userId)?.size ?? 0;
     this.store.personalChecksByUser.delete(userId);
+    this.store.mapCreationCheckKeys.delete(userId);
     return Promise.resolve(count);
   }
 }
@@ -724,6 +757,7 @@ export class InMemoryLearningMapRepository implements LearningMapRepository {
       id: string;
       content: StoredMapContent;
       objectives?: readonly StoredLearningObjective[];
+      creationChecksLevel?: CheckLevel;
       nowIso: string;
       nowMs: number;
       maxMaps: number;
@@ -757,8 +791,54 @@ export class InMemoryLearningMapRepository implements LearningMapRepository {
       updatedAt: params.nowIso,
       updatedAtMs: params.nowMs,
       objectives,
+      creationChecks:
+        params.creationChecksLevel === undefined
+          ? null
+          : { level: params.creationChecksLevel, attempts: 0, doneAt: null, startedAtMs: null },
     });
     return Promise.resolve({ created: true });
+  }
+
+  claimCreationChecks(
+    ownerUserId: string,
+    mapId: string,
+    params: { maxAttempts: number; nowMs: number; leaseMs: number },
+  ): Promise<CheckLevel | null> {
+    const state = this.owned(ownerUserId, mapId)?.creationChecks;
+    if (
+      state == null ||
+      state.doneAt !== null ||
+      state.attempts >= params.maxAttempts ||
+      (state.startedAtMs !== null && state.startedAtMs > params.nowMs - params.leaseMs)
+    ) {
+      return Promise.resolve(null);
+    }
+    state.attempts += 1;
+    state.startedAtMs = params.nowMs;
+    return Promise.resolve(state.level);
+  }
+
+  releaseCreationChecks(
+    ownerUserId: string,
+    mapId: string,
+    params: { refundAttempt: boolean },
+  ): Promise<void> {
+    const state = this.owned(ownerUserId, mapId)?.creationChecks;
+    if (state != null) {
+      state.startedAtMs = null;
+      if (params.refundAttempt) state.attempts = Math.max(0, state.attempts - 1);
+    }
+    return Promise.resolve();
+  }
+
+  completeCreationChecks(ownerUserId: string, mapId: string, nowIso: string): Promise<boolean> {
+    const state = this.owned(ownerUserId, mapId)?.creationChecks;
+    if (state === undefined) return Promise.resolve(false);
+    if (state !== null) {
+      state.doneAt = nowIso;
+      state.startedAtMs = null;
+    }
+    return Promise.resolve(true);
   }
 
   listByOwner(ownerUserId: string): Promise<LearningMapSummary[]> {
@@ -789,6 +869,7 @@ export class InMemoryLearningMapRepository implements LearningMapRepository {
       nodes: copy.nodes,
       edges: copy.edges,
       objectives: copy.objectives,
+      creationChecks: copy.creationChecks,
     });
   }
 

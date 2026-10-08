@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { CHECK_LIMITS } from "@gakushu-sochi/domain";
-import { parseConceptCheck, readGeneratedText } from "./response.js";
+import { parseConceptCheck, parseCreationChecks, readGeneratedText } from "./response.js";
 
 const CONCEPT_ID = "go.pointer_receiver";
 
@@ -206,5 +206,48 @@ describe("parseConceptCheck", () => {
   it("失敗の詳細は理由と一緒に返す", () => {
     const result = parseConceptCheck(generated({ overview: question({ prompt: "" }) }), CONCEPT_ID);
     expect(!result.ok && result.detail).toContain("overview.prompt");
+  });
+});
+
+describe("parseCreationChecks（#247）", () => {
+  const OTHER_ID = "go.defer";
+
+  it("頼んだ順に1組ずつ読み、形を満たさない組だけを拒否する", () => {
+    const text = JSON.stringify({
+      checks: [
+        JSON.parse(generated()) as unknown,
+        {
+          ...(JSON.parse(generated()) as object),
+          conceptId: OTHER_ID,
+          overview: question({ choices: ["a"] }),
+        },
+      ],
+    });
+
+    const result = parseCreationChecks(text, [CONCEPT_ID, OTHER_ID]);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.results[0]).toMatchObject({ ok: true, check: { conceptId: CONCEPT_ID } });
+    expect(result.results[1]).toMatchObject({ ok: false, reason: "shape" });
+  });
+
+  it("組の数が頼んだ数と違えば、どれがどれか分からないので全部を拒否する", () => {
+    const text = JSON.stringify({ checks: [JSON.parse(generated()) as unknown] });
+
+    expect(parseCreationChecks(text, [CONCEPT_ID, OTHER_ID])).toMatchObject({
+      ok: false,
+      reason: "shape",
+    });
+  });
+
+  it("別の Concept の組が返ったら、その組を拒否する", () => {
+    const text = JSON.stringify({
+      checks: [JSON.parse(generated()) as unknown, JSON.parse(generated()) as unknown],
+    });
+
+    const result = parseCreationChecks(text, [CONCEPT_ID, OTHER_ID]);
+
+    expect(result.ok && result.results[1]).toMatchObject({ ok: false, reason: "concept-mismatch" });
   });
 });
