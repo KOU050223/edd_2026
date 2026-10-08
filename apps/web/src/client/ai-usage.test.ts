@@ -15,6 +15,10 @@ describe("isAiUsageSummary", () => {
     expect(isAiUsageSummary(valid)).toBe(true);
   });
 
+  test("plus のプランを受け入れる（#289）", () => {
+    expect(isAiUsageSummary({ ...valid, plan: "plus" })).toBe(true);
+  });
+
   test("未使用（0 回）の応答を受け入れる", () => {
     expect(
       isAiUsageSummary({

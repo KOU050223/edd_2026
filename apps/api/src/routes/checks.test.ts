@@ -33,6 +33,7 @@ import {
   TEST_MAP_OBJECTIVES,
   TEST_MAP_TITLE,
 } from "../maps/test-map.js";
+import { InMemoryUserPlanRepository } from "../repository/user-plans.js";
 
 describe("parseModelList", () => {
   it("カンマ区切りを並びにし、空白と空の要素を捨てる", () => {
@@ -84,6 +85,7 @@ interface Harness {
   conversations: InMemoryConversationRepository;
   settings: InMemoryUserSettingsRepository;
   maps: InMemoryLearningMapRepository;
+  plans: InMemoryUserPlanRepository;
 }
 
 /**
@@ -98,6 +100,7 @@ function buildApp(
 ): Harness {
   const store = createInMemoryRepositoryStore();
   const usage = new InMemoryAiUsageRepository();
+  const plans = new InMemoryUserPlanRepository();
   const identity = new InMemoryIdentityRepository(store);
   const checks = new InMemoryPersonalCheckRepository(store);
   const consents = new InMemoryCheckGenerationConsentRepository(store);
@@ -123,6 +126,7 @@ function buildApp(
       conversations,
       settings,
       usage,
+      plans,
       identity,
       audit: new InMemoryAuditLogRepository(store),
       maps,
@@ -138,6 +142,7 @@ function buildApp(
       model: env.GEMINI_MODEL,
       fetch: (input, init) => globalThis.fetch(input, init),
       usage,
+      plans,
       identity,
       events,
       evidence: new InMemoryLearningEvidenceRepository(store),
@@ -146,7 +151,7 @@ function buildApp(
       now: () => NOW,
     })),
   );
-  return { app, store, checks, consents, events, conversations, settings, maps };
+  return { app, store, checks, consents, events, conversations, settings, maps, plans };
 }
 
 const ENV = {
@@ -372,6 +377,19 @@ describe("POST /v1/checks:generate", () => {
       limit: "daily",
       message: expect.stringContaining("作ってある問題は、回数を使わずにそのまま解けます"),
     });
+  });
+
+  it("plus のプランなら、free の日の上限を超えても作れる（#289）", async () => {
+    const fetchMock = stubUpstream(generatedCheck());
+    silenceInfo();
+    const harness = buildApp();
+    harness.plans.set(USER_A, "plus");
+    for (let i = 0; i < AI_USAGE_LIMITS.dailyRequests; i++) await generate(harness);
+
+    const response = await generate(harness);
+
+    expect(response.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(AI_USAGE_LIMITS.dailyRequests + 1);
   });
 
   it("テスト中に上限を外したときは、日の上限を超えても作れ、回数は記録する", async () => {

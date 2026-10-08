@@ -10,8 +10,11 @@ import { ApiError, requestJson } from "./api.js";
 
 export const AI_USAGE_PATH = "/api/v1/ai/usage";
 
-/** 当面 Free のみ（docs/ai-limits.md「決定: 当面 Free のみ。Pro は作らない」）。 */
-export type Plan = "free";
+/**
+ * 利用者のプラン（docs/ai-limits.md「決定: プランを記録し、Plus は開発用に先に置く」、#289）。
+ * plus は課金が無いあいだ手で入れる開発用。
+ */
+export type Plan = "free" | "plus";
 
 export interface AiUsagePeriod {
   used: number;
@@ -28,6 +31,8 @@ export interface AiUsageSummary {
 /** 画面に出すプランの名前と価格。価格は実装済みのプランのものだけを書く。 */
 export const PLAN_LABELS: Record<Plan, { name: string; price: string }> = {
   free: { name: "Free", price: "¥0 / 月" },
+  // 課金はまだ無い。価格を書かず、開発用であることだけを示す。
+  plus: { name: "Plus", price: "開発用（課金なし）" },
 };
 
 function isCount(value: unknown): value is number {

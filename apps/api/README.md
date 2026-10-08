@@ -49,6 +49,25 @@ npx wrangler d1 migrations apply gakushu-sochi --remote
 デプロイ先アカウントのものを指す必要があるため、各自の環境で作り直して
 `database_id` を書き換えてはならない。
 
+## プランを plus にする
+
+AI 生成の回数上限はプランごとに決まる（`docs/ai-limits.md`、#289）。課金はまだ無いので、
+plus は開発者のアカウントにだけ D1 へ手で入れる。プランを変える API は無い。
+
+1. 対象のアカウントで一度ログインし、API を使っておく（`user_plans` は `users` を参照するため）。
+2. Auth0 の管理画面（User Management → Users）で、そのユーザーの `user_id`（`auth0|...` など）を確かめる。
+3. 次を実行する（`<user_id>` を置き換える）。
+
+```bash
+npx wrangler d1 execute gakushu-sochi --remote --command "INSERT INTO user_plans (user_id, plan, updated_at) VALUES ('<user_id>', 'plus', datetime('now')) ON CONFLICT (user_id) DO UPDATE SET plan = excluded.plan, updated_at = excluded.updated_at"
+```
+
+free へ戻すときは行を消す。
+
+```bash
+npx wrangler d1 execute gakushu-sochi --remote --command "DELETE FROM user_plans WHERE user_id = '<user_id>'"
+```
+
 ## デプロイ先（メンバー間で統一する）
 
 本番は**1つのアカウントに固定**する。`wrangler.jsonc` の `account_id` がそれを強制する。

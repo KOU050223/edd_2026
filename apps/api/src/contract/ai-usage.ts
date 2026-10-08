@@ -152,10 +152,54 @@ export function nextUtcMonth(now: Date): Date {
 }
 
 /**
- * 利用者が契約しているプラン。**当面 Free のみ**（docs/ai-limits.md
- * 「決定: 当面 Free のみ。Pro は作らない」）。Pro を作るときにここへ足す。
+ * 利用者のプラン（docs/ai-limits.md「決定: プランを記録し、Plus は開発用に先に置く」、#289）。
+ * 行が無い人は free。plus は課金が無いあいだ手で入れる（`migrations/0016_user_plans.sql`）。
  */
-export type Plan = "free";
+export type Plan = "free" | "plus";
+
+export const PLANS: readonly Plan[] = ["free", "plus"];
+
+/** プランごとに変わる回数の上限。1回あたりの入力・出力の上限はプランで変えない。 */
+export interface PlanUsageLimits {
+  monthlyRequests: number;
+  dailyRequests: number;
+  /** 利用者へ見せない安全弁（{@link AI_USAGE_LIMITS} の `monthlyTokens` と同じ役）。 */
+  monthlyTokens: number;
+}
+
+/**
+ * プランごとの回数の上限。政策値（docs/ai-limits.md「上限値」）。
+ *
+ * plus は**仮の値**で、AI 生成のデバッグに使う「ほぼ無制限」である。完全に外さないのは、
+ * 生成がバグで繰り返されたときに請求を止めるため。リリース前に数字を決める（#290）。
+ */
+export const PLAN_LIMITS: Record<Plan, PlanUsageLimits> = {
+  free: {
+    monthlyRequests: AI_USAGE_LIMITS.monthlyRequests,
+    dailyRequests: AI_USAGE_LIMITS.dailyRequests,
+    monthlyTokens: AI_USAGE_LIMITS.monthlyTokens,
+  },
+  plus: {
+    monthlyRequests: 10_000,
+    dailyRequests: 1_000,
+    // 月 10,000 回 × 1回の上限 8,048 tokens = 80,480,000 の約1.08倍（free と同じ置き方）。
+    monthlyTokens: 87_000_000,
+  },
+};
+
+/**
+ * そのプランで効かせる上限。`enforceRequestLimits` が false（テスト中に回数上限を外している、#255）
+ * なら回数だけを外す。トークンの安全弁は外さない。
+ */
+export function planLimits(plan: Plan, enforceRequestLimits = true): PlanUsageLimits {
+  const limits = PLAN_LIMITS[plan];
+  if (enforceRequestLimits) return limits;
+  return {
+    monthlyRequests: Number.MAX_SAFE_INTEGER,
+    dailyRequests: Number.MAX_SAFE_INTEGER,
+    monthlyTokens: limits.monthlyTokens,
+  };
+}
 
 /** 1つの期間（日次 / 月次）の利用量。回数で示す。 */
 export interface AiUsagePeriod {

@@ -6,6 +6,7 @@ import { requireAuth, type AuthVariables } from "./auth/middleware.js";
 import { rateLimit } from "./auth/rate-limit.js";
 import {
   D1AiUsageRepository,
+  D1UserPlanRepository,
   D1AreaCompletionRepository,
   D1AuditLogRepository,
   D1CheckGenerationConsentRepository,
@@ -186,6 +187,7 @@ app.route(
     // 利用量は D1 に置く。退会が `DELETE FROM users` 1文で全データを消せる
     // という前提を崩さないため（migrations/0004_ai_usage.sql）。
     usage: new D1AiUsageRepository(env.DB),
+    plans: new D1UserPlanRepository(env.DB),
     identity: new D1IdentityRepository(env.DB),
     maps: new D1LearningMapRepository(env.DB),
     // #216: 回答へ載せる学習の現在地は、Profile と同じくイベントから導出する。
@@ -213,6 +215,7 @@ app.route(
     conversations: new D1ConversationRepository(env.DB),
     settings: new D1UserSettingsRepository(env.DB),
     usage: new D1AiUsageRepository(env.DB),
+    plans: new D1UserPlanRepository(env.DB),
     identity: new D1IdentityRepository(env.DB),
     maps: new D1LearningMapRepository(env.DB),
     audit: new D1AuditLogRepository(env.DB),
@@ -372,6 +375,7 @@ app.route(
       models: parseModelList(env.CHECK_MODELS),
       fetch: (input, init) => globalThis.fetch(input, init),
       usage: new D1AiUsageRepository(env.DB),
+      plans: new D1UserPlanRepository(env.DB),
       checks: new D1PersonalCheckRepository(env.DB),
       consents: new D1MapGenerationConsentRepository(env.DB),
       events: new D1LearningEventRepository(env.DB),

@@ -3,11 +3,11 @@ import { fetchAiUsage, PLAN_LABELS } from "../../../ai-usage.js";
 import { takeLoginRetry } from "../../../session.js";
 
 /**
- * 現在のプラン。当面 Free のみなので、実装済みの事実だけを並べる
- * （docs/ai-limits.md「決定: 当面 Free のみ。Pro は作らない」）。
+ * 現在のプラン。課金はまだ無いので、実装済みの事実だけを並べる
+ * （docs/ai-limits.md「決定: プランを記録し、Plus は開発用に先に置く」）。
  *
  * 支払い方法や請求履歴の欄は置かない。未実装の空欄は利用者から見れば壊れているのと
- * 区別がつかない（Issue #123）。Pro の予告だけはその例外として出すが、
+ * 区別がつかない（Issue #123）。Plus の予告だけはその例外として出すが、
  * 価格・時期・機能差のような決まっていないことは書かない（Issue #165）。
  */
 function Billing() {
@@ -29,15 +29,17 @@ function Billing() {
           <Link to="/settings/usage">使用状況を見る</Link>
         </p>
       </article>
-      <article className="plan-card upcoming">
-        <h3>より多く AI を使える Pro プランを準備中です</h3>
-        <p className="muted">現在、有料プランは提供していません。</p>
-        {/* 決済が無いので押せなくしておく。押せるのに動かないと感じさせないよう、
-            準備中であることを文言に含める。 */}
-        <button type="button" disabled>
-          Pro にアップグレード（準備中）
-        </button>
-      </article>
+      {plan === "free" && (
+        <article className="plan-card upcoming">
+          <h3>より多く AI を使える Plus プランを準備中です</h3>
+          <p className="muted">現在、有料プランは提供していません。</p>
+          {/* 決済が無いので押せなくしておく。押せるのに動かないと感じさせないよう、
+              準備中であることを文言に含める。 */}
+          <button type="button" disabled>
+            Plus にアップグレード（準備中）
+          </button>
+        </article>
+      )}
     </section>
   );
 }

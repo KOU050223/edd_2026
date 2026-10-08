@@ -22,6 +22,7 @@ import type {
   PersonalConceptCheck,
   UnmappedCandidate,
 } from "@gakushu-sochi/domain";
+import type { Plan } from "../contract/ai-usage.js";
 import type { AreaCompletion } from "../contract/area-completions.js";
 import type { ConversationSummary } from "../contract/conversations.js";
 import type {
@@ -435,6 +436,17 @@ export interface AiUsageRepository {
     tokens: number;
     updatedAt: string;
   }): Promise<void>;
+}
+
+/**
+ * 利用者のプラン（#289、migrations/0016_user_plans.sql）。
+ *
+ * **読むだけ。** プランは課金が無いあいだ手で入れる。変える口を作ると、利用者が自分を
+ * plus にできてしまう。
+ */
+export interface UserPlanRepository {
+  /** 行が無ければ free。 */
+  get(userId: string): Promise<Plan>;
 }
 
 /**

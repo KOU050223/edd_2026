@@ -3,7 +3,7 @@ import { Hono } from "hono";
 import { createAuth, type AuthVariables } from "../auth/middleware.js";
 import type { AuthVerifier } from "../auth/verifier.js";
 import { rateLimit } from "../auth/rate-limit.js";
-import { AI_USAGE_LIMITS, estimateInputTokens } from "../contract/ai-usage.js";
+import { AI_USAGE_LIMITS, estimateInputTokens, PLAN_LIMITS } from "../contract/ai-usage.js";
 import { PERSONA_MAX_LENGTH, type LearningEvent } from "@gakushu-sochi/domain";
 import { InMemoryAiUsageRepository } from "../repository/ai-usage.js";
 import {
@@ -17,6 +17,7 @@ import {
 import { InMemoryMasteryOverrideRepository } from "../repository/mastery-overrides.js";
 import type { AiUsageRepository } from "../repository/types.js";
 import { createAiRoute } from "./ai.js";
+import { InMemoryUserPlanRepository } from "../repository/user-plans.js";
 
 const PROFILE_RATE_LIMITER = {
   limit: () => Promise.resolve({ success: true }),
@@ -61,6 +62,7 @@ interface Harness {
   events: InMemoryLearningEventRepository;
   evidence: InMemoryLearningEvidenceRepository;
   overrides: InMemoryMasteryOverrideRepository;
+  plans: InMemoryUserPlanRepository;
 }
 
 /** `app.ts` と同じ順序で、AI ルートに必要な分だけを組み立てる。 */
@@ -76,6 +78,7 @@ function buildApp(
   } = {},
 ): Harness {
   const usage = options.usage ?? new InMemoryAiUsageRepository();
+  const plans = new InMemoryUserPlanRepository();
   const identity = new InMemoryIdentityRepository();
   const store = createInMemoryRepositoryStore();
   const events = options.events ?? new InMemoryLearningEventRepository(store);
@@ -101,6 +104,7 @@ function buildApp(
       model: env.GEMINI_MODEL,
       fetch: (input, init) => globalThis.fetch(input, init),
       usage,
+      plans,
       identity,
       events,
       evidence,
@@ -109,7 +113,7 @@ function buildApp(
       now: options.now ?? (() => new Date("2026-09-22T10:00:00.000Z")),
     })),
   );
-  return { app, usage, events, evidence, overrides };
+  return { app, usage, events, evidence, overrides, plans };
 }
 
 const ENV = {
@@ -921,6 +925,50 @@ describe("POST /v1/ai/responses", () => {
       vi.unstubAllGlobals();
     });
 
+    it("plus のプランなら、free の日次上限を超えても通す（#289）", async () => {
+      const fetchMock = stubUpstream(SSE_WITH_USAGE);
+      const usage = new InMemoryAiUsageRepository();
+      await seed(usage, "auth0|user-a", AI_USAGE_LIMITS.dailyRequests, {
+        monthKey: "2026-09",
+        dayKey: "2026-09-22",
+      });
+      const harness = buildApp({ usage });
+      harness.plans.set("auth0|user-a", "plus");
+      const { ctx, settled } = createExecutionContext();
+
+      const response = await ask(harness, { selection: "code", question: "explain" }, ctx);
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("X-AI-Requests-Limit")).toBe(
+        String(PLAN_LIMITS.plus.monthlyRequests),
+      );
+      await response.text();
+      await settled();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      vi.unstubAllGlobals();
+    });
+
+    it("plus のプランでも、plus の日次上限で止める", async () => {
+      const fetchMock = stubUpstream(SSE_WITH_USAGE);
+      const usage = new InMemoryAiUsageRepository();
+      await seed(usage, "auth0|user-a", PLAN_LIMITS.plus.dailyRequests, {
+        monthKey: "2026-09",
+        dayKey: "2026-09-22",
+      });
+      const harness = buildApp({ usage });
+      harness.plans.set("auth0|user-a", "plus");
+      const { ctx } = createExecutionContext();
+
+      const response = await ask(harness, { selection: "code", question: "explain" }, ctx);
+
+      expect(response.status).toBe(429);
+      const body = (await response.json()) as { limit: string; message: string };
+      expect(body.limit).toBe("daily");
+      expect(body.message).toContain(`${String(PLAN_LIMITS.plus.dailyRequests)} 回`);
+      expect(fetchMock).not.toHaveBeenCalled();
+      vi.unstubAllGlobals();
+    });
+
     it("上限到達の理由が利用者に伝わる文面を含む", async () => {
       stubUpstream(SSE_WITH_USAGE);
       const usage = new InMemoryAiUsageRepository();
@@ -1185,6 +1233,27 @@ describe("GET /v1/ai/usage", () => {
     expect(body.managedAi.monthly).toMatchObject({
       used: 3,
       limit: AI_USAGE_LIMITS.monthlyRequests,
+    });
+  });
+
+  it("plus のプランの人には、プランと plus の上限を返す（#289）", async () => {
+    const harness = buildApp({ now: () => NOW });
+    harness.plans.set("auth0|user-a", "plus");
+    await consume(harness.usage, { userId: "auth0|user-a", at: NOW, times: 2 });
+
+    const body = (await (await readUsage(harness)).json()) as {
+      plan: string;
+      managedAi: Record<"daily" | "monthly", { used: number; limit: number }>;
+    };
+
+    expect(body.plan).toBe("plus");
+    expect(body.managedAi.daily).toMatchObject({
+      used: 2,
+      limit: PLAN_LIMITS.plus.dailyRequests,
+    });
+    expect(body.managedAi.monthly).toMatchObject({
+      used: 2,
+      limit: PLAN_LIMITS.plus.monthlyRequests,
     });
   });
 

@@ -1,7 +1,7 @@
 /** 確認問題の生成が失敗したときに利用者へ返す本文。 */
 
 import {
-  AI_USAGE_LIMITS,
+  type PlanUsageLimits,
   nextUtcDay,
   nextUtcMonth,
   type AiUsageLimitBody,
@@ -66,14 +66,18 @@ export function failureBody(
  * 文面だけを変える。AI ルートの文面は Copilot や BYOK を案内するが、Web の確認問題には
  * どちらも無い。保存済みの問題は回数を使わずに解けることを伝える。
  */
-export function limitReached(kind: AiUsageLimitKind, now: Date): AiUsageLimitBody {
+export function limitReached(
+  kind: AiUsageLimitKind,
+  now: Date,
+  limits: PlanUsageLimits,
+): AiUsageLimitBody {
   const resetAt = kind === "daily" ? nextUtcDay(now) : nextUtcMonth(now);
   const when = kind === "daily" ? "明日 UTC 0時" : "翌月 UTC 1日 0時";
   const scope = kind === "daily" ? "今日" : "今月";
   const allowance =
     kind === "daily"
-      ? `${String(AI_USAGE_LIMITS.dailyRequests)} 回`
-      : `${String(AI_USAGE_LIMITS.monthlyRequests)} 回`;
+      ? `${String(limits.dailyRequests)} 回`
+      : `${String(limits.monthlyRequests)} 回`;
   return {
     error: "ai usage limit reached",
     limit: kind,

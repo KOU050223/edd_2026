@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AI_USAGE_LIMITS } from "../contract/ai-usage.js";
+import { PLAN_LIMITS } from "../contract/ai-usage.js";
 import { failureBody, limitReached, upstreamFailureBody } from "./errors.js";
 import type { UpstreamTrace } from "./upstream.js";
 
@@ -37,7 +37,7 @@ describe("failureBody", () => {
 
 describe("limitReached", () => {
   it("日の上限は、翌日 UTC 0時に回復すると伝える", () => {
-    const body = limitReached("daily", NOW);
+    const body = limitReached("daily", NOW, PLAN_LIMITS.free);
 
     expect(body).toMatchObject({
       error: "ai usage limit reached",
@@ -45,18 +45,18 @@ describe("limitReached", () => {
       resetAt: "2026-09-27T00:00:00.000Z",
     });
     expect(body.message).toContain(
-      `今日の AI 利用上限（${String(AI_USAGE_LIMITS.dailyRequests)} 回）`,
+      `今日の AI 利用上限（${String(PLAN_LIMITS.free.dailyRequests)} 回）`,
     );
     // Web の確認問題には Copilot も BYOK も無い。作ってある問題は解けることを伝える。
     expect(body.message).toContain("作ってある問題は、回数を使わずにそのまま解けます。");
   });
 
   it("月の上限は、翌月 UTC 1日 0時に回復すると伝える", () => {
-    const body = limitReached("monthly", NOW);
+    const body = limitReached("monthly", NOW, PLAN_LIMITS.free);
 
     expect(body).toMatchObject({ limit: "monthly", resetAt: "2026-10-01T00:00:00.000Z" });
     expect(body.message).toContain(
-      `今月の AI 利用上限（${String(AI_USAGE_LIMITS.monthlyRequests)} 回）`,
+      `今月の AI 利用上限（${String(PLAN_LIMITS.free.monthlyRequests)} 回）`,
     );
   });
 });

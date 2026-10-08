@@ -26,6 +26,7 @@ import {
 } from "@gakushu-sochi/domain";
 import {
   AI_USAGE_LIMITS,
+  planLimits,
   ALLOWED_MODELS,
   estimateInputTokens,
   isAllowedModel,
@@ -405,37 +406,32 @@ async function reserveUsage(
   const dayKey = utcDayKey(now);
   // `ai_usage.user_id` は `users(id)` を参照する。行が無いまま数えると外部キーで落ちる。
   await deps.identity.ensureUser({ userId, nowMs: now.getTime() });
+  // 上限を外しているとき（テスト中、#255）も加算はして、使った回数を残す。
+  const limits = planLimits(await deps.plans.get(userId), deps.enforceUsageLimits !== false);
 
   // トークンの安全弁は前回までの累計で見る（`ai.ts` と同じ）。
   const before = await deps.usage.get({ userId, monthKey, dayKey });
-  if (before.monthlyTokens >= AI_USAGE_LIMITS.monthlyTokens) {
+  if (before.monthlyTokens >= limits.monthlyTokens) {
     console.warn("ai usage token safety valve reached", {
       userId,
       monthKey,
       monthlyTokens: before.monthlyTokens,
-      limit: AI_USAGE_LIMITS.monthlyTokens,
+      limit: limits.monthlyTokens,
     });
-    return { ok: false, outcome: { status: 429, body: limitReached("tokens", now) } };
+    return { ok: false, outcome: { status: 429, body: limitReached("tokens", now, limits) } };
   }
   // 判定と加算を1つの操作で行う。
-  // 上限を外しているとき（テスト中、#255）も加算はして、使った回数を残す。
   const { reserved, usage: after } = await deps.usage.reserve({
     userId,
     monthKey,
     dayKey,
     updatedAt: now.toISOString(),
-    limits:
-      deps.enforceUsageLimits === false
-        ? { dailyRequests: Number.MAX_SAFE_INTEGER, monthlyRequests: Number.MAX_SAFE_INTEGER }
-        : {
-            dailyRequests: AI_USAGE_LIMITS.dailyRequests,
-            monthlyRequests: AI_USAGE_LIMITS.monthlyRequests,
-          },
+    limits: { dailyRequests: limits.dailyRequests, monthlyRequests: limits.monthlyRequests },
   });
   if (!reserved) {
     const kind: AiUsageLimitKind =
-      after.monthlyRequests >= AI_USAGE_LIMITS.monthlyRequests ? "monthly" : "daily";
-    return { ok: false, outcome: { status: 429, body: limitReached(kind, now) } };
+      after.monthlyRequests >= limits.monthlyRequests ? "monthly" : "daily";
+    return { ok: false, outcome: { status: 429, body: limitReached(kind, now, limits) } };
   }
   return { ok: true, value: { monthKey, dayKey } };
 }

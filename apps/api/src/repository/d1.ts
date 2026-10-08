@@ -43,6 +43,7 @@ import type {
   LearningMapVisibility,
   LearningObjectiveSource,
 } from "../contract/learning-maps.js";
+import { PLANS, type Plan } from "../contract/ai-usage.js";
 import type {
   AiUsage,
   AiUsageRepository,
@@ -72,6 +73,7 @@ import type {
   StoredMapContent,
   StoredMapNode,
   StoredOwnMapNode,
+  UserPlanRepository,
   UserSettingsRepository,
 } from "./types.js";
 
@@ -941,6 +943,24 @@ export class D1AiUsageRepository implements AiUsageRepository {
     if (result.meta.changes === 0) {
       throw new Error(`ai_usage row is missing (user_id=${userId}, month_key=${monthKey})`);
     }
+  }
+}
+
+/** `UserPlanRepository` の D1 実装（#289）。 */
+export class D1UserPlanRepository implements UserPlanRepository {
+  constructor(private readonly db: D1Database) {}
+
+  async get(userId: string): Promise<Plan> {
+    const row = await this.db
+      .prepare(`SELECT plan FROM user_plans WHERE user_id = ?`)
+      .bind(userId)
+      .first<{ plan: string }>();
+    if (row === null) return "free";
+    // 表の CHECK と型がずれたとき、知らないプランを free として黙って通さない（RULE-004）。
+    if (!(PLANS as readonly string[]).includes(row.plan)) {
+      throw new Error(`unknown plan in user_plans: ${row.plan}`);
+    }
+    return row.plan as Plan;
   }
 }
 

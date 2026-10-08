@@ -14,6 +14,7 @@ import {
 import { InMemoryMasteryOverrideRepository } from "../repository/mastery-overrides.js";
 import { createAiRoute } from "./ai.js";
 import type { HistoryAnalysisResponse } from "../contract/history-import.js";
+import { InMemoryUserPlanRepository } from "../repository/user-plans.js";
 
 /**
  * `POST /v1/ai/history-analysis`（Issue #157）の検証。
@@ -55,6 +56,7 @@ beforeEach(() => {
       model: env.GEMINI_MODEL,
       fetch: (input, init) => globalThis.fetch(input, init),
       usage,
+      plans: new InMemoryUserPlanRepository(),
       identity: new InMemoryIdentityRepository(store),
       events: new InMemoryLearningEventRepository(store),
       evidence: new InMemoryLearningEvidenceRepository(store),
