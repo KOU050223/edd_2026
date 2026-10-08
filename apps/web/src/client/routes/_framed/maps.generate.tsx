@@ -1,6 +1,6 @@
 import { CHECK_LEVEL_LABELS, CHECK_LEVELS, MAP_GENERATION_NOTICE } from "@gakushu-sochi/domain";
 import type { CheckLevel } from "@gakushu-sochi/domain";
-import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate, useRouter } from "@tanstack/react-router";
 import { useRef, useState } from "react";
 import { fetchAiUsage } from "../../ai-usage.js";
 import { ApiError, createSubmitGuard } from "../../api.js";
@@ -100,6 +100,7 @@ function ConsentPrompt({
 function GenerateMapPage() {
   const loaded = Route.useLoaderData();
   const navigate = useNavigate();
+  const router = useRouter();
   const [kind, setKind] = useState<MapGenerationKind>("goal");
   const [theme, setTheme] = useState("");
   const [goal, setGoal] = useState("");
@@ -135,6 +136,8 @@ function GenerateMapPage() {
         window.location.href = "/login";
         return;
       }
+      // 回数の残りが変わったので読み直す。
+      await router.invalidate();
       setPhase({
         kind: "checks-failed",
         mapId,
@@ -150,14 +153,17 @@ function GenerateMapPage() {
     setError(undefined);
     setPhase({ kind: "map" });
     void guard.current.run("generate", async () => {
-      let mapId: string;
+      let map: Awaited<ReturnType<typeof generateLearningMap>>;
       try {
-        mapId = (await generateLearningMap(body)).id;
+        map = await generateLearningMap(body);
       } catch (value: unknown) {
         if (value instanceof ApiError && value.kind === "session_expired") {
           window.location.href = "/login";
           return;
         }
+        // 上流へ送ったあとの失敗でも回数は使われている。残りの回数とマップの数を読み直し、
+        // 古い値のまま作り直させない（PR #285 のレビュー）。
+        await router.invalidate();
         setPhase({ kind: "idle" });
         if (value instanceof MapConsentRequiredError) {
           // 文面の版が変わった、または記録が取り消された。同意を取り直す。
@@ -168,11 +174,18 @@ function GenerateMapPage() {
         setError(generationErrorText(value));
         return;
       }
-      if (body.checks) {
-        await makeChecks(mapId);
+      // 確認問題を頼んでも、参照のノードだけのマップでは作れるノードが無く、API は頼まなかったとして保存する。
+      if (map.creationChecks?.status === "pending") {
+        await makeChecks(map.id);
         return;
       }
-      await openMap(mapId);
+      if (body.checks) {
+        window.alert(
+          "既存の概念を参照したノードだけのマップなので、作成時の確認問題は作りませんでした。" +
+            "確認問題は各ノードの確認問題の画面から作れます。",
+        );
+      }
+      await openMap(map.id);
     });
   };
 

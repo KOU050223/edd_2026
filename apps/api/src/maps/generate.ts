@@ -493,7 +493,9 @@ async function save(
     id: mapId,
     content: resolved.content,
     objectives,
-    ...(withChecks ? { creationChecksLevel: request.level } : {}),
+    // 参照のノードだけのマップには、問題を作れるノード（自分の項目を持つノード）が無い。
+    // 「未作成」として残すと、作成時の問題を頼むたびに失敗する（PR #285 のレビュー）。
+    ...(withChecks && objectives.length > 0 ? { creationChecksLevel: request.level } : {}),
     nowIso,
     nowMs: now.getTime(),
     maxMaps: MAX_MAPS_PER_USER,
