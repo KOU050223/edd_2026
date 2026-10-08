@@ -25,6 +25,7 @@ import {
 } from "../../../learning-data.js";
 import { historySourceLabel } from "../../../learning-map.js";
 import { toErrorText } from "../../../errors.js";
+import { MAP_GENERATION_CONSENT_PATH } from "../../../map-generation.js";
 import { takeLoginRetry } from "../../../session.js";
 
 /**
@@ -196,6 +197,7 @@ function DataSettings() {
       <ConversationHistoryCard />
 
       <ChecksCard />
+      <MapGenerationCard />
     </section>
   );
 }
@@ -599,6 +601,86 @@ function ChecksCard() {
         </>
       ) : (
         <p className="muted">問題を作るたびに、AI へ送る内容を確認してから作ります。</p>
+      )}
+      {actionError && (
+        <p className="error-text" role="alert">
+          操作に失敗しました：{actionError}
+        </p>
+      )}
+    </article>
+  );
+}
+
+/**
+ * 学習マップの AI 生成への同意の取り消し（#243）。
+ *
+ * 生成の画面で「今後表示しない」を選ぶと、次回から AI へ送る内容の確認を出さずに作る。
+ * 確認問題の同意とは別の記録なので、取り消しも別に置く。
+ */
+function MapGenerationCard() {
+  const submitGuard = useRef(createSubmitGuard());
+  const [consent, setConsent] = useState<CheckGenerationConsent>();
+  const [loadError, setLoadError] = useState<string>();
+  const [actionError, setActionError] = useState<string>();
+  const [revoking, setRevoking] = useState(false);
+
+  // 設定画面を開いたタイミングで一度だけ取る。
+  useEffect(() => {
+    fetchGenerationConsent(fetch, takeLoginRetry(), MAP_GENERATION_CONSENT_PATH)
+      .then(setConsent)
+      .catch((value: unknown) => {
+        if (value instanceof ApiError && value.kind === "login_required") return;
+        setLoadError(toErrorText(value));
+      });
+  }, []);
+
+  const revoke = () => {
+    if (submitGuard.current.isRunning("revoke")) return;
+    setActionError(undefined);
+    setRevoking(true);
+    void submitGuard.current
+      .run("revoke", async () => {
+        try {
+          setConsent(await changeGenerationConsent("revoke", fetch, MAP_GENERATION_CONSENT_PATH));
+        } catch (value: unknown) {
+          if (value instanceof ApiError && value.kind === "session_expired") {
+            window.location.href = "/login";
+            return;
+          }
+          setActionError(toErrorText(value));
+        }
+      })
+      .finally(() => setRevoking(false));
+  };
+
+  return (
+    <article className="plan-card">
+      <h3>AI でのマップの作成</h3>
+      <p className="muted">
+        作ったマップは「自分のマップ」にあり、学習データの削除では消えません。マップの削除か退会で消えます。
+      </p>
+      <h4>AI へ送る内容の確認</h4>
+      {loadError ? (
+        <p className="error-text" role="alert">
+          状態を読み込めませんでした：{loadError}
+        </p>
+      ) : consent === undefined ? (
+        <p className="muted">読み込み中…</p>
+      ) : consent.granted ? (
+        <>
+          <p className="muted">
+            「今後表示しない」を選んでいます（
+            {consent.grantedAt ? new Date(consent.grantedAt).toLocaleString("ja-JP") : "日時不明"}
+            ）。マップを作るときに、送る内容の確認を出さずに作ります。
+          </p>
+          <div className="actions">
+            <button type="button" disabled={revoking} onClick={revoke}>
+              {revoking ? "取り消し中…" : "取り消して、毎回確認する"}
+            </button>
+          </div>
+        </>
+      ) : (
+        <p className="muted">マップを作るたびに、AI へ送る内容を確認してから作ります。</p>
       )}
       {actionError && (
         <p className="error-text" role="alert">

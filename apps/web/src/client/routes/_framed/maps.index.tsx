@@ -153,6 +153,14 @@ function MapList() {
           <p>マップの削除に失敗しました：{deleteError}</p>
         </section>
       )}
+      <p>
+        <Link to="/maps/generate" className="link">
+          AI でマップを作る
+        </Link>
+        <span className="muted">
+          （テーマや目標から、ノードと「理解すること」をまとめて作ります）
+        </span>
+      </p>
       <CreateMapForm full={maps.length >= MAP_LIMITS.maps} />
       {maps.length === 0 ? (
         <p className="hint">まだマップがありません。</p>

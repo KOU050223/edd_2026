@@ -1,6 +1,7 @@
 import { createFileRoute, Link, useNavigate, useRouter } from "@tanstack/react-router";
-import { useEffect, useRef } from "react";
-import { requestJson } from "../../api.js";
+import { useEffect, useRef, useState } from "react";
+import { ApiError, createSubmitGuard, requestJson } from "../../api.js";
+import { toErrorText } from "../../errors.js";
 import {
   ConceptDetail,
   FIXED_OBJECTIVES_NOTE,
@@ -19,8 +20,90 @@ import {
   summarizeTree,
 } from "../../learning-map.js";
 import { fetchLearningMap, mapDefinitions } from "../../learning-maps.js";
+import {
+  CreationChecksError,
+  creationChecksSummary,
+  generateCreationChecks,
+  MAP_GENERATION_COST,
+} from "../../map-generation.js";
 import type { MasteryOverrides } from "../../overrides.js";
 import { takeLoginRetry } from "../../session.js";
+
+/**
+ * AI で作ったマップの作成時の確認問題（#247）。生成の画面で作れなかったときや、
+ * 途中で画面を離れたときに、ここから作れるようにする。作成済みなら何も出さない。
+ */
+function CreationChecksPanel({
+  mapId,
+  status,
+}: {
+  mapId: string;
+  status: "pending" | "exhausted";
+}) {
+  const router = useRouter();
+  const guard = useRef(createSubmitGuard());
+  const [running, setRunning] = useState(false);
+  const [message, setMessage] = useState<string>();
+  const [error, setError] = useState<string>();
+
+  const run = () => {
+    // 送信中は入口で弾く（RULE-007）。
+    if (guard.current.isRunning("checks")) return;
+    setError(undefined);
+    setMessage(undefined);
+    setRunning(true);
+    void guard.current
+      .run("checks", async () => {
+        try {
+          setMessage(creationChecksSummary(await generateCreationChecks(mapId)));
+          await router.invalidate();
+        } catch (value: unknown) {
+          if (value instanceof ApiError && value.kind === "session_expired") {
+            window.location.href = "/login";
+            return;
+          }
+          setError(value instanceof CreationChecksError ? value.detail : toErrorText(value));
+          // 頼める回数が尽きたかどうかは、読み直した状態で出し分ける。
+          await router.invalidate();
+        }
+      })
+      .finally(() => setRunning(false));
+  };
+
+  if (status === "exhausted") {
+    return (
+      <section className="message">
+        <p>
+          このマップの作成時の確認問題は作れませんでした。問題は各ノードの確認問題の画面から1組ずつ作れます。
+        </p>
+        {error && <p className="error-text">{error}</p>}
+      </section>
+    );
+  }
+  return (
+    <section className="message">
+      <p>
+        このマップの確認問題はまだ作っていません。手前のノードから最大 10 組を作ります（AI
+        の利用回数を {MAP_GENERATION_COST} 回使います）。
+      </p>
+      <div className="actions">
+        <button type="button" disabled={running} onClick={run}>
+          {running ? "確認問題を作っています…" : "確認問題を作る"}
+        </button>
+      </div>
+      {message && (
+        <p className="message saved" role="status">
+          {message}
+        </p>
+      )}
+      {error && (
+        <p className="error-text" role="alert">
+          {error}
+        </p>
+      )}
+    </section>
+  );
+}
 
 /**
  * 手で作った学習マップ1件の表示（Issue #242）。言語別マップ（`/map/$language`）と同じ
@@ -102,6 +185,9 @@ function LearningMapPage() {
         </Link>
       </p>
       {map.description && <p className="muted">{map.description}</p>}
+      {map.creationChecks !== undefined && map.creationChecks.status !== "done" && (
+        <CreationChecksPanel mapId={mapId} status={map.creationChecks.status} />
+      )}
       {summary && (
         <section className="summary" aria-label={`${map.title} の集計`}>
           <div>
