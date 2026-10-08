@@ -28,6 +28,7 @@ import {
 } from "../repository/memory.js";
 import { CREATION_CHECKS_LEASE_MS } from "../maps/creation-checks.js";
 import { createLearningMapsRoute } from "./learning-maps.js";
+import { InMemoryUserPlanRepository } from "../repository/user-plans.js";
 
 const NOW = new Date("2026-10-08T09:00:00.000Z");
 const USAGE_KEYS = { monthKey: utcMonthKey(NOW), dayKey: utcDayKey(NOW) };
@@ -67,6 +68,7 @@ const FIXED_OBJECTIVES: LearningObjective[] = [
 
 let maps: InMemoryLearningMapRepository;
 let usage: InMemoryAiUsageRepository;
+let plans: InMemoryUserPlanRepository;
 let consents: InMemoryMapGenerationConsentRepository;
 let checks: InMemoryPersonalCheckRepository;
 /** 作成時の確認問題の本文を、頼まれた Concept ID の並びから作る。テストごとに差し替える。 */
@@ -132,6 +134,7 @@ beforeEach(() => {
   const store = createInMemoryRepositoryStore();
   maps = new InMemoryLearningMapRepository(store);
   usage = new InMemoryAiUsageRepository();
+  plans = new InMemoryUserPlanRepository();
   consents = new InMemoryMapGenerationConsentRepository(store);
   checks = new InMemoryPersonalCheckRepository(store);
   creationChecksFor = (conceptIds) =>
@@ -177,6 +180,7 @@ beforeEach(() => {
         model: "gemini-3.6-flash",
         fetch: fetchMock as unknown as typeof fetch,
         usage,
+        plans,
         checks,
         consents,
         events: new InMemoryLearningEventRepository(store),
@@ -399,6 +403,23 @@ describe("POST /v1/learning-maps:generate", () => {
     expect(await usedRequests()).toBe(
       AI_USAGE_LIMITS.dailyRequests - MAP_GENERATION_USAGE_COST + 1,
     );
+  });
+
+  it("plus のプランなら、free の枠が残っていなくても作れる（#289）", async () => {
+    plans.set("user-a", "plus");
+    for (let i = 0; i < AI_USAGE_LIMITS.dailyRequests; i++) {
+      await usage.reserve({
+        userId: "user-a",
+        ...USAGE_KEYS,
+        updatedAt: NOW.toISOString(),
+        limits: { dailyRequests: 100, monthlyRequests: 1_000 },
+      });
+    }
+
+    const res = await send("POST", "/learning-maps:generate", GOAL_REQUEST);
+
+    expect(res.status).toBe(201);
+    expect(await usedRequests()).toBe(AI_USAGE_LIMITS.dailyRequests + MAP_GENERATION_USAGE_COST);
   });
 
   it("マップが上限の数あれば、上流を叩かずに 409 を返す", async () => {

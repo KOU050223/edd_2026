@@ -8,6 +8,7 @@ import type {
   LearningEventRepository,
   LearningMapRepository,
   PersonalCheckRepository,
+  UserPlanRepository,
   UserSettingsRepository,
 } from "../repository/types.js";
 
@@ -32,10 +33,12 @@ export interface ChecksDeps {
   settings: UserSettingsRepository;
   /** `ai_usage.user_id` は `users(id)` を参照するので、数える前に行を用意する。 */
   usage: AiUsageRepository;
+  /** 回数上限をプランごとに決める（#289）。 */
+  plans: UserPlanRepository;
   identity: IdentityRepository;
   audit: AuditLogRepository;
   /**
-   * 回数上限（日 15・月 150）を効かせるか。省略は効かせる。
+   * 回数上限（プランごと、#289）を効かせるか。省略は効かせる。
    *
    * テスト中だけ外す（`vars.CHECK_GENERATION_LIMITS: "off"`、#255 で戻す）。外しても回数と
    * トークン量は記録し、月のトークン量の安全弁とレート制限は効かせたままにする。

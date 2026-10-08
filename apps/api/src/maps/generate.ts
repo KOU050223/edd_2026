@@ -27,6 +27,7 @@ import {
 } from "@gakushu-sochi/domain";
 import {
   AI_USAGE_LIMITS,
+  planLimits,
   ALLOWED_MODELS,
   estimateInputTokens,
   isAllowedModel,
@@ -57,6 +58,7 @@ import type {
   MasteryOverrideRepository,
   PersonalCheckRepository,
   StoredLearningObjective,
+  UserPlanRepository,
 } from "../repository/types.js";
 import { loadUserConceptCatalog } from "./catalog.js";
 import { newMapId, resolveMapContent } from "./content.js";
@@ -97,6 +99,8 @@ export interface MapGenerationDeps {
   models?: readonly string[];
   fetch: typeof fetch;
   usage: AiUsageRepository;
+  /** 回数上限をプランごとに決める（#289）。 */
+  plans: UserPlanRepository;
   /** 作成時の確認問題の保存先（#247）。解くときに作る問題と同じ表。 */
   checks: PersonalCheckRepository;
   /** 「今後表示しない」の記録（migrations/0014_map_generation_consents.sql）。 */
@@ -595,14 +599,18 @@ async function reserveUsage(
   const dayKey = utcDayKey(now);
   // `ai_usage.user_id` は `users(id)` を参照する。
   await identity.ensureUser({ userId, nowMs: now.getTime() });
+  const limits = planLimits(
+    await generation.plans.get(userId),
+    generation.enforceUsageLimits !== false,
+  );
 
   const before = await generation.usage.get({ userId, monthKey, dayKey });
-  if (before.monthlyTokens >= AI_USAGE_LIMITS.monthlyTokens) {
+  if (before.monthlyTokens >= limits.monthlyTokens) {
     console.warn("ai usage token safety valve reached", {
       userId,
       monthKey,
       monthlyTokens: before.monthlyTokens,
-      limit: AI_USAGE_LIMITS.monthlyTokens,
+      limit: limits.monthlyTokens,
     });
     return { ok: false, outcome: { status: 429, body: limitReached("tokens", now) } };
   }
@@ -612,17 +620,11 @@ async function reserveUsage(
     dayKey,
     updatedAt: now.toISOString(),
     amount: MAP_GENERATION_USAGE_COST,
-    limits:
-      generation.enforceUsageLimits === false
-        ? { dailyRequests: Number.MAX_SAFE_INTEGER, monthlyRequests: Number.MAX_SAFE_INTEGER }
-        : {
-            dailyRequests: AI_USAGE_LIMITS.dailyRequests,
-            monthlyRequests: AI_USAGE_LIMITS.monthlyRequests,
-          },
+    limits: { dailyRequests: limits.dailyRequests, monthlyRequests: limits.monthlyRequests },
   });
   if (!reserved) {
     const kind: AiUsageLimitKind =
-      after.monthlyRequests + MAP_GENERATION_USAGE_COST > AI_USAGE_LIMITS.monthlyRequests
+      after.monthlyRequests + MAP_GENERATION_USAGE_COST > limits.monthlyRequests
         ? "monthly"
         : "daily";
     return { ok: false, outcome: { status: 429, body: limitReached(kind, now) } };

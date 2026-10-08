@@ -15,6 +15,7 @@
 import type { CheckLevel, PersonalConceptCheck } from "@gakushu-sochi/domain";
 import {
   AI_USAGE_LIMITS,
+  planLimits,
   estimateInputTokens,
   utcDayKey,
   utcMonthKey,
@@ -173,8 +174,12 @@ export async function generateCreationChecks(
     };
 
     await deps.identity.ensureUser({ userId, nowMs: now.getTime() });
+    const limits = planLimits(
+      await generation.plans.get(userId),
+      generation.enforceUsageLimits !== false,
+    );
     const before = await generation.usage.get({ userId, monthKey, dayKey });
-    if (before.monthlyTokens >= AI_USAGE_LIMITS.monthlyTokens) {
+    if (before.monthlyTokens >= limits.monthlyTokens) {
       console.warn("ai usage token safety valve reached", { userId, monthKey });
       await giveBack();
       return { status: 429, body: limitReached("tokens", now, "checks") };
@@ -185,18 +190,12 @@ export async function generateCreationChecks(
       dayKey,
       updatedAt: now.toISOString(),
       amount: CREATION_CHECKS_USAGE_COST,
-      limits:
-        generation.enforceUsageLimits === false
-          ? { dailyRequests: Number.MAX_SAFE_INTEGER, monthlyRequests: Number.MAX_SAFE_INTEGER }
-          : {
-              dailyRequests: AI_USAGE_LIMITS.dailyRequests,
-              monthlyRequests: AI_USAGE_LIMITS.monthlyRequests,
-            },
+      limits: { dailyRequests: limits.dailyRequests, monthlyRequests: limits.monthlyRequests },
     });
     if (!reserved) {
       await giveBack();
       const kind: AiUsageLimitKind =
-        after.monthlyRequests + CREATION_CHECKS_USAGE_COST > AI_USAGE_LIMITS.monthlyRequests
+        after.monthlyRequests + CREATION_CHECKS_USAGE_COST > limits.monthlyRequests
           ? "monthly"
           : "daily";
       return { status: 429, body: limitReached(kind, now, "checks") };

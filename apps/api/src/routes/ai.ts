@@ -41,6 +41,8 @@ import { loadUserConceptCatalog } from "../maps/catalog.js";
 import type { AuthVariables } from "../auth/middleware.js";
 import {
   AI_USAGE_LIMITS,
+  planLimits,
+  type PlanUsageLimits,
   ALLOWED_MODELS,
   estimateInputTokens,
   isAllowedModel,
@@ -60,6 +62,7 @@ import type {
   LearningMapRepository,
   MasteryOverride,
   MasteryOverrideRepository,
+  UserPlanRepository,
 } from "../repository/types.js";
 import {
   MAX_CONVERSATIONS_PER_ANALYSIS,
@@ -99,6 +102,8 @@ export interface AiDeps {
    * 数える前にユーザー行を用意する必要がある。
    */
   usage: AiUsageRepository;
+  /** 回数上限をプランごとに決める（#289）。 */
+  plans: UserPlanRepository;
   identity: IdentityRepository;
   /**
    * 回答の現在地合わせに使う学習データ（Issue #216）。
@@ -117,7 +122,11 @@ export interface AiDeps {
 export type AiDepsResolver = (env: CloudflareBindings) => AiDeps;
 
 /** 上限到達時の応答。理由と回復時刻を利用者へ伝える（完了条件）。 */
-function limitReached(kind: AiUsageLimitKind, now: Date): AiUsageLimitBody {
+function limitReached(
+  kind: AiUsageLimitKind,
+  now: Date,
+  limits: PlanUsageLimits,
+): AiUsageLimitBody {
   // トークンの安全弁に当たった場合も、利用者へは回数と同じ扱いで見せる。
   // 内部の別勘定を説明しない（docs/ai-limits.md「利用者への見せ方」）。
   // 回復は月次と同じ暦月の境界になる。
@@ -126,8 +135,8 @@ function limitReached(kind: AiUsageLimitKind, now: Date): AiUsageLimitBody {
   const scope = kind === "daily" ? "今日" : "今月";
   const allowance =
     kind === "daily"
-      ? `${String(AI_USAGE_LIMITS.dailyRequests)} 回`
-      : `${String(AI_USAGE_LIMITS.monthlyRequests)} 回`;
+      ? `${String(limits.dailyRequests)} 回`
+      : `${String(limits.monthlyRequests)} 回`;
   return {
     error: "ai usage limit reached",
     limit: kind,
@@ -151,21 +160,21 @@ export function createAiRoute(resolve: AiDepsResolver) {
     const deps = resolve(c.env);
     const userId = c.get("user").userId;
     const now = deps.now();
-    const usage = await deps.usage.get({
-      userId,
-      monthKey: utcMonthKey(now),
-      dayKey: utcDayKey(now),
-    });
+    const [usage, plan] = await Promise.all([
+      deps.usage.get({ userId, monthKey: utcMonthKey(now), dayKey: utcDayKey(now) }),
+      deps.plans.get(userId),
+    ]);
+    const limits = planLimits(plan);
     // 返す項目を1つずつ書き出す。`usage` を広げて返すと、利用者へ見せない
     // `monthlyTokens` まで載る（docs/ai-limits.md「利用者への見せ方」）。
-    // 上限は必ず `AI_USAGE_LIMITS` から取る。Web に数字を持たせると、
+    // 上限は必ずプランの上限（`PLAN_LIMITS`）から取る。Web に数字を持たせると、
     // 政策値を動かしたときに画面だけが古い上限を示す。
     const body: AiUsageSummary = {
-      plan: "free",
+      plan,
       managedAi: {
         daily: {
           used: usage.dailyRequests,
-          limit: AI_USAGE_LIMITS.dailyRequests,
+          limit: limits.dailyRequests,
           resetAt: nextUtcDay(now).toISOString(),
         },
         monthly: {
@@ -174,10 +183,10 @@ export function createAiRoute(resolve: AiDepsResolver) {
           // 利用者へは回数を使い切ったのと同じ扱いで見せる。トークン数そのものは
           // 出さない（docs/ai-limits.md「利用者への見せ方」）。
           used:
-            usage.monthlyTokens >= AI_USAGE_LIMITS.monthlyTokens
-              ? Math.max(usage.monthlyRequests, AI_USAGE_LIMITS.monthlyRequests)
+            usage.monthlyTokens >= limits.monthlyTokens
+              ? Math.max(usage.monthlyRequests, limits.monthlyRequests)
               : usage.monthlyRequests,
-          limit: AI_USAGE_LIMITS.monthlyRequests,
+          limit: limits.monthlyRequests,
           resetAt: nextUtcMonth(now).toISOString(),
         },
       },
@@ -309,13 +318,14 @@ export function createAiRoute(resolve: AiDepsResolver) {
     // 強制する。行が無いまま INSERT すると FOREIGN KEY constraint failed で落ちる
     // （repository/types.ts の `ensureUser` の説明を参照）。
     await deps.identity.ensureUser({ userId, nowMs: now.getTime() });
+    const limits = planLimits(await deps.plans.get(userId));
 
     // トークンの安全弁だけは先に読んで判定する。回数と違って**実消費が
     // 分かるのはストリームを読み切った後**なので、確保の対象にできない。
     // 前回までの累計で見るしかなく、1回分は超過しうる。それを許せるのは、
     // これが利用者へ見せない安全弁であり、通常は回数が先に尽きるためである。
     const before = await deps.usage.get({ userId, monthKey, dayKey });
-    if (before.monthlyTokens >= AI_USAGE_LIMITS.monthlyTokens) {
+    if (before.monthlyTokens >= limits.monthlyTokens) {
       // 通常は回数が先に尽きる。ここに来ること自体が「1回あたりの想定が
       // 外れた」という信号なので、政策値を見直すために記録する
       // （docs/ai-limits.md）。
@@ -324,9 +334,9 @@ export function createAiRoute(resolve: AiDepsResolver) {
         monthKey,
         monthlyTokens: before.monthlyTokens,
         monthlyRequests: before.monthlyRequests,
-        limit: AI_USAGE_LIMITS.monthlyTokens,
+        limit: limits.monthlyTokens,
       });
-      return c.json(limitReached("tokens", now), 429);
+      return c.json(limitReached("tokens", now, limits), 429);
     }
     // 回数の枠を確保する。**判定と加算は1つの操作にまとめる**（`reserve`）。
     // 読んでから別の文で足すと、同じ利用者の同時リクエストがその隙間に割り込み、
@@ -339,18 +349,15 @@ export function createAiRoute(resolve: AiDepsResolver) {
       monthKey,
       dayKey,
       updatedAt: now.toISOString(),
-      limits: {
-        dailyRequests: AI_USAGE_LIMITS.dailyRequests,
-        monthlyRequests: AI_USAGE_LIMITS.monthlyRequests,
-      },
+      limits: { dailyRequests: limits.dailyRequests, monthlyRequests: limits.monthlyRequests },
     });
     if (!reserved) {
       // 月次を先に見る。両方に達している利用者へ日次の `resetAt`（明日 UTC 0時）を
       // 返すと、その時刻に再試行しても月次で止まり続ける。**回復時刻は、実際に
       // 使えるようになる時刻でなければ案内にならない。** 遠いほうを返す。
       const kind: AiUsageLimitKind =
-        after.monthlyRequests >= AI_USAGE_LIMITS.monthlyRequests ? "monthly" : "daily";
-      return c.json(limitReached(kind, now), 429);
+        after.monthlyRequests >= limits.monthlyRequests ? "monthly" : "daily";
+      return c.json(limitReached(kind, now, limits), 429);
     }
 
     let upstream: Response;
@@ -470,9 +477,9 @@ export function createAiRoute(resolve: AiDepsResolver) {
         // 残量は回数で示す（docs/ai-limits.md「利用者への見せ方」）。
         // トークン数は見せない。
         "X-AI-Requests-Remaining": String(
-          Math.max(0, AI_USAGE_LIMITS.monthlyRequests - after.monthlyRequests),
+          Math.max(0, limits.monthlyRequests - after.monthlyRequests),
         ),
-        "X-AI-Requests-Limit": String(AI_USAGE_LIMITS.monthlyRequests),
+        "X-AI-Requests-Limit": String(limits.monthlyRequests),
       },
     });
   });
@@ -523,31 +530,29 @@ export function createAiRoute(resolve: AiDepsResolver) {
       const dayKey = utcDayKey(now);
 
       await deps.identity.ensureUser({ userId, nowMs: now.getTime() });
+      const limits = planLimits(await deps.plans.get(userId));
 
       const before = await deps.usage.get({ userId, monthKey, dayKey });
-      if (before.monthlyTokens >= AI_USAGE_LIMITS.monthlyTokens) {
+      if (before.monthlyTokens >= limits.monthlyTokens) {
         console.warn("ai usage token safety valve reached", {
           userId,
           monthKey,
           monthlyTokens: before.monthlyTokens,
-          limit: AI_USAGE_LIMITS.monthlyTokens,
+          limit: limits.monthlyTokens,
         });
-        return c.json(limitReached("tokens", now), 429);
+        return c.json(limitReached("tokens", now, limits), 429);
       }
       const { reserved, usage: after } = await deps.usage.reserve({
         userId,
         monthKey,
         dayKey,
         updatedAt: now.toISOString(),
-        limits: {
-          dailyRequests: AI_USAGE_LIMITS.dailyRequests,
-          monthlyRequests: AI_USAGE_LIMITS.monthlyRequests,
-        },
+        limits: { dailyRequests: limits.dailyRequests, monthlyRequests: limits.monthlyRequests },
       });
       if (!reserved) {
         const kind: AiUsageLimitKind =
-          after.monthlyRequests >= AI_USAGE_LIMITS.monthlyRequests ? "monthly" : "daily";
-        return c.json(limitReached(kind, now), 429);
+          after.monthlyRequests >= limits.monthlyRequests ? "monthly" : "daily";
+        return c.json(limitReached(kind, now, limits), 429);
       }
 
       let upstream: Response;

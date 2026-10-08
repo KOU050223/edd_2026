@@ -3,7 +3,10 @@ import {
   AI_USAGE_LIMITS,
   ALLOWED_MODELS,
   MODEL_PRICING,
+  PLAN_LIMITS,
+  PLANS,
   estimateInputTokens,
+  planLimits,
   isAllowedModel,
   nextUtcDay,
   nextUtcMonth,
@@ -51,6 +54,41 @@ describe("上限値（docs/ai-limits.md の写し）", () => {
       AI_USAGE_LIMITS.monthlyRequests *
       (AI_USAGE_LIMITS.inputTokensPerRequest + AI_USAGE_LIMITS.outputTokensPerRequest);
     expect(AI_USAGE_LIMITS.monthlyTokens).toBeGreaterThan(theoreticalMax);
+  });
+});
+
+describe("プランごとの上限（docs/ai-limits.md の写し、#289）", () => {
+  it("free は今の上限と同じ", () => {
+    expect(PLAN_LIMITS.free).toEqual({
+      monthlyRequests: AI_USAGE_LIMITS.monthlyRequests,
+      dailyRequests: AI_USAGE_LIMITS.dailyRequests,
+      monthlyTokens: AI_USAGE_LIMITS.monthlyTokens,
+    });
+  });
+
+  it("plus は仮の値（#290 でリリース前に決める）", () => {
+    expect(PLAN_LIMITS.plus).toEqual({
+      monthlyRequests: 10_000,
+      dailyRequests: 1_000,
+      monthlyTokens: 87_000_000,
+    });
+  });
+
+  it.each(PLANS)("%s でも、トークンの安全弁は回数上限の理論最大より上にある", (plan) => {
+    const limits = PLAN_LIMITS[plan];
+    const theoreticalMax =
+      limits.monthlyRequests *
+      (AI_USAGE_LIMITS.inputTokensPerRequest + AI_USAGE_LIMITS.outputTokensPerRequest);
+    expect(limits.monthlyTokens).toBeGreaterThan(theoreticalMax);
+  });
+
+  it("回数上限を外しても、トークンの安全弁は外さない", () => {
+    expect(planLimits("free", false)).toEqual({
+      monthlyRequests: Number.MAX_SAFE_INTEGER,
+      dailyRequests: Number.MAX_SAFE_INTEGER,
+      monthlyTokens: AI_USAGE_LIMITS.monthlyTokens,
+    });
+    expect(planLimits("plus")).toBe(PLAN_LIMITS.plus);
   });
 });
 
