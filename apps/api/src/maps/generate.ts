@@ -445,18 +445,25 @@ async function save(
     return { status: 502, body: failureBody("structure") };
   }
 
-  // 生成の間に、参照した自分のマップのノードが消されていたら保存しない。
-  // 残すと元の無い参照（項目の無いノード）ができる。
+  // 生成の間に、参照した自分のマップのノードが消されたか、その「理解すること」が全部消されていたら
+  // 保存しない。残すと項目の無いノードができる（決定 J4。PR #283 のレビュー）。
+  // この確認と保存の間に消された場合は防げないが、そのときは元の無い参照として表示され、
+  // 手で作るマップで参照の元を消したときと同じ扱いになる。
   const ownReferences = resolved.referenceIds.filter(isOwnNodeId);
   const found = await deps.maps.findOwnNodes(userId, ownReferences);
-  if (found.length !== ownReferences.length) {
-    console.info("generated map was discarded because a referenced node was removed");
+  const usable = found.filter((node) => node.objectives.length > 0);
+  if (usable.length !== ownReferences.length) {
+    console.info("generated map was discarded because a referenced node changed", {
+      references: ownReferences.length,
+      found: found.length,
+      withObjectives: usable.length,
+    });
     return {
       status: 409,
       body: {
         error: "map discarded by reference change",
         message:
-          "生成中に、マップに入れた既存のノードが削除されたため、作ったマップは保存しませんでした。もう一度お試しください。",
+          "生成中に、マップに入れた既存のノードかその「理解すること」が削除されたため、作ったマップは保存しませんでした。もう一度お試しください。",
       },
     };
   }
