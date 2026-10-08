@@ -1,10 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
-import {
-  MAP_GENERATION_CONSENT_VERSION,
-  type Concept,
-  type LearningObjective,
-} from "@gakushu-sochi/domain";
+import { MAP_GENERATION_CONSENT_VERSION, type Concept } from "@gakushu-sochi/domain";
 import type { AuthVariables } from "../auth/middleware.js";
 import { stubAuth } from "../auth/test-auth.js";
 import { AI_USAGE_LIMITS, utcDayKey, utcMonthKey } from "../contract/ai-usage.js";
@@ -26,6 +22,7 @@ import {
   InMemoryMapGenerationConsentRepository,
   InMemoryPersonalCheckRepository,
 } from "../repository/memory.js";
+import type { StoredLearningObjective } from "../repository/types.js";
 import { CREATION_CHECKS_LEASE_MS } from "../maps/creation-checks.js";
 import { createLearningMapsRoute } from "./learning-maps.js";
 import { InMemoryUserPlanRepository } from "../repository/user-plans.js";
@@ -62,8 +59,14 @@ const FIXED_CONCEPTS: Concept[] = [
     source: { kind: "manual" },
   },
 ];
-const FIXED_OBJECTIVES: LearningObjective[] = [
-  { id: "go.defer:execution_timing", conceptId: "go.defer", label: "実行タイミング" },
+/** 固定の項目は表（migrations/0017_fixed_objectives.sql）から読む。テストはストアへ入れる。 */
+const FIXED_OBJECTIVES: StoredLearningObjective[] = [
+  {
+    id: "go.defer:execution_timing",
+    conceptId: "go.defer",
+    label: "実行タイミング",
+    source: "manual",
+  },
 ];
 
 let maps: InMemoryLearningMapRepository;
@@ -132,6 +135,7 @@ function ownNodes(count: number, from = 1) {
 
 beforeEach(() => {
   const store = createInMemoryRepositoryStore();
+  store.fixedObjectives.splice(0, store.fixedObjectives.length, ...FIXED_OBJECTIVES);
   maps = new InMemoryLearningMapRepository(store);
   usage = new InMemoryAiUsageRepository();
   plans = new InMemoryUserPlanRepository();
@@ -171,7 +175,6 @@ beforeEach(() => {
       identity,
       maps,
       fixedConcepts: FIXED_CONCEPTS,
-      fixedObjectives: FIXED_OBJECTIVES,
       newKey: () => `k${String(++keys).padStart(7, "0")}`,
       nowIso: () => NOW.toISOString(),
       nowMs: () => NOW.getTime(),

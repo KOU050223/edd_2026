@@ -184,8 +184,9 @@ Concept を1つ足すたびに型ファイルが変更され、並行して動�
 | 「理解すること」を持つ（現時点では Go） | 下の「項目ごとの理解度」                      |
 | まだ持たない                            | 「status の判定」以降の回数による判定（従来） |
 
-一覧は AI で生成して保存する予定で（設計/05 #224）、それまでは
-`packages/domain/src/learning-objectives.mock.ts` のモックを使う。
+固定の Concept（言語別マップ）の一覧は D1 の `learning_objectives`（`map_id` が NULL の行）にあり、
+API はそこから読む（#245）。Go の分は `packages/domain/src/learning-objectives.mock.ts` の手で起こした項目を
+同じ ID で移した（`apps/api/migrations/0017_fixed_objectives.sql`）。Web と VS Code はまだそのモックを読んでいる。
 
 利用者が手で作った学習マップ（#242）のノードも Concept として扱う。API は導出のたびに、
 固定の一覧へその利用者のマップのノードと「理解すること」を足した一覧を使う

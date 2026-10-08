@@ -14,7 +14,6 @@ import {
   MAP_GENERATION_CONSENT_VERSION,
   type Concept,
   type ConsentRecord,
-  type LearningObjective,
 } from "@gakushu-sochi/domain";
 import type { AuthVariables } from "../auth/middleware.js";
 import { rateLimit } from "../auth/rate-limit.js";
@@ -52,8 +51,6 @@ export interface LearningMapsDeps {
   maps: LearningMapRepository;
   /** 参照のノードが指せる固定の Concept。テストだけが小さな一覧へ差し替える。 */
   fixedConcepts: readonly Concept[];
-  /** 固定の Concept の「理解すること」（今は packages/domain のモック）。 */
-  fixedObjectives: readonly LearningObjective[];
   /** 英小文字と数字 8 文字を返す。マップ・ノード・項目の ID に使う。 */
   newKey: () => string;
   nowIso: () => string;
@@ -116,6 +113,17 @@ function toObjectiveView(objective: StoredLearningObjective): LearningObjectiveV
   return { id: objective.id, label: objective.label, source: objective.source };
 }
 
+/** Concept ID ごとにまとめる。並びは入力の順を保つ。 */
+function groupObjectivesByConcept(
+  objectives: readonly StoredLearningObjective[],
+): Map<string, StoredLearningObjective[]> {
+  const grouped = new Map<string, StoredLearningObjective[]>();
+  for (const objective of objectives) {
+    grouped.set(objective.conceptId, [...(grouped.get(objective.conceptId) ?? []), objective]);
+  }
+  return grouped;
+}
+
 export function createLearningMapsRoute(resolve: LearningMapsDepsResolver) {
   const app = new Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>();
 
@@ -130,6 +138,10 @@ export function createLearningMapsRoute(resolve: LearningMapsDepsResolver) {
   ): Promise<Map<string, ReferencedConcept>> {
     const resolved = new Map<string, ReferencedConcept>();
     const fixed = new Map(deps.fixedConcepts.map((concept) => [concept.id, concept]));
+    // 固定の項目は表から読む（#245）。固定の Concept を指す参照が無ければ読まない。
+    const fixedObjectives = conceptIds.some((conceptId) => fixed.has(conceptId))
+      ? groupObjectivesByConcept(await deps.maps.listFixedObjectives())
+      : new Map<string, StoredLearningObjective[]>();
     const others: string[] = [];
     for (const conceptId of conceptIds) {
       const concept = fixed.get(conceptId);
@@ -141,10 +153,7 @@ export function createLearningMapsRoute(resolve: LearningMapsDepsResolver) {
         label: concept.label,
         ...(concept.summary === undefined ? {} : { summary: concept.summary }),
         mapId: null,
-        // 固定の項目は今は手で起こしたモックなので、出どころは manual として返す。
-        objectives: deps.fixedObjectives
-          .filter((objective) => objective.conceptId === conceptId)
-          .map((objective) => ({ id: objective.id, label: objective.label, source: "manual" })),
+        objectives: (fixedObjectives.get(conceptId) ?? []).map(toObjectiveView),
       });
     }
     for (const node of await deps.maps.findOwnNodes(userId, others)) {

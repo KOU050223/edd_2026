@@ -1,4 +1,3 @@
-import type { LearningObjective } from "@gakushu-sochi/domain";
 import type {
   AiUsageRepository,
   AuditLogRepository,
@@ -51,7 +50,5 @@ export interface ChecksDeps {
    * 生成の入力（表示名・概要・前提・次）と「理解すること」を、固定の一覧に無ければここから引く。
    */
   maps: LearningMapRepository;
-  /** 固定の Concept の「理解すること」の一覧。生成の口ができるまではモック（#224）。テストで差し替える。 */
-  objectives?: readonly LearningObjective[];
   now: () => Date;
 }

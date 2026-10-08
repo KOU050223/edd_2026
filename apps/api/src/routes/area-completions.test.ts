@@ -6,8 +6,10 @@ import { TEST_TOKEN, stubAuth } from "../auth/test-auth.js";
 import { InMemoryAreaCompletionRepository } from "../repository/area-completions.js";
 import { InMemoryMasteryOverrideRepository } from "../repository/mastery-overrides.js";
 import {
+  createInMemoryRepositoryStore,
   InMemoryIdentityRepository,
   InMemoryLearningEventRepository,
+  InMemoryLearningMapRepository,
 } from "../repository/memory.js";
 import { createAreaCompletionsRoute } from "./area-completions.js";
 
@@ -38,6 +40,7 @@ function buildApp(
   overrides = new InMemoryMasteryOverrideRepository(),
   events = new InMemoryLearningEventRepository(),
   identity = new InMemoryIdentityRepository(),
+  maps = new InMemoryLearningMapRepository(),
 ) {
   const app = new Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>();
   app.use("/v1/*", stubAuth("user-a"));
@@ -48,6 +51,7 @@ function buildApp(
       events,
       overrides,
       completions,
+      maps,
       definitions: DEFINITIONS,
       nowIso: () => "2026-09-26T00:00:00.000Z",
       nowMs: () => 1_000,
@@ -127,6 +131,34 @@ test("学習イベントだけでも達成を判定する（手動上書きは�
   const body = (await (await check()).json()) as { newlyCompleted: string[] };
 
   expect(body.newlyCompleted).toEqual(["go"]);
+});
+
+test("固定の項目は表から読み、項目を持つ Concept は項目の進みで判定する", async () => {
+  const store = createInMemoryRepositoryStore();
+  store.fixedObjectives.push({ id: "go.a:x", conceptId: "go.a", label: "x", source: "manual" });
+  const events = new InMemoryLearningEventRepository(store);
+  const { check } = buildApp(
+    undefined,
+    undefined,
+    events,
+    undefined,
+    new InMemoryLearningMapRepository(store),
+  );
+  // 項目を指さない自力解決は、項目を持つ go.a を進めない。go.b は回数で確認済みになる。
+  await events.append(
+    "user-a",
+    ["go.a", "go.b"].flatMap((conceptId, area) =>
+      [0, 1].map((n) => ({
+        event: solved(conceptId, `e${area}-${n}`),
+        clientId: "device-a",
+        receivedAtMs: 1,
+      })),
+    ),
+  );
+
+  const body = (await (await check()).json()) as { newlyCompleted: string[] };
+
+  expect(body.newlyCompleted).toEqual([]);
 });
 
 test("達成が無いときは users 行を作らない（書き込みを走らせない）", async () => {

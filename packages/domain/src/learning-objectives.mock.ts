@@ -6,7 +6,9 @@ import type { ConceptId } from "./profile.js";
  *
  * AI で生成する口ができるまでの仮置きで、各 Concept の `summary`
  * （`packages/domain/concepts.md`）を元に手で起こした。1 Concept あたり 4〜5 項目。
- * 生成の口ができたら、この一覧は生成結果に置き換えて消す。
+ *
+ * API は同じ ID で D1 へ移した表（`apps/api/migrations/0017_fixed_objectives.sql`）を読み、
+ * これを使わない（#245）。Web と VS Code が API から読むように変えたら消す。
  */
 const GO_OBJECTIVES: Record<ConceptId, readonly (readonly [key: string, label: string])[]> = {
   "go.variable_declaration": [
