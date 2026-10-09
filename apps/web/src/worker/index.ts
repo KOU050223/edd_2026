@@ -5,6 +5,7 @@ import { createAccessTokenProvider, type AccessTokenProvider } from "./access-to
 import { deleteConsent, readConsent, writeConsent } from "./consent.js";
 import {
   buildAuthorizationUrl,
+  buildLogoutUrl,
   createPkcePair,
   exchangeAuthorizationCode,
   OAuthTokenError,
@@ -77,6 +78,22 @@ function oauthConfig(env: WebBindings): OAuthConfig {
     clientSecret: configured(env.AUTH_CLIENT_SECRET, "AUTH_CLIENT_SECRET"),
     audience: configured(env.AUTH_AUDIENCE, "AUTH_AUDIENCE"),
   };
+}
+
+/**
+ * 応答を返したあとも `task` を走らせ続ける（`waitUntil`）。実行コンテキストが無い環境（テストの
+ * `app.request` の既定）では、今までどおり待ってから返す。
+ */
+async function afterResponse(c: Context<{ Bindings: WebBindings }>, task: Promise<void>) {
+  let context: { waitUntil: (promise: Promise<unknown>) => void };
+  try {
+    context = c.executionCtx;
+  } catch {
+    // Hono は実行コンテキストが無いと getter で投げる。待つ側へ倒す。
+    await task;
+    return;
+  }
+  context.waitUntil(task);
 }
 
 /**
@@ -296,6 +313,10 @@ export function createWebApp(
   /**
    * ログアウト。**先に KV のセッションを消し**、その後 IdP の RT を撤回する
    * （docs/auth.md §8）。利用者を守っているのは KV の削除であり、撤回の成否ではない。
+   *
+   * 最後に、画面が移る先として IdP のログアウトの URL を返す（#301）。IdP のセッションを
+   * 消さないと、次のログインで同じアカウントに黙って戻り、別のアカウントに切り替えられない。
+   * GET の 302 にしないのは、別のサイトのリンクや画像から勝手にログアウトさせないため。
    */
   app.post("/logout", async (c) => {
     const token = cookieValue(c.req.header("cookie"), "session");
@@ -308,19 +329,40 @@ export function createWebApp(
       await deleteSession(c.env.SESSIONS, token);
     }
     if (session) {
-      try {
-        await revokeRefreshToken(oauthConfig(c.env), session.refreshToken, deps.fetch);
-      } catch (error) {
-        // 撤回の失敗は握りつぶさずログへ残す。露出は AT の寿命（15分）に上限される。
-        console.error("refresh token revocation failed", {
-          sub: session.sub,
-          message: error instanceof Error ? error.message : String(error),
-        });
-      }
+      const revocation = (async () => {
+        try {
+          await revokeRefreshToken(oauthConfig(c.env), session.refreshToken, deps.fetch);
+        } catch (error) {
+          // 撤回の失敗は握りつぶさずログへ残す。露出は AT の寿命（15分）に上限される。
+          console.error("refresh token revocation failed", {
+            sub: session.sub,
+            message: error instanceof Error ? error.message : String(error),
+          });
+        }
+      })();
+      // 撤回は応答のあとに走らせる（PR #303 のレビュー）。待つと、撤回が遅いときに画面の締め切り
+      // （10 秒）が先に来て IdP のログアウトの URL を受け取れず、IdP のセッションが残る。
+      // 利用者を守るのは上の KV の削除なので、撤回を待たずに返してよい。
+      await afterResponse(c, revocation);
     }
-    return new Response(null, {
-      status: 204,
-      headers: { "set-cookie": expiredSessionCookie, "cache-control": "no-store" },
+    // IdP から戻る先はトップ。未ログインの導線が出る（#182・#301 の L2-a）。
+    const returnTo = new URL("/", c.req.url).toString();
+    let redirectTo = returnTo;
+    try {
+      redirectTo = buildLogoutUrl(oauthConfig(c.env), returnTo);
+    } catch (error) {
+      // 設定が読めなくても、KV の削除と Cookie の破棄は済んでいるのでログアウトは止めない。
+      console.error("idp logout url unavailable", {
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return new Response(JSON.stringify({ redirectTo }), {
+      status: 200,
+      headers: {
+        "content-type": "application/json",
+        "set-cookie": expiredSessionCookie,
+        "cache-control": "no-store",
+      },
     });
   });
 

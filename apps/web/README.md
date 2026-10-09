@@ -14,12 +14,12 @@ npm run build --workspace=@gakushu-sochi/web
 Auth0 の Authorization Code + PKCE で個人を識別する（`docs/auth.md` §5.3）。
 **Worker が認可コードを交換する confidential client** なので、`client_secret` を持つ。
 
-| パス        | 役割                                                                |
-| ----------- | ------------------------------------------------------------------- |
-| `/login`    | `state` と PKCE を作り、Auth0 の `/authorize` へ 302 で送る         |
-| `/callback` | `state` を確かめ、認可コードを交換し、セッション Cookie を張る      |
-| `/logout`   | KV のセッションを消し、その後 Auth0 の Refresh Token を撤回する     |
-| `/api/*`    | **そのセッションの利用者**のアクセストークンを載せて API へ中継する |
+| パス        | 役割                                                                           |
+| ----------- | ------------------------------------------------------------------------------ |
+| `/login`    | `state` と PKCE を作り、Auth0 の `/authorize` へ 302 で送る                    |
+| `/callback` | `state` を確かめ、認可コードを交換し、セッション Cookie を張る                 |
+| `/logout`   | KV のセッションを消し、Refresh Token を撤回し、Auth0 のログアウトの URL を返す |
+| `/api/*`    | **そのセッションの利用者**のアクセストークンを載せて API へ中継する            |
 
 KV に置くのは Refresh Token と `sub` だけで、**アクセストークンは Worker のメモリに
 だけ置く**（KV 書き込みは読み取りの 10 倍の単価）。
@@ -56,3 +56,10 @@ Worker 作成後に手動で `wrangler secret put` する必要はない。
 Preview 環境ではログインできない。** Allowed Callback URLs はホスト部にワイルドカードを
 使えないため、PR 番号ごとの URL を事前に登録できない。Preview で認証まで確かめたい場合は、
 その回の URL を Auth0 へ手で足す。
+
+ログアウト（#301）は Auth0 のセッションも消すため、Auth0 の `/v2/logout` を通って
+**トップ（`https://<host>/`）へ戻る**。この戻り先は Allowed Logout URLs への登録が要る。
+未登録だと Auth0 のエラー画面で止まる（学習装置のセッションは既に消えている）。
+
+- 本番: `https://gakushu-sochi-web.<サブドメイン>.workers.dev/`
+- ローカル: `http://localhost:8788/`
