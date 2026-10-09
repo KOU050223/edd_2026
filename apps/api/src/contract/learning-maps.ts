@@ -124,7 +124,13 @@ export const learningObjectivesInputSchema = v.strictObject({
 
 export type LearningObjectivesInput = v.InferOutput<typeof learningObjectivesInputSchema>;
 
-export type LearningMapVisibility = "private" | "shared";
+/**
+ * 共有の範囲（#244 の決定 T5）。`link` は「リンクを知っている人だけ」、`public` は「全員（一覧に出す）」。
+ * `private` は持ち主だけ。マップは最初は `private` で、版を上げて共有へ切り替える。
+ */
+export const SHARE_SCOPES = ["link", "public"] as const;
+export type ShareScope = (typeof SHARE_SCOPES)[number];
+export type LearningMapVisibility = "private" | ShareScope;
 export type LearningObjectiveSource = "manual" | "ai";
 
 /** 「理解すること」の1項目。 */
@@ -173,6 +179,8 @@ export interface LearningMapSummary {
   title: string;
   description: string;
   visibility: LearningMapVisibility;
+  /** 共有の側のいちばん新しい版の番号。まだ一度も上げていなければ `null`。 */
+  latestVersion: number | null;
   nodeCount: number;
   createdAt: string;
   updatedAt: string;
@@ -189,6 +197,11 @@ export type CreationChecksStatus = "pending" | "done" | "exhausted";
 
 /** `GET /v1/learning-maps/:id` の応答。ノードは保存した順（学習の順）に並ぶ。 */
 export interface LearningMapView extends Omit<LearningMapSummary, "nodeCount"> {
+  /**
+   * 範囲が「リンクだけ」のときの鍵（#244 の決定 U1）。持ち主だけが受け取り、
+   * `/maps/<マップ ID>?key=<鍵>` のリンクを組み立てる。ほかの範囲では `null`。
+   */
+  shareKey: string | null;
   nodes: LearningMapNodeView[];
   edges: LearningMapEdge[];
   /** AI で作るときに「確認問題も作る」を選んだマップだけが持つ（#247）。 */
@@ -306,4 +319,164 @@ export interface GenerateCreationChecksResponse {
   failedCount: number;
   /** 入力の上限や回数分のトークンに収まらず、頼まなかった組の数。 */
   skippedCount: number;
+}
+
+/**
+ * 共有の版の中身を表示する形（#244）。ノードは {@link LearningMapView} と同じ形で、
+ * 確認画面・履歴・持ち主以外の表示が同じ部品で描ける。
+ *
+ * 参照のノードの `origin.mapId` は、持ち主以外から元のマップが見えないので常に `null`。
+ * `checks` は共有に含めた作成時の確認問題（#247 の `origin = map_creation`）。
+ */
+export interface SharedMapContentView {
+  title: string;
+  description: string;
+  nodes: LearningMapNodeView[];
+  edges: LearningMapEdge[];
+  checks: PersonalConceptCheck[];
+}
+
+/** 差分で変わったところ。前提は1つのノードにつき1つまで（#242）なので1つで比べる。 */
+export type MapNodeChangeField = "kind" | "label" | "summary" | "prerequisite" | "objectives";
+
+export interface MapNodeChange {
+  conceptId: string;
+  fields: MapNodeChangeField[];
+  before: LearningMapNodeView;
+  after: LearningMapNodeView;
+  /** 前提のノードの Concept ID。無ければ `null`。 */
+  prerequisiteBefore: string | null;
+  prerequisiteAfter: string | null;
+}
+
+/**
+ * 2つの版（または手元のマップと版）の差分（#244）。確認画面と、取り込み直しの差分に使う。
+ * 並びは `after` のノードの順（消えたノードは `before` の順）。
+ */
+export interface LearningMapDiff {
+  title: { before: string; after: string } | null;
+  description: { before: string; after: string } | null;
+  added: LearningMapNodeView[];
+  removed: LearningMapNodeView[];
+  changed: MapNodeChange[];
+  /** 両方にあるノードの並び（学習の順）が変わったか。並びだけを変えても新しい版になる。 */
+  reordered: boolean;
+  /** 確認問題は Concept と狙いの組で比べ、中身が変わったものは消して足したものとして数える。 */
+  checks: { added: PersonalConceptCheck[]; removed: PersonalConceptCheck[] };
+}
+
+/** 版の変更の要約。履歴の一覧に出す。 */
+export interface MapVersionSummary {
+  added: number;
+  removed: number;
+  changed: number;
+  titleChanged: boolean;
+  reordered: boolean;
+  checksAdded: number;
+  checksRemoved: number;
+}
+
+/** 履歴の1件。 */
+export interface MapVersionMeta {
+  version: number;
+  createdAt: string;
+  /** 上げた人の ID。持ち主なら画面は「自分」と出す。 */
+  authorUserId: string;
+  /** 復元で作った版なら、元の版番号。 */
+  restoredFrom: number | null;
+  checksIncluded: boolean;
+  summary: MapVersionSummary;
+}
+
+/**
+ * `GET /v1/learning-maps/:id/versions:preview` の応答。共有へ上げる前の確認画面（#244 の S1-a）。
+ *
+ * `content` は上げると出ていく中身の全部、`diff` はいちばん新しい版との差分（まだ版が無ければ
+ * すべて「足した」）。`contentHash` を `POST .../versions` に添えると、確認したあとに手元が
+ * 変わっていたら上げずに 409 を返す。
+ */
+export interface MapPublishPreview {
+  visibility: LearningMapVisibility;
+  latest: MapVersionMeta | null;
+  includeChecks: boolean;
+  /** 共有に含められる作成時の確認問題の数（含めないを選んでも数える）。 */
+  availableChecks: number;
+  content: SharedMapContentView;
+  diff: LearningMapDiff;
+  /** いちばん新しい版と中身が同じなら `false`（上げても新しい版にならない）。 */
+  hasChanges: boolean;
+  contentHash: string;
+}
+
+/** `POST /v1/learning-maps/:id/versions` が受け取るもの。 */
+export const publishLearningMapSchema = v.strictObject({
+  visibility: v.picklist(SHARE_SCOPES),
+  includeChecks: v.boolean(),
+  /** 確認画面で見た、いちばん新しい版の番号。まだ版が無ければ `null`。 */
+  baseVersion: v.nullable(v.pipe(v.number(), v.integer(), v.minValue(1))),
+  /** 確認画面で見た中身の `contentHash`。 */
+  contentHash: v.pipe(v.string(), v.regex(/^[0-9a-f]{64}$/)),
+});
+
+/** `PUT /v1/learning-maps/:id/visibility` が受け取るもの。共有の範囲だけを変え、版は作らない。 */
+export const learningMapVisibilitySchema = v.strictObject({
+  visibility: v.picklist(["private", ...SHARE_SCOPES]),
+});
+
+/** `POST /v1/learning-maps/:id/versions/:version/restore` が受け取るもの。 */
+export const restoreLearningMapSchema = v.strictObject({
+  /** 履歴の画面で見た、いちばん新しい版の番号。 */
+  baseVersion: v.pipe(v.number(), v.integer(), v.minValue(1)),
+});
+
+/** `POST .../versions` と `.../restore` の応答。 */
+export interface PublishLearningMapResponse {
+  version: MapVersionMeta;
+  visibility: LearningMapVisibility;
+}
+
+/** `GET /v1/learning-maps/:id/versions` の応答。新しい版から。 */
+export interface ListMapVersionsResponse {
+  versions: MapVersionMeta[];
+}
+
+/** `GET /v1/learning-maps/:id/versions/:version` の応答。 */
+export interface MapVersionResponse {
+  version: MapVersionMeta;
+  content: SharedMapContentView;
+}
+
+/** 全員の一覧の1件（`GET /v1/shared-maps`）。題名・説明は共有の側のいちばん新しい版のもの。 */
+export interface SharedMapSummary {
+  id: string;
+  title: string;
+  description: string;
+  nodeCount: number;
+  version: number;
+  publishedAt: string;
+}
+
+/** `GET /v1/shared-maps` の応答。新しく上げた順。作成者の名前は出さない（T5）。 */
+export interface ListSharedMapsResponse {
+  maps: SharedMapSummary[];
+}
+
+/** 全員の一覧に出す件数。評価・検索はスコープ外（#244）なので、新しいものから絞る。 */
+export const MAX_LISTED_SHARED_MAPS = 50;
+
+/**
+ * `GET /v1/shared-maps/:id` の応答。共有の側のいちばん新しい版。
+ * 持ち主以外には、確認問題は数だけを返す（解くのは取り込んでから、#250）。
+ */
+export interface SharedMapView {
+  id: string;
+  visibility: ShareScope;
+  version: number;
+  publishedAt: string;
+  isOwner: boolean;
+  title: string;
+  description: string;
+  nodes: LearningMapNodeView[];
+  edges: LearningMapEdge[];
+  checkCount: number;
 }

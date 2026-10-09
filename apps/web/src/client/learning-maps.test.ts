@@ -22,6 +22,8 @@ const MAP: LearningMapView = {
   title: "Rust 入門",
   description: "",
   visibility: "private",
+  latestVersion: null,
+  shareKey: null,
   createdAt: "2026-10-01T00:00:00.000Z",
   updatedAt: "2026-10-01T00:00:00.000Z",
   nodes: [
