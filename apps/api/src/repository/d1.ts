@@ -2785,12 +2785,24 @@ export class D1LearningMapRepository implements LearningMapRepository {
     return results.map(toPersonalCheck);
   }
 
-  async getSharedVersion(mapId: string, version: number): Promise<StoredMapVersion | null> {
+  async getSharedVersion(
+    mapId: string,
+    version: number,
+    key: string | null,
+  ): Promise<StoredMapVersion | null> {
+    // 読めるか（範囲と鍵）を、版を読むのと同じ文で確かめる。先に確かめてから読むと、
+    // その間に共有をやめられても中身を返してしまう（PR #295 のレビュー）。
     const row = await this.db
       .prepare(
-        `SELECT ${MAP_VERSION_COLUMNS} FROM learning_map_versions WHERE map_id = ? AND version = ?`,
+        `SELECT ${MAP_VERSION_COLUMNS} FROM learning_map_versions
+         WHERE map_id = ? AND version = ?
+           AND EXISTS (
+             SELECT 1 FROM learning_maps s
+             WHERE s.id = ?
+               AND (s.share_scope = 'public' OR (s.share_scope = 'link' AND s.share_key = ?))
+           )`,
       )
-      .bind(mapId, version)
+      .bind(mapId, version, mapId, key)
       .first<MapVersionRow>();
     return row === null ? null : toStoredMapVersion(row);
   }
@@ -3109,7 +3121,7 @@ export class D1LearningMapRepository implements LearningMapRepository {
     const [edges, objectives] = await this.db.batch([
       this.db
         .prepare(
-          `SELECT e.from_concept_id, e.to_concept_id
+          `SELECT e.map_id, e.from_concept_id, e.to_concept_id
            FROM learning_map_edges e
            JOIN json_each(?) j
              ON e.map_id = json_extract(j.value, '$.mapId')
@@ -3121,7 +3133,7 @@ export class D1LearningMapRepository implements LearningMapRepository {
       // Concept ID・項目 ID を持つので、ID だけで引くと他人のマップの項目が混ざる。
       this.db
         .prepare(
-          `SELECT o.id, o.concept_id, o.label, o.source
+          `SELECT o.map_id, o.id, o.concept_id, o.label, o.source
            FROM learning_objectives o
            JOIN json_each(?) j
              ON o.map_id = json_extract(j.value, '$.mapId')
@@ -3130,24 +3142,27 @@ export class D1LearningMapRepository implements LearningMapRepository {
         )
         .bind(nodes),
     ]);
+    // 組み合わせるときも (map_id, concept_id) で突き合わせる。取り込んだマップは元と同じ
+    // Concept ID を持つので、ID だけで束ねると、別のマップの線・項目が混ざりうる（PR #295 のレビュー）。
+    const keyOf = (mapId: string, conceptId: string) => `${mapId}\n${conceptId}`;
     const prerequisites = new Map<string, string[]>();
-    for (const edge of rowsOf<LearningMapEdgeRow>(edges)) {
-      prerequisites.set(edge.to_concept_id, [
-        ...(prerequisites.get(edge.to_concept_id) ?? []),
-        edge.from_concept_id,
-      ]);
+    for (const edge of rowsOf<LearningMapEdgeRow & { map_id: string }>(edges)) {
+      const key = keyOf(edge.map_id, edge.to_concept_id);
+      prerequisites.set(key, [...(prerequisites.get(key) ?? []), edge.from_concept_id]);
     }
-    const objectivesById = groupByConcept(
-      rowsOf<LearningObjectiveRow>(objectives).map(toLearningObjective),
-    );
+    const objectivesByNode = new Map<string, StoredLearningObjective[]>();
+    for (const row of rowsOf<LearningObjectiveRow & { map_id: string }>(objectives)) {
+      const key = keyOf(row.map_id, row.concept_id);
+      objectivesByNode.set(key, [...(objectivesByNode.get(key) ?? []), toLearningObjective(row)]);
+    }
     return rows.map((row) => ({
       conceptId: row.concept_id,
       label: row.label,
       summary: row.summary,
       mapId: row.map_id,
       mapTitle: row.map_title,
-      prerequisites: prerequisites.get(row.concept_id) ?? [],
-      objectives: objectivesById.get(row.concept_id) ?? [],
+      prerequisites: prerequisites.get(keyOf(row.map_id, row.concept_id)) ?? [],
+      objectives: objectivesByNode.get(keyOf(row.map_id, row.concept_id)) ?? [],
     }));
   }
 }

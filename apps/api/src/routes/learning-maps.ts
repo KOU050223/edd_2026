@@ -88,6 +88,7 @@ import type {
   StoredLearningMap,
   StoredLearningObjective,
   StoredMapContent,
+  StoredMapSource,
   StoredMapVersion,
 } from "../repository/types.js";
 
@@ -942,13 +943,13 @@ export function createLearningMapsRoute(resolve: LearningMapsDepsResolver) {
   }
 
   /**
-   * 取り込み元の版を読む（#244 の T4）。今読めないか（`latest` が `null`）、版が無ければ 409。
-   * 個人マップは取り込み元の持ち主ではないので、範囲と鍵は repository が `latest` で判定済み。
+   * 取り込み元の版を読む（#244 の T4）。今読めない（共有をやめた・鍵を作り直した）か、版が無ければ 409。
+   * 範囲と鍵は、読むのと同じ文で repository が確かめる（PR #295 のレビュー）。
    */
-  async function sourceSnapshot(deps: LearningMapsDeps, mapId: string, version: number) {
-    const stored = await deps.maps.getSharedVersion(mapId, version);
+  async function sourceSnapshot(deps: LearningMapsDeps, source: StoredMapSource, version: number) {
+    const stored = await deps.maps.getSharedVersion(source.mapId, version, source.key);
     if (stored === null) conflict("source_unavailable");
-    return snapshotOf(mapId, stored);
+    return snapshotOf(source.mapId, stored);
   }
 
   /** 自分の別のマップにすでにある、自分のノードの Concept ID（取り込むと同じ ID が2つになる）。 */
@@ -1025,10 +1026,14 @@ export function createLearningMapsRoute(resolve: LearningMapsDepsResolver) {
     if (source === null) throw new HTTPException(404, { message: "not an imported map" });
     if (source.latest === null) conflict("source_unavailable");
 
-    const latest = await sourceSnapshot(deps, source.mapId, source.latest.version);
+    const latest = await sourceSnapshot(deps, source, source.latest.version);
     const next = importSnapshot(latest);
     // 取り込んだ版と比べて、個人マップで直したノードを見分ける。取り込んだ版は元のマップがある限り残る。
-    const importedVersion = await deps.maps.getSharedVersion(source.mapId, source.version);
+    const importedVersion = await deps.maps.getSharedVersion(
+      source.mapId,
+      source.version,
+      source.key,
+    );
     const old =
       importedVersion === null ? null : importSnapshot(snapshotOf(source.mapId, importedVersion));
     const [before, after, imported] = await Promise.all([
@@ -1076,7 +1081,7 @@ export function createLearningMapsRoute(resolve: LearningMapsDepsResolver) {
     // 差分を見たあとに、別の画面で手元を直した（または取り込み直した）。
     if (map.revision !== input.revision) conflict("content_changed");
 
-    const latest = await sourceSnapshot(deps, source.mapId, input.version);
+    const latest = await sourceSnapshot(deps, source, input.version);
     const plan = planReimport(map, source, latest, new Set(input.keep));
     if (plan.content.nodes.length > MAX_NODES_PER_MAP) conflict("too_many_nodes");
     if ((await conflictingConcepts(deps, userId, plan.content, mapId)).length > 0) {

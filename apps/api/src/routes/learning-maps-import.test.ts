@@ -481,6 +481,12 @@ describe("取り込み直し（T4）", () => {
     );
     const mine = await json<LearningMapView>(await send("GET", `/learning-maps/${map.id}`, B));
     expect(mine.source).toMatchObject({ version: 1, latestVersion: null });
+    // 版を読むときも、今読めるかを同じ操作で確かめる（間に共有をやめられても中身を返さない）。
+    expect(await maps.getSharedVersion(linked.id, 1, linked.shareKey)).toBeNull();
+    const relinked = await json<LearningMapView>(
+      await send("GET", `/learning-maps/${linked.id}`, A),
+    );
+    expect(await maps.getSharedVersion(linked.id, 1, relinked.shareKey)).not.toBeNull();
     await expectConflict(
       await send("GET", `/learning-maps/${map.id}/reimport:preview`, B),
       "source_unavailable",

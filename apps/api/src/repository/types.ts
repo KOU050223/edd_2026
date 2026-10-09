@@ -920,10 +920,15 @@ export interface LearningMapRepository {
   listImportedChecks(ownerUserId: string, mapId: string): Promise<PersonalConceptCheck[]>;
 
   /**
-   * 共有マップの版1つを、持ち主に限らず読む。読んでよいか（範囲・鍵）は呼び出し側が確かめる。
-   * 取り込み直しで、取り込んだ版と今の個人マップを比べるのに使う。
+   * 共有マップの版1つを、持ち主に限らず読む（取り込み直し、#244 の T4）。今も読めるとき
+   * （全員に共有されているか、`key` が「リンクだけ」の鍵と合う）だけ返し、読めなければ `null`。
+   * 判定と読み出しは同じ文で行う（間に共有をやめられても中身を返さない）。
    */
-  getSharedVersion(mapId: string, version: number): Promise<StoredMapVersion | null>;
+  getSharedVersion(
+    mapId: string,
+    version: number,
+    key: string | null,
+  ): Promise<StoredMapVersion | null>;
 
   /** 持ち主に限らずマップを読む（共有の側の表示、#244）。マップが無ければ `null`。 */
   getShared(mapId: string): Promise<StoredSharedMap | null>;

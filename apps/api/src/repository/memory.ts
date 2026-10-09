@@ -1157,10 +1157,19 @@ export class InMemoryLearningMapRepository implements LearningMapRepository {
     );
   }
 
-  getSharedVersion(mapId: string, version: number): Promise<StoredMapVersion | null> {
-    const found = this.store.learningMaps
-      .get(mapId)
-      ?.versions.find((candidate) => candidate.version === version);
+  getSharedVersion(
+    mapId: string,
+    version: number,
+    key: string | null,
+  ): Promise<StoredMapVersion | null> {
+    const map = this.store.learningMaps.get(mapId);
+    // 今読めるときだけ返す（D1 と同じ判定）。
+    const readable =
+      map !== undefined &&
+      (map.visibility === "public" || (map.visibility === "link" && map.shareKey === key));
+    const found = readable
+      ? map.versions.find((candidate) => candidate.version === version)
+      : undefined;
     return Promise.resolve(found === undefined ? null : toStoredVersion(found));
   }
 
