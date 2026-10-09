@@ -495,7 +495,22 @@ export interface SharedMapView {
   nodes: LearningMapNodeView[];
   edges: LearningMapEdge[];
   checkCount: number;
+  /**
+   * フォーク（#246）なら、もとにしたマップ（決定 V3-a）。`mapId` は元が全員に共有されているときだけ
+   * 持つ（リンクを付ける）。「リンクだけ」の元は題名だけ（元の鍵を出さない）。
+   */
+  forkedFrom?: { title: string; mapId: string | null };
 }
+
+/**
+ * `POST /v1/learning-maps/:id/fork-checks:generate` が受け取るもの（#246 の V4-a）。
+ * 取り込んだマップで、まだ公開の確認問題が無いノードの問題を作る。同意はマップを AI で作るときの同意。
+ */
+export const generateForkChecksSchema = v.strictObject({
+  level: v.picklist(CHECK_LEVELS),
+  /** その場で同意した文面の版。「今後表示しない」の記録があれば省略できる。 */
+  consentVersion: v.optional(v.pipe(v.number(), v.integer())),
+});
 
 /** `POST /v1/shared-maps/:id/import` が受け取るもの。「リンクだけ」のマップはリンクの鍵が要る（U1）。 */
 export const importSharedMapSchema = v.strictObject({

@@ -28,6 +28,7 @@ import {
   MAX_OWN_NODES,
   MAX_MAPS_PER_USER,
   MAX_NODES_PER_MAP,
+  generateForkChecksSchema,
   generateLearningMapSchema,
   importSharedMapSchema,
   learningMapContentSchema,
@@ -63,7 +64,12 @@ import {
 } from "../contract/learning-maps.js";
 import { newMapId, resolveMapContent } from "../maps/content.js";
 import { generateLearningMap, type MapGenerationDeps } from "../maps/generate.js";
-import { generateCreationChecks, MAX_CREATION_CHECK_ATTEMPTS } from "../maps/creation-checks.js";
+import {
+  generateCreationChecks,
+  inheritedChecks,
+  MAX_CREATION_CHECK_ATTEMPTS,
+} from "../maps/creation-checks.js";
+import { checkConsent } from "../maps/generate.js";
 import {
   importSnapshot,
   planReimport,
@@ -192,12 +198,9 @@ function sameKey(given: string | undefined, expected: string | null): boolean {
   return diff === 0;
 }
 
-/**
- * 取り込んだマップ（個人マップ）は、まだ共有へ上げられない。作成者以外の公開（フォーク）は #246 で、
- * 取り込み元を記録して別の共有マップとして公開する形で作る。
- */
-function rejectImported(map: StoredLearningMap): void {
-  if (map.source !== null) conflict("imported_map");
+/** 確認問題の Concept と狙いの組。 */
+function checkKeyOf(check: { conceptId: string; objectiveId?: string }): string {
+  return `${check.conceptId}\n${check.objectiveId ?? "concept"}`;
 }
 
 function toVersionMeta(version: StoredMapVersion): MapVersionMeta {
@@ -318,15 +321,23 @@ export function createLearningMapsRoute(resolve: LearningMapsDepsResolver) {
     map: StoredLearningMap,
     includeChecks: boolean,
   ): Promise<{ snapshot: MapSnapshot; availableChecks: number }> {
-    const [references, creationChecks] = await Promise.all([
+    const [references, creationChecks, imported] = await Promise.all([
       resolveReferences(
         deps,
         userId,
         map.nodes.filter((node) => node.kind === "reference").map((node) => node.conceptId),
       ),
       deps.checks.listMapCreationChecks(userId),
+      map.source === null ? [] : deps.maps.listImportedChecks(userId, map.id),
     ]);
-    const withChecks = buildSnapshot(map, references, creationChecks);
+    // フォーク（#246 の V4-a）は、元の公開の問題（今もマップにあるもの）を引き継ぎ、
+    // 自分で作った作成時の問題は、引き継いだ問題の無い狙いだけに足す。
+    const inherited = inheritedChecks(map, imported);
+    const inheritedKeys = new Set(inherited.map((check) => checkKeyOf(check)));
+    const withChecks = buildSnapshot(map, references, [
+      ...inherited,
+      ...creationChecks.filter((check) => !inheritedKeys.has(checkKeyOf(check))),
+    ]);
     return {
       snapshot: includeChecks ? withChecks : { ...withChecks, checks: [] },
       availableChecks: withChecks.checks.length,
@@ -468,6 +479,41 @@ export function createLearningMapsRoute(resolve: LearningMapsDepsResolver) {
     "/map-generation-consent",
     rateLimit((env) => env.PROFILE_RATE_LIMITER),
   );
+
+  // フォークの公開の確認問題（#246 の V4-a）。取り込んだマップで、まだ公開の問題が無いノードの手前から
+  // 最大 10 組を作る。作り方は作成時の確認問題（#247）と同じで、回数は追加 5 回。同意はマップの生成の同意。
+  app.post("/learning-maps/:id/fork-checks:generate", async (c) => {
+    const userId = c.get("user").userId;
+    const mapId = c.req.param("id");
+    const input = await parseBody(c, generateForkChecksSchema);
+    const deps = resolve(c.env);
+    const generation = deps.generation ?? generationNotConfigured();
+    const map = await deps.maps.get(userId, mapId);
+    if (map === null) notFound();
+    if (map.source === null) throw new HTTPException(404, { message: "not an imported map" });
+    const consent = await checkConsent(generation, userId, input.consentVersion);
+    if (!consent.ok) {
+      const refused = consent.outcome;
+      // 同意の確認で返るのは 403 だけ（成功の形は返らない）。
+      if (refused.status === 201) throw new Error("consent check returned a success outcome");
+      return c.json(refused.body, refused.status);
+    }
+    // まだなら技術レベルを入れて作れるようにする。すでに入っていれば（1回目が失敗した）そのまま頼み直す。
+    if (map.creationChecks === null) {
+      await deps.maps.enableCreationChecks(userId, mapId, input.level);
+    }
+    const outcome = await generateCreationChecks(
+      { ...deps, generation },
+      userId,
+      mapId,
+      c.req.path,
+    );
+    if (outcome.status === 200) {
+      const body: GenerateCreationChecksResponse = outcome.body;
+      return c.json(body, 200, { "cache-control": "no-store" });
+    }
+    return c.json(outcome.body, outcome.status);
+  });
 
   // 作成時の確認問題（#247）。AI で作ったマップを保存したあと、Web が続けて呼ぶ。
   app.post("/learning-maps/:id/checks:generate", async (c) => {
@@ -714,7 +760,6 @@ export function createLearningMapsRoute(resolve: LearningMapsDepsResolver) {
     const input = await parseBody(c, publishLearningMapSchema);
     const deps = resolve(c.env);
     const { map, latest } = await ownedWithLatest(deps, userId, mapId);
-    rejectImported(map);
     // 確認画面を開いたあとに、別の端末で上げられた。
     if (map.latestVersion !== input.baseVersion) conflict("version_conflict");
     const { snapshot } = await draftOf(deps, userId, map, input.includeChecks);
@@ -771,7 +816,6 @@ export function createLearningMapsRoute(resolve: LearningMapsDepsResolver) {
     const map = await deps.maps.get(userId, mapId);
     if (map === null) notFound();
     const scope = visibility === "private" ? null : visibility;
-    rejectImported(map);
     if (scope !== null && map.latestVersion === null) conflict("not_published");
     // 読んでから書くまでの間に、別の端末でマップが消された。
     if (!(await deps.maps.setShareScope(userId, mapId, scope, shareKeyFor(deps, map, scope)))) {
@@ -877,7 +921,10 @@ export function createLearningMapsRoute(resolve: LearningMapsDepsResolver) {
       notFound();
     }
     const snapshot = snapshotOf(mapId, shared.latest);
-    const content = await contentViewOf(deps, snapshot);
+    const [content, origin] = await Promise.all([
+      contentViewOf(deps, snapshot),
+      snapshot.forkedFrom === undefined ? null : deps.maps.getShared(snapshot.forkedFrom.mapId),
+    ]);
     const body: SharedMapView = {
       id: shared.id,
       visibility: shared.visibility,
@@ -889,6 +936,15 @@ export function createLearningMapsRoute(resolve: LearningMapsDepsResolver) {
       nodes: content.nodes,
       edges: content.edges,
       checkCount: content.checks.length,
+      // もとにしたマップ（#246 の V3-a）。元が全員に共有されているときだけリンクを付ける。
+      ...(snapshot.forkedFrom === undefined
+        ? {}
+        : {
+            forkedFrom: {
+              title: snapshot.forkedFrom.title,
+              mapId: origin?.visibility === "public" ? snapshot.forkedFrom.mapId : null,
+            },
+          }),
     };
     return c.json(body, 200, { "cache-control": "no-store" });
   });

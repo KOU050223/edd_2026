@@ -776,6 +776,13 @@ export interface LearningMapRepository {
     params: { refundAttempt: boolean },
   ): Promise<void>;
 
+  /**
+   * 取り込んだマップ（フォークして公開するマップ、#246 の V4-a）で、作成時の確認問題を作れるようにする。
+   * まだ作れるようになっていない（技術レベルが無い）取り込んだマップのときだけ、`level` を入れる。
+   * @returns 入れたら `true`。自分の取り込んだマップでないか、すでに入っていれば `false`。
+   */
+  enableCreationChecks(ownerUserId: string, mapId: string, level: CheckLevel): Promise<boolean>;
+
   /** 作成時の確認問題を作成済みにし、作っている最中の印を外す。@returns 自分のマップが無ければ `false`。 */
   completeCreationChecks(ownerUserId: string, mapId: string, nowIso: string): Promise<boolean>;
 

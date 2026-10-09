@@ -18,6 +18,7 @@ import type {
   ReimportLearningMapResponse,
   ReimportPreview,
   SaveLearningMapResponse,
+  SharedMapView,
 } from "../contract/learning-maps.js";
 import {
   createInMemoryRepositoryStore,
@@ -287,21 +288,115 @@ describe("取り込み（T3）", () => {
       "concept_conflict",
     );
   });
+});
 
-  test("取り込んだマップはまだ共有へ上げられない（フォークは #246）", async () => {
-    const source = await publish((await createSource()).id);
-    const { map } = await importMap(source.id);
+describe("フォークの公開（#246）", () => {
+  /** 取り込んだ人として、確認画面を通して上げる。 */
+  async function publishAs(token: string, mapId: string, visibility: "link" | "public" = "public") {
     const shown = await json<MapPublishPreview>(
-      await send("GET", `/learning-maps/${map.id}/versions:preview`, B),
+      await send("GET", `/learning-maps/${mapId}/versions:preview`, token),
     );
-    await expectConflict(
-      await send("POST", `/learning-maps/${map.id}/versions`, B, {
-        visibility: "public",
-        includeChecks: false,
-        baseVersion: null,
+    await json(
+      await send("POST", `/learning-maps/${mapId}/versions`, token, {
+        visibility,
+        includeChecks: shown.includeChecks,
+        baseVersion: shown.latest?.version ?? null,
         contentHash: shown.contentHash,
       }),
-      "imported_map",
+      201,
+    );
+    return shown;
+  }
+
+  test("取り込んで直したマップを別の共有マップとして公開でき、元のマップは変わらない（V1）", async () => {
+    const source = await publish((await createSource()).id);
+    const { map } = await importMap(source.id);
+    await save(map, B, (input) => {
+      input.title = "Rust 入門（改）";
+      input.nodes[0]!.label = "自分の言葉";
+    });
+    await publishAs(B, map.id);
+
+    const fork = await json<SharedMapView>(await send("GET", `/shared-maps/${map.id}`, A));
+    expect(fork).toMatchObject({ title: "Rust 入門（改）", isOwner: false, version: 1 });
+    expect(fork.nodes[0]).toMatchObject({ label: "自分の言葉" });
+    // もとにしたマップ（V3-a）。元が全員に共有されているのでリンクを付ける。
+    expect(fork.forkedFrom).toEqual({ title: "Rust 入門", mapId: source.id });
+
+    const original = await json<SharedMapView>(await send("GET", `/shared-maps/${source.id}`, B));
+    expect(original.nodes[0]).toMatchObject({ label: "変数" });
+    expect(original.version).toBe(1);
+    expect(original.forkedFrom).toBeUndefined();
+  });
+
+  test("元が「リンクだけ」なら、もとにしたマップは題名だけを出す（V3-a）", async () => {
+    const linked = await publish((await createSource()).id, "link");
+    const { map } = await importMap(linked.id, { key: linked.shareKey });
+    await publishAs(B, map.id);
+    const fork = await json<SharedMapView>(await send("GET", `/shared-maps/${map.id}`, A));
+    expect(fork.forkedFrom).toEqual({ title: "Rust 入門", mapId: null });
+  });
+
+  test("公開したあとも元とのつながりは残り、取り込み直して上げるとフォークの新しい版になる（V2）", async () => {
+    let source = await publish((await createSource()).id);
+    const { map } = await importMap(source.id);
+    await publishAs(B, map.id);
+    source = (await save(source, A, (input) => (input.nodes[0]!.label = "変数と束縛"))).map;
+    nowMs += 1_000;
+    await publish(source.id);
+
+    const mine = await json<LearningMapView>(await send("GET", `/learning-maps/${map.id}`, B));
+    expect(mine.source).toMatchObject({ version: 1, latestVersion: 2 });
+    const preview = await json<ReimportPreview>(
+      await send("GET", `/learning-maps/${map.id}/reimport:preview`, B),
+    );
+    await json(
+      await send("POST", `/learning-maps/${map.id}/reimport`, B, {
+        version: 2,
+        revision: preview.revision,
+        keep: [],
+      }),
+    );
+    const shown = await publishAs(B, map.id);
+    expect(shown.latest?.version).toBe(1);
+    const fork = await json<SharedMapView>(await send("GET", `/shared-maps/${map.id}`, A));
+    expect(fork.version).toBe(2);
+    expect(fork.nodes[0]).toMatchObject({ label: "変数と束縛" });
+  });
+
+  test("元の公開の問題を、今もマップにあるものだけ引き継ぐ（V4-a）", async () => {
+    const source = await createSource();
+    const [first, second] = source.nodes;
+    if (first?.kind !== "own" || second?.kind !== "own") throw new Error("own nodes expected");
+    await checks.put("user-a", personalCheck(first.conceptId), 0, {
+      mapId: source.id,
+      origin: "map_creation",
+    });
+    await checks.put("user-a", personalCheck(second.conceptId, second.objectives[0]!.id), 0, {
+      mapId: source.id,
+      origin: "map_creation",
+    });
+    await publish(source.id);
+    const { map } = await importMap(source.id);
+    // 取り込んだ人が2つ目のノードの項目を消した。その項目を狙った問題は引き継がない。
+    await send("PUT", `/learning-maps/${map.id}/nodes/${second.conceptId}/objectives`, B, {
+      objectives: [{ label: "自分の項目" }],
+    });
+    const shown = await publishAs(B, map.id);
+    expect(shown.availableChecks).toBe(1);
+    expect(shown.content.checks.map((check) => check.conceptId)).toEqual([first.conceptId]);
+    const fork = await json<SharedMapView>(await send("GET", `/shared-maps/${map.id}`, A));
+    expect(fork.checkCount).toBe(1);
+  });
+
+  test("元とフォークの両方は取り込めない（V5）", async () => {
+    const source = await publish((await createSource()).id);
+    const { map } = await importMap(source.id);
+    await publishAs(B, map.id);
+    // 元の作成者がフォークを取り込もうとすると、自分の元のマップと同じ ID のノードがある。
+    await expectConflict(
+      await send("POST", `/shared-maps/${map.id}/import`, A, {}),
+      "concept_conflict",
     );
   });
 });

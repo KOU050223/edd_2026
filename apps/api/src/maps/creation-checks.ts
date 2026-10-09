@@ -29,6 +29,7 @@ import {
 } from "../checks/prompt.js";
 import { parseCreationChecks, readGeneratedText } from "../checks/response.js";
 import { requestCheckGeneration, UPSTREAM_RETRY_DELAYS_MS } from "../checks/upstream.js";
+import type { StoredLearningMap } from "../repository/types.js";
 import { loadUserConceptCatalog } from "./catalog.js";
 import {
   MAP_GENERATION_TOKEN_BUDGET,
@@ -94,13 +95,20 @@ export async function generateCreationChecks(
   const { apiKey, models } = configured.value;
 
   // 狙う項目: 学習の順で手前のノード（参照は除く）から、各ノードの1項目目。
-  const catalog = await loadUserConceptCatalog(deps.maps, userId, {
-    concepts: deps.fixedConcepts,
-  });
+  // 取り込んだマップ（フォーク、#246 の V4-a）は、元の公開の問題を引き継ぐノードを飛ばす
+  // （まだ公開の問題が無いノードだけに作る）。
+  const [catalog, inherited] = await Promise.all([
+    loadUserConceptCatalog(deps.maps, userId, { concepts: deps.fixedConcepts }),
+    map.source === null
+      ? Promise.resolve(new Set<string>())
+      : deps.maps
+          .listImportedChecks(userId, mapId)
+          .then((checks) => new Set(inheritedChecks(map, checks).map((check) => check.conceptId))),
+  ]);
   const targets: CreationCheckTarget[] = [];
   for (const node of map.nodes) {
     if (targets.length >= MAX_CREATION_CHECKS) break;
-    if (node.kind !== "own") continue;
+    if (node.kind !== "own" || inherited.has(node.conceptId)) continue;
     const objective = map.objectives.get(node.conceptId)?.[0];
     if (objective === undefined) continue;
     const resolved = checkPromptInputFor(node.conceptId, catalog.concepts);
@@ -119,7 +127,10 @@ export async function generateCreationChecks(
       status: 400,
       body: {
         error: "no creation check targets",
-        message: "「理解すること」のあるノードが無いため、確認問題を作れません。",
+        message:
+          inherited.size > 0
+            ? "公開の確認問題が無いノードのうち、「理解すること」のあるノードがありません。"
+            : "「理解すること」のあるノードが無いため、確認問題を作れません。",
       },
     };
   }
@@ -359,6 +370,27 @@ async function settleAfterThrow(
   } catch (cause) {
     console.error("creation checks could not be settled after a failure", { mapId, cause });
   }
+}
+
+/**
+ * 取り込んだ版の公開の問題のうち、今もこのマップにあるもの（#246 の V4-a で引き継ぐ）。
+ * ノードが自分のノードとして残っていて、項目を狙った組ならその項目も残っているものだけ。
+ */
+export function inheritedChecks(
+  map: StoredLearningMap,
+  checks: readonly PersonalConceptCheck[],
+): PersonalConceptCheck[] {
+  const own = new Set(
+    map.nodes.filter((node) => node.kind === "own").map((node) => node.conceptId),
+  );
+  return checks.filter(
+    (check) =>
+      own.has(check.conceptId) &&
+      (check.objectiveId === undefined ||
+        (map.objectives.get(check.conceptId) ?? []).some(
+          (objective) => objective.id === check.objectiveId,
+        )),
+  );
 }
 
 /** 作成時の問題を頼む1回分。 */

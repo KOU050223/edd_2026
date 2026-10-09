@@ -537,8 +537,11 @@ function rejected(
   return { status: 502, body: failureBody(result.reason) };
 }
 
-/** 送る前に同意を確かめる。その場の同意か、「今後表示しない」の記録のどちらか。 */
-async function checkConsent(
+/**
+ * 送る前に同意を確かめる。その場の同意か、「今後表示しない」の記録のどちらか。
+ * フォークの公開の確認問題（#246 の V4-a）も、この同意を使う。
+ */
+export async function checkConsent(
   generation: MapGenerationDeps,
   userId: string,
   consentVersion: number | undefined,

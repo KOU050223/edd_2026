@@ -116,6 +116,8 @@ export interface SharedMapView {
   nodes: LearningMapNodeView[];
   edges: { from: string; to: string }[];
   checkCount: number;
+  /** フォークなら、もとにしたマップ（#246 の V3-a）。`mapId` は元が全員に共有されているときだけ。 */
+  forkedFrom?: { title: string; mapId: string | null };
 }
 
 /**
@@ -155,8 +157,6 @@ export function shareConflictText(error: ShareConflictError): string {
       return "自分のマップが上限に達しています。使っていないマップを消してから取り込んでください。";
     case "concept_conflict":
       return "同じノードを持つマップをすでに取り込んでいるので、取り込めません。";
-    case "imported_map":
-      return "取り込んだマップはまだ共有へ上げられません。";
     case "source_unavailable":
       return "取り込み元のマップが読めなくなりました（削除・共有の停止・リンクの変更）。今の個人マップはそのまま使えます。";
     case "too_many_nodes":

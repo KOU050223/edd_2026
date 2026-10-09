@@ -7,6 +7,7 @@ import {
   creationChecksSummary,
   CreationChecksError,
   generateCreationChecks,
+  generateForkChecks,
   generateLearningMap,
   generationCost,
   MAP_GENERATE_PATH,
@@ -171,6 +172,34 @@ describe("generateCreationChecks", () => {
 
     expect(error).toBeInstanceOf(CreationChecksError);
     expect((error as CreationChecksError).retryable).toBe(true);
+  });
+});
+
+describe("generateForkChecks", () => {
+  it("フォークの口へ技術レベルと同意の版を送る", async () => {
+    const result = { checks: [], failedCount: 0, skippedCount: 0 };
+    const fetcher = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+      expect(url).toBe("/api/v1/learning-maps/mabcdefgh/fork-checks:generate");
+      expect(JSON.parse(String(init?.body))).toEqual({ level: "intro", consentVersion: 2 });
+      return Response.json(result);
+    });
+
+    await expect(
+      generateForkChecks("mabcdefgh", { level: "intro", consentVersion: 2 }, fetcher),
+    ).resolves.toEqual(result);
+  });
+
+  it("同意が無ければ、文面の版を持つ例外にする", async () => {
+    const fetcher = vi.fn(async () =>
+      Response.json({ error: "map generation consent required", version: 2 }, { status: 403 }),
+    );
+
+    const error = await generateForkChecks("mabcdefgh", { level: "basic" }, fetcher).catch(
+      (value: unknown) => value,
+    );
+
+    expect(error).toBeInstanceOf(MapConsentRequiredError);
+    expect((error as MapConsentRequiredError).version).toBe(2);
   });
 });
 

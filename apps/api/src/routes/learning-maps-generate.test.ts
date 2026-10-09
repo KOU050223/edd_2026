@@ -735,3 +735,90 @@ describe("POST /v1/learning-maps/:id/checks:generate（#247）", () => {
     expect(await checks.listMapCreationChecks("user-a")).toEqual([]);
   });
 });
+
+describe("POST /v1/learning-maps/:id/fork-checks:generate（#246 の V4-a）", () => {
+  /**
+   * 取り込んだマップ（4 ノード、各ノードに項目 2 つ）を直接入れる。1 つ目のノードには
+   * 元の公開の問題が1組ある。
+   */
+  async function importedMap() {
+    const nodeIds = [1, 2, 3, 4].map((n) => `msrc00001.node000${String(n)}`);
+    const created = await maps.createImported("user-a", {
+      id: "mper00001",
+      content: {
+        title: "取り込んだマップ",
+        description: "",
+        nodes: nodeIds.map((conceptId, index) => ({
+          kind: "own" as const,
+          conceptId,
+          label: `ノード${String(index + 1)}`,
+          summary: "概要。",
+        })),
+        edges: [],
+      },
+      objectives: nodeIds.flatMap((conceptId) => [
+        { id: `${conceptId}:a`, conceptId, label: "項目a", source: "ai" as const },
+        { id: `${conceptId}:b`, conceptId, label: "項目b", source: "ai" as const },
+      ]),
+      source: { mapId: "msrc00001", version: 1, key: null, title: "元", nodeIds },
+      checks: [
+        {
+          ...generatedCheck(nodeIds[0]!),
+          scope: "objective",
+          objectiveId: `${nodeIds[0]!}:a`,
+          level: "basic",
+          model: "test-model",
+          generatedAt: NOW.toISOString(),
+        },
+      ],
+      nowIso: NOW.toISOString(),
+      nowMs: NOW.getTime(),
+      maxMaps: MAX_MAPS_PER_USER,
+    });
+    expect(created).toBe(true);
+    return nodeIds;
+  }
+
+  it("同意が無ければ作らず、同意したら公開の問題が無いノードだけに作る", async () => {
+    const nodeIds = await importedMap();
+    const refused = await send("POST", "/learning-maps/mper00001/fork-checks:generate", {
+      level: "intro",
+    });
+    expect(refused.status).toBe(403);
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    const res = await send("POST", "/learning-maps/mper00001/fork-checks:generate", {
+      level: "intro",
+      consentVersion: MAP_GENERATION_CONSENT_VERSION,
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as GenerateCreationChecksResponse;
+    expect(body.checks.map((check) => check.conceptId)).toEqual(nodeIds.slice(1));
+    expect(body.checks.every((check) => check.level === "intro")).toBe(true);
+    // 3 組を 1 回 2 組で頼む。回数は固定 5 回（#247 と同じ）。
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(await usedRequests()).toBe(MAP_GENERATION_USAGE_COST);
+    expect(await checks.listMapCreationChecks("user-a")).toHaveLength(3);
+    // 作成済みなら、もう頼めない。
+    const again = await send("POST", "/learning-maps/mper00001/fork-checks:generate", {
+      level: "intro",
+      consentVersion: MAP_GENERATION_CONSENT_VERSION,
+    });
+    expect(again.status).toBe(409);
+  });
+
+  it("取り込んだマップでなければ作らない", async () => {
+    await maps.create("user-a", {
+      id: "mown00001",
+      content: { title: "自分の", description: "", nodes: [], edges: [] },
+      nowIso: NOW.toISOString(),
+      nowMs: NOW.getTime(),
+      maxMaps: MAX_MAPS_PER_USER,
+    });
+    const res = await send("POST", "/learning-maps/mown00001/fork-checks:generate", {
+      level: "basic",
+      consentVersion: MAP_GENERATION_CONSENT_VERSION,
+    });
+    expect(res.status).toBe(404);
+  });
+});

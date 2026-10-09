@@ -222,6 +222,38 @@ export async function generateCreationChecks(
   return body;
 }
 
+/**
+ * 取り込んだマップを公開する前に、まだ公開の問題が無いノードの確認問題を作る（#246 の V4-a）。
+ * 同意はマップの生成の同意を使う。同意が無ければ {@link MapConsentRequiredError}。
+ */
+export async function generateForkChecks(
+  mapId: string,
+  request: { level: CheckLevel; consentVersion?: number },
+  fetcher: typeof fetch = fetch,
+): Promise<CreationChecksResult> {
+  const body = await postJson(
+    `${LEARNING_MAPS_PATH}/${encodeURIComponent(mapId)}/fork-checks:generate`,
+    request,
+    fetcher,
+    CREATION_CHECKS_TIMEOUT_MS,
+    (status, failure) => {
+      if (
+        failure.error === "map generation consent required" &&
+        typeof failure.version === "number"
+      ) {
+        throw new MapConsentRequiredError(failure.version);
+      }
+      return withMessage(
+        status,
+        failure,
+        (message) => new CreationChecksError(message, failure.retryable === true),
+      );
+    },
+  );
+  if (!isCreationChecksResult(body)) throw new ApiError("unavailable");
+  return body;
+}
+
 /** 作成時の確認問題の結果を、画面に出す1文にする。 */
 export function creationChecksSummary(result: CreationChecksResult): string {
   const missed = result.failedCount + result.skippedCount;

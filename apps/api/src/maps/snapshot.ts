@@ -61,6 +61,11 @@ export interface MapSnapshot {
   nodes: SnapshotNode[];
   edges: LearningMapEdge[];
   checks: PersonalConceptCheck[];
+  /**
+   * フォーク（#246 の V1）なら取り込み元（元のマップと、取り込んでいた版・題名）。
+   * フォークでないマップはキーごと持たない（持たせると、今ある版とハッシュが変わる）。
+   */
+  forkedFrom?: { mapId: string; version: number; title: string };
 }
 
 /**
@@ -109,6 +114,15 @@ export function buildSnapshot(
     checks: checks
       .filter((check) => ownIds.has(check.conceptId))
       .map((check) => structuredClone(check)),
+    ...(map.source === null
+      ? {}
+      : {
+          forkedFrom: {
+            mapId: map.source.mapId,
+            version: map.source.version,
+            title: map.source.title,
+          },
+        }),
   };
 }
 
@@ -176,6 +190,9 @@ const snapshotSchema = v.strictObject({
       model: v.string(),
       generatedAt: v.string(),
     }),
+  ),
+  forkedFrom: v.optional(
+    v.strictObject({ mapId: v.string(), version: v.number(), title: v.string() }),
   ),
 });
 
