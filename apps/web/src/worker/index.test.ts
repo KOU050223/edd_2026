@@ -632,6 +632,49 @@ test("ログアウトは IdP のログアウトの URL を返し、IdP からは
   expect(response.headers.get("cache-control")).toBe("no-store");
 });
 
+test("撤回の応答を待たずに IdP のログアウトの URL を返し、撤回は応答のあとに済ませる（PR #303）", async () => {
+  const sessions = new MemoryKv();
+  const token = await createSession(kvOf(sessions), { refreshToken: "rt-1", sub: "auth0|a" });
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const revoked: string[] = [];
+  const app = createWebApp({
+    fetch: async (input) => {
+      // 撤回が締め切り近くまで返らない IdP。
+      await held;
+      revoked.push(new Request(input).url);
+      return new Response(null, { status: 200 });
+    },
+  });
+  const pending: Promise<unknown>[] = [];
+  const context = {
+    waitUntil: (promise: Promise<unknown>) => void pending.push(promise),
+    passThroughOnException: () => undefined,
+    props: {},
+  };
+
+  const response = await app.request(
+    "https://web.example.test/logout",
+    { method: "POST", headers: { cookie: `session=${token}` } },
+    envWith(sessions),
+    context as unknown as ExecutionContext,
+  );
+
+  // 撤回はまだ終わっていないが、応答は返っている。KV はもう消えている。
+  expect(response.status).toBe(200);
+  const { redirectTo } = (await response.json()) as { redirectTo: string };
+  expect(new URL(redirectTo).pathname).toBe("/v2/logout");
+  await expect(readSession(kvOf(sessions), token)).resolves.toBeUndefined();
+  expect(revoked).toEqual([]);
+  expect(pending).toHaveLength(1);
+
+  release();
+  await Promise.all(pending);
+  expect(revoked).toEqual(["https://idp.example.test/oauth/revoke"]);
+});
+
 test("IdP の設定が読めなくても、ログアウトは済ませてトップへ戻す（#301）", async () => {
   const sessions = new MemoryKv();
   const token = await createSession(kvOf(sessions), { refreshToken: "rt-1", sub: "auth0|a" });

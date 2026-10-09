@@ -81,6 +81,22 @@ function oauthConfig(env: WebBindings): OAuthConfig {
 }
 
 /**
+ * 応答を返したあとも `task` を走らせ続ける（`waitUntil`）。実行コンテキストが無い環境（テストの
+ * `app.request` の既定）では、今までどおり待ってから返す。
+ */
+async function afterResponse(c: Context<{ Bindings: WebBindings }>, task: Promise<void>) {
+  let context: { waitUntil: (promise: Promise<unknown>) => void };
+  try {
+    context = c.executionCtx;
+  } catch {
+    // Hono は実行コンテキストが無いと getter で投げる。待つ側へ倒す。
+    await task;
+    return;
+  }
+  context.waitUntil(task);
+}
+
+/**
  * セッションが無いことを、利用者が再ログインへ倒せる理由付きで返す。
  *
  * **Cookie を消すのは、そのセッションが無効だと確定したときだけにする。**
@@ -313,15 +329,21 @@ export function createWebApp(
       await deleteSession(c.env.SESSIONS, token);
     }
     if (session) {
-      try {
-        await revokeRefreshToken(oauthConfig(c.env), session.refreshToken, deps.fetch);
-      } catch (error) {
-        // 撤回の失敗は握りつぶさずログへ残す。露出は AT の寿命（15分）に上限される。
-        console.error("refresh token revocation failed", {
-          sub: session.sub,
-          message: error instanceof Error ? error.message : String(error),
-        });
-      }
+      const revocation = (async () => {
+        try {
+          await revokeRefreshToken(oauthConfig(c.env), session.refreshToken, deps.fetch);
+        } catch (error) {
+          // 撤回の失敗は握りつぶさずログへ残す。露出は AT の寿命（15分）に上限される。
+          console.error("refresh token revocation failed", {
+            sub: session.sub,
+            message: error instanceof Error ? error.message : String(error),
+          });
+        }
+      })();
+      // 撤回は応答のあとに走らせる（PR #303 のレビュー）。待つと、撤回が遅いときに画面の締め切り
+      // （10 秒）が先に来て IdP のログアウトの URL を受け取れず、IdP のセッションが残る。
+      // 利用者を守るのは上の KV の削除なので、撤回を待たずに返してよい。
+      await afterResponse(c, revocation);
     }
     // IdP から戻る先はトップ。未ログインの導線が出る（#182・#301 の L2-a）。
     const returnTo = new URL("/", c.req.url).toString();
