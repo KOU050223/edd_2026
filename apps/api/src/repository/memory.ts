@@ -1155,6 +1155,30 @@ export class InMemoryLearningMapRepository implements LearningMapRepository {
     return true;
   }
 
+  listImportedChecksByConcept(
+    ownerUserId: string,
+    conceptId: string,
+  ): Promise<PersonalConceptCheck[]> {
+    // D1 と同じく、ノードと狙った項目が今もあるものだけ。
+    const found = this.ownedMaps(ownerUserId).flatMap((map) => {
+      const node = map.nodes.find((candidate) => candidate.conceptId === conceptId);
+      if (node?.kind !== "own") return [];
+      const objectiveIds = new Set((map.objectives.get(conceptId) ?? []).map((item) => item.id));
+      return map.importedChecks.filter(
+        (check) =>
+          check.conceptId === conceptId &&
+          (check.objectiveId === undefined || objectiveIds.has(check.objectiveId)),
+      );
+    });
+    return Promise.resolve(
+      structuredClone(found).sort((a, b) => {
+        const left = checkTargetOf(a);
+        const right = checkTargetOf(b);
+        return left < right ? -1 : left > right ? 1 : 0;
+      }),
+    );
+  }
+
   listImportedChecks(ownerUserId: string, mapId: string): Promise<PersonalConceptCheck[]> {
     const checks = this.owned(ownerUserId, mapId)?.importedChecks ?? [];
     // D1 の ORDER BY concept_id, target と一致させる。

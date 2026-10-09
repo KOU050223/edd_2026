@@ -2790,6 +2790,29 @@ export class D1LearningMapRepository implements LearningMapRepository {
     return changesOf(results.at(-1)) === 1;
   }
 
+  async listImportedChecksByConcept(
+    ownerUserId: string,
+    conceptId: string,
+  ): Promise<PersonalConceptCheck[]> {
+    const { results } = await this.db
+      .prepare(
+        `SELECT c.concept_id, c.scope, c.objective_id, c.level, c.body, c.model, c.generated_at
+         FROM imported_map_checks c
+         JOIN learning_maps m ON m.id = c.map_id
+         JOIN learning_map_nodes n
+           ON n.map_id = c.map_id AND n.concept_id = c.concept_id AND n.is_reference = 0
+         WHERE m.owner_user_id = ? AND c.concept_id = ?
+           AND (c.objective_id IS NULL OR EXISTS (
+             SELECT 1 FROM learning_objectives o
+             WHERE o.map_id = c.map_id AND o.concept_id = c.concept_id AND o.id = c.objective_id
+           ))
+         ORDER BY c.target ASC`,
+      )
+      .bind(ownerUserId, conceptId)
+      .all<PersonalCheckRow>();
+    return results.map(toPersonalCheck);
+  }
+
   async listImportedChecks(ownerUserId: string, mapId: string): Promise<PersonalConceptCheck[]> {
     const { results } = await this.db
       .prepare(

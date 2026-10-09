@@ -131,6 +131,9 @@ export function isPersonalConceptCheck(
 /**
  * Concept で保存済みの組を読む。AI は呼ばない。
  *
+ * `checks` は自分の組（作り直せる）、`mapChecks` は取り込んだマップの公開の問題（#250。作り直せない）。
+ * 同じ狙いに自分の組があれば、API は公開の問題を返さない。
+ *
  * 2xx でも形が違えば失敗にする（RULE-004）。採点できない問題を出すと、
  * 利用者の回答が正しくても不正解として記録されうる。
  */
@@ -138,21 +141,20 @@ export async function fetchSavedChecks(
   conceptId: ConceptId,
   fetcher: typeof fetch = fetch,
   sessionRetries: boolean | number = false,
-): Promise<PersonalConceptCheck[]> {
+): Promise<{ checks: PersonalConceptCheck[]; mapChecks: PersonalConceptCheck[] }> {
   const body = await requestJson<unknown>(
     `${CHECKS_PATH}?conceptId=${encodeURIComponent(conceptId)}`,
     fetcher,
     sessionRetries,
   );
-  const checks = (body as { checks?: unknown } | null)?.checks;
-  if (
-    !Array.isArray(checks) ||
-    !checks.every((check) => isPersonalConceptCheck(check, conceptId))
-  ) {
+  const { checks, mapChecks } = (body ?? {}) as { checks?: unknown; mapChecks?: unknown };
+  const valid = (value: unknown): value is PersonalConceptCheck[] =>
+    Array.isArray(value) && value.every((check) => isPersonalConceptCheck(check, conceptId));
+  if (!valid(checks) || !valid(mapChecks)) {
     console.error("saved checks did not match the expected shape", { conceptId });
     throw new ApiError("unavailable");
   }
-  return checks;
+  return { checks, mapChecks };
 }
 
 /** 生成の要求。範囲が `objective` のときだけ `objectiveId` を持つ。 */
@@ -341,7 +343,26 @@ export function defaultObjectiveSelection(
     .map((objective) => objective.id);
 }
 
-/** 保存済みの組の狙いの集合。生成画面の「作成済み」の印と既定の選択に使う。 */
+/**
+ * 出すマップの問題（#250）。同じ狙いに自分の組があれば出さない（自分の組を作ったあとも、
+ * 画面を読み直さずにすぐ外す）。並びは自分の組と同じ規則。
+ */
+export function shownMapChecks(
+  mapChecks: readonly PersonalConceptCheck[],
+  ownChecks: readonly PersonalConceptCheck[],
+  objectiveIds: readonly string[],
+): PersonalConceptCheck[] {
+  const own = savedTargetsOf(ownChecks);
+  return orderedChecks(
+    mapChecks.filter((check) => !own.has(checkTargetOf(check))),
+    objectiveIds,
+  );
+}
+
+/**
+ * 保存済みの組の狙いの集合。生成画面の「作成済み」の印と既定の選択に使う。
+ * 自分の組だけから作る。マップの問題（#250）があるだけでは「作成済み」とみなさない。
+ */
 export function savedTargetsOf(checks: readonly PersonalConceptCheck[]): Set<string> {
   return new Set(checks.map(checkTargetOf));
 }

@@ -2,6 +2,8 @@
  * 確認問題（#184 / #236）。利用者ごとに生成して保存し、本人だけが読む。
  *
  * - `GET /v1/checks?conceptId=`: その Concept で保存済みの組。**AI を呼ばない。**
+ *   取り込んだマップの公開の問題（#250）を `mapChecks` に分けて返す。同じ狙いに自分の組があれば、
+ *   公開の問題は返さない（自分のデータから作った問題のほうが本人に合っているため）。
  * - `POST /v1/checks:generate`: 1組を生成して保存する（同じ狙いがあれば上書き＝作り直し）。
  * - `GET /v1/checks:export`: 保存済みの全件（学習データのエクスポート）。
  * - `GET` / `PUT` / `DELETE /v1/check-generation-consent`: 生成への同意の「今後表示しない」。
@@ -31,6 +33,7 @@ import { vValidator } from "@hono/valibot-validator";
 import * as v from "valibot";
 import {
   CHECK_GENERATION_CONSENT_VERSION,
+  checkTargetOf,
   type ConsentRecord,
   type PersonalConceptCheck,
 } from "@gakushu-sochi/domain";
@@ -62,6 +65,15 @@ export interface CheckGenerationConsentBody {
   /** 今の版で「今後表示しない」を選んでいるか。古い版の記録は false。 */
   granted: boolean;
   grantedAt?: string;
+}
+
+/**
+ * `GET /v1/checks` の応答。`checks` は自分の組（作り直せる）、`mapChecks` は取り込んだマップの
+ * 公開の問題（#250。保存済みを読むだけで AI を使わず、作り直せない）。
+ */
+export interface SavedChecksBody {
+  checks: PersonalConceptCheck[];
+  mapChecks: PersonalConceptCheck[];
 }
 
 /** `GET /v1/checks:export` の応答。 */
@@ -96,9 +108,18 @@ export function createChecksRoute(resolve: ChecksDepsResolver) {
 
   route.get("/checks", vValidator("query", listQuerySchema), async (c) => {
     const { conceptId } = c.req.valid("query");
+    const userId = c.get("user").userId;
     const deps = resolve(c.env);
-    const checks = await deps.checks.listByConcept(c.get("user").userId, conceptId);
-    return c.json({ checks }, 200, { "cache-control": "no-store" });
+    const [checks, published] = await Promise.all([
+      deps.checks.listByConcept(userId, conceptId),
+      deps.maps.listImportedChecksByConcept(userId, conceptId),
+    ]);
+    const own = new Set(checks.map(checkTargetOf));
+    const body: SavedChecksBody = {
+      checks,
+      mapChecks: published.filter((check) => !own.has(checkTargetOf(check))),
+    };
+    return c.json(body, 200, { "cache-control": "no-store" });
   });
 
   route.get("/checks:export", async (c) => {
