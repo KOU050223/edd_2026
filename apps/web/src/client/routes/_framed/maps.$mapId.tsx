@@ -227,8 +227,6 @@ function ImportPanel({ mapId, shareKey }: { mapId: string; shareKey: string | un
 
 /** 持ち主に見せる共有の状態（#244）。共有の設定と版の履歴への入口。 */
 function SharingStatus({ map }: { map: LearningMapView }) {
-  // 取り込んだマップはまだ共有へ上げられない（作成者以外の公開は #246）。
-  if (map.source !== null) return null;
   return (
     <>
       <p className="share-status">
@@ -237,7 +235,11 @@ function SharingStatus({ map }: { map: LearningMapView }) {
           {map.latestVersion !== null && <span className="muted">（版 {map.latestVersion}）</span>}
         </span>
         <Link to="/maps/$mapId/share" params={{ mapId: map.id }} className="link">
-          {map.visibility === "private" ? "共有する" : "共有の設定・新しい版を上げる"}
+          {map.visibility !== "private"
+            ? "共有の設定・新しい版を上げる"
+            : map.source !== null
+              ? "別の共有マップとして公開"
+              : "共有する"}
         </Link>
         {map.latestVersion !== null && (
           <Link to="/maps/$mapId/history" params={{ mapId: map.id }} className="link">
@@ -267,6 +269,18 @@ function SharedNotice({
         {new Date(map.publishedAt).toLocaleDateString("ja-JP")}）を見ています。
         読むことはできますが、編集はできません。
       </p>
+      {map.forkedFrom && (
+        <p className="muted">
+          もとにしたマップ:{" "}
+          {map.forkedFrom.mapId === null ? (
+            map.forkedFrom.title
+          ) : (
+            <Link to="/maps/$mapId" params={{ mapId: map.forkedFrom.mapId }} className="link">
+              {map.forkedFrom.title}
+            </Link>
+          )}
+        </p>
+      )}
       {map.isOwner || <ImportPanel mapId={map.id} shareKey={key} />}
     </section>
   );

@@ -1,4 +1,4 @@
-import { CHECK_LEVEL_LABELS, CHECK_LEVELS, MAP_GENERATION_NOTICE } from "@gakushu-sochi/domain";
+import { CHECK_LEVEL_LABELS, CHECK_LEVELS } from "@gakushu-sochi/domain";
 import type { CheckLevel } from "@gakushu-sochi/domain";
 import { createFileRoute, Link, useNavigate, useRouter } from "@tanstack/react-router";
 import { useRef, useState } from "react";
@@ -7,6 +7,7 @@ import { ApiError, createSubmitGuard } from "../../api.js";
 import { changeGenerationConsent, fetchGenerationConsent } from "../../check.js";
 import type { CheckGenerationConsent } from "../../check.js";
 import { toErrorText } from "../../errors.js";
+import { ConsentPrompt } from "../../map-consent.js";
 import { fetchLearningMaps, MAP_LIMITS, MapLimitError } from "../../learning-maps.js";
 import {
   buildMapGenerateRequest,
@@ -45,52 +46,6 @@ function generationErrorText(error: unknown): string {
     return "マップを作れませんでした。時間をおいて、もう一度お試しください。";
   }
   return toErrorText(error);
-}
-
-/**
- * 生成の前に、AI へ送る内容を示して同意を取る（確認問題と同じ形、#243 の決定 3）。
- * 「今後表示しない」を選ぶと、サーバーに記録して次回から出さない。取り消しは設定画面。
- */
-function ConsentPrompt({
-  saving,
-  error,
-  onAgree,
-  onCancel,
-}: {
-  saving: boolean;
-  error: string | undefined;
-  onAgree: (remember: boolean) => void;
-  onCancel: () => void;
-}) {
-  const [remember, setRemember] = useState(false);
-  return (
-    <div className="check-consent" role="dialog" aria-label="AI へ送る内容の確認">
-      {MAP_GENERATION_NOTICE.split("\n").map((line) => (
-        <p key={line}>{line}</p>
-      ))}
-      <label className="check-consent-remember">
-        <input
-          type="checkbox"
-          checked={remember}
-          onChange={(event) => setRemember(event.target.checked)}
-        />
-        今後表示しない（設定の「学習データ」から取り消せます）
-      </label>
-      <div className="actions">
-        <button type="button" disabled={saving} onClick={() => onAgree(remember)}>
-          同意して作る
-        </button>
-        <button type="button" className="secondary" disabled={saving} onClick={onCancel}>
-          やめる
-        </button>
-      </div>
-      {error && (
-        <p className="error-text" role="alert">
-          同意を記録できませんでした：{error}
-        </p>
-      )}
-    </div>
-  );
 }
 
 /**
