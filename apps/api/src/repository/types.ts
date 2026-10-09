@@ -924,6 +924,16 @@ export interface LearningMapRepository {
     },
   ): Promise<boolean>;
 
+  /**
+   * 自分の取り込んだマップの公開の確認問題のうち、その Concept のもの（#250）。
+   * そのノードが今も自分のノード（参照ではない）としてあり、項目を狙った組ならその項目も今あるものだけ。
+   * 狙いの順。
+   */
+  listImportedChecksByConcept(
+    ownerUserId: string,
+    conceptId: string,
+  ): Promise<PersonalConceptCheck[]>;
+
   /** 自分の取り込んだマップの公開の確認問題（T6）。Concept ID・狙いの順。自分のマップでなければ空。 */
   listImportedChecks(ownerUserId: string, mapId: string): Promise<PersonalConceptCheck[]>;
 

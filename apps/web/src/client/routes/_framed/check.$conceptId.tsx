@@ -34,6 +34,7 @@ import {
   orderedChecks,
   recommendedLevel,
   savedTargetsOf,
+  shownMapChecks,
   upsertCheck,
   type CheckAnswers,
   type CheckGenerationConsent,
@@ -144,9 +145,7 @@ function CheckSet({
   title,
   hidden,
   retakable,
-  regenerateLabel,
-  regenerating,
-  onRegenerate,
+  regenerate,
   onGraded,
   onRetake,
 }: {
@@ -155,9 +154,8 @@ function CheckSet({
   hidden: boolean;
   /** 採点のあとに「もう一度解く」を出すか。範囲が「理解すること」のときだけ（#270 の決定）。 */
   retakable: boolean;
-  regenerateLabel: string;
-  regenerating: boolean;
-  onRegenerate: () => void;
+  /** 作り直しのボタン。マップの問題（#250）は作り直せないので渡さない。 */
+  regenerate?: { label: string; running: boolean; onClick: () => void };
   onGraded: (passed: boolean) => void;
   onRetake: () => void;
 }) {
@@ -237,14 +235,16 @@ function CheckSet({
             に作成
           </p>
         </div>
-        <button
-          type="button"
-          className="secondary"
-          disabled={regenerating || record?.kind === "sending"}
-          onClick={onRegenerate}
-        >
-          {regenerateLabel}
-        </button>
+        {regenerate && (
+          <button
+            type="button"
+            className="secondary"
+            disabled={regenerate.running || record?.kind === "sending"}
+            onClick={regenerate.onClick}
+          >
+            {regenerate.label}
+          </button>
+        )}
       </div>
       <form
         onSubmit={(formEvent) => {
@@ -395,6 +395,12 @@ function CheckPage() {
   const { label, areaName } = loaded;
 
   const [checks, setChecks] = useState(loaded.checks);
+  // 取り込んだマップの公開の問題（#250）。同じ狙いに自分の組ができたら出さない。
+  const mapChecks = shownMapChecks(
+    loaded.mapChecks,
+    checks,
+    loaded.objectives.map((objective) => objective.id),
+  );
   const [consent, setConsent] = useState<CheckGenerationConsent>(loaded.consent);
   const [level, setLevel] = useState<CheckLevel>(loaded.recommended.level);
   const [scope, setScope] = useState<CheckScope>("concept");
@@ -762,18 +768,19 @@ function CheckPage() {
                 title={titleOf(check)}
                 hidden={summarized || check !== shownCheck}
                 retakable={scope === "objective"}
-                regenerateLabel={`作り直す（${CHECK_LEVEL_LABELS[level]}）`}
-                regenerating={generating}
-                onRegenerate={() =>
-                  request([
-                    {
-                      scope: check.scope,
-                      ...(check.objectiveId === undefined
-                        ? {}
-                        : { objectiveId: check.objectiveId }),
-                    },
-                  ])
-                }
+                regenerate={{
+                  label: `作り直す（${CHECK_LEVEL_LABELS[level]}）`,
+                  running: generating,
+                  onClick: () =>
+                    request([
+                      {
+                        scope: check.scope,
+                        ...(check.objectiveId === undefined
+                          ? {}
+                          : { objectiveId: check.objectiveId }),
+                      },
+                    ]),
+                }}
                 onGraded={(passed) =>
                   setResults((current) => new Map(current).set(checkSetKey(check, round), passed))
                 }
@@ -817,6 +824,27 @@ function CheckPage() {
           </>
         )}
       </section>
+
+      {mapChecks.length > 0 && (
+        <section className="check-sets" aria-label="マップの問題">
+          <h2>マップの問題</h2>
+          <p className="muted">
+            取り込んだマップの作成者が公開した問題です。保存済みの問題を出すだけで、AI
+            は使いません（利用回数に数えません）。作り直しはできません。同じ項目で自分の問題を作ると、そちらを出します。
+          </p>
+          {mapChecks.map((check) => (
+            <CheckSet
+              key={checkSetKey(check, round)}
+              check={check}
+              title={titleOf(check)}
+              hidden={false}
+              retakable
+              onGraded={() => undefined}
+              onRetake={() => undefined}
+            />
+          ))}
+        </section>
+      )}
     </section>
   );
 }
@@ -854,7 +882,7 @@ export const Route = createFileRoute("/_framed/check/$conceptId")({
     // 読むだけで、AI は呼ばない。生成は利用者が「作る」を押したときだけ。
     const retry = takeLoginRetry();
     const mapId = mapIdOfConcept(params.conceptId);
-    const [checks, profile, overrides, consent, map, fixed] = await Promise.all([
+    const [{ checks, mapChecks }, profile, overrides, consent, map, fixed] = await Promise.all([
       fetchSavedChecks(params.conceptId, fetch, retry),
       requestJson<MapProfile>("/api/v1/learning-profile", fetch, retry),
       requestJson<MasteryOverrides>("/api/v1/mastery-overrides", fetch, retry),
@@ -914,7 +942,7 @@ export const Route = createFileRoute("/_framed/check/$conceptId")({
         .filter((candidate) => areaIds.has(candidate.conceptId))
         .map((candidate) => candidate.status),
     );
-    return { checks, consent, objectives, recommended, label, areaName };
+    return { checks, mapChecks, consent, objectives, recommended, label, areaName };
   },
   errorComponent: CheckError,
   // 同じルートのまま Concept だけ変わっても、前の Concept の問題や選択を持ち越さない。

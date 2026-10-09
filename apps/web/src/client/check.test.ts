@@ -12,6 +12,8 @@ import {
   checkTally,
   defaultObjectiveSelection,
   fetchSavedChecks,
+  savedTargetsOf,
+  shownMapChecks,
   generateCheck,
   generationTargets,
   gradeCheck,
@@ -98,13 +100,27 @@ test("利用者ごとの2問1組だけを問題として受け入れる", () => 
 });
 
 test("保存済みの組を読み、形が違えば失敗にする", async () => {
-  const ok = vi.fn(async () => Response.json({ checks: [CHECK] }));
-  await expect(fetchSavedChecks("go.defer", ok)).resolves.toEqual([CHECK]);
+  const ok = vi.fn(async () => Response.json({ checks: [CHECK], mapChecks: [] }));
+  await expect(fetchSavedChecks("go.defer", ok)).resolves.toEqual({
+    checks: [CHECK],
+    mapChecks: [],
+  });
   expect(ok).toHaveBeenCalledWith("/api/v1/checks?conceptId=go.defer", expect.anything());
 
   vi.spyOn(console, "error").mockImplementation(() => {});
-  const broken = vi.fn(async () => Response.json({ checks: [{ ...CHECK, scope: "all" }] }));
+  const broken = vi.fn(async () =>
+    Response.json({ checks: [{ ...CHECK, scope: "all" }], mapChecks: [] }),
+  );
   await expect(fetchSavedChecks("go.defer", broken)).rejects.toEqual(new ApiError("unavailable"));
+  // マップの問題（#250）も同じ規則で確かめる。欠けていても失敗にする。
+  const brokenMap = vi.fn(async () =>
+    Response.json({ checks: [], mapChecks: [{ ...CHECK, scope: "all" }] }),
+  );
+  await expect(fetchSavedChecks("go.defer", brokenMap)).rejects.toEqual(
+    new ApiError("unavailable"),
+  );
+  const missing = vi.fn(async () => Response.json({ checks: [] }));
+  await expect(fetchSavedChecks("go.defer", missing)).rejects.toEqual(new ApiError("unavailable"));
 });
 
 test("生成は選んだ範囲・レベル・項目・同意の版を送り、締め切りを付ける", async () => {
@@ -309,4 +325,17 @@ test("次の組は、後ろのまだ終えていない組。無ければ前か�
   // 今の組は数えない。
   expect(nextCheckIndex([false, true], 1)).toBeUndefined();
   expect(nextCheckIndex([false, false, false], 2)).toBeUndefined();
+});
+
+test("マップの問題は、同じ狙いに自分の組があれば出さず、自動選択では作成済みとみなさない（#250）", () => {
+  const first = { ...CHECK, objectiveId: "go.defer:first" };
+  const second = { ...CHECK, objectiveId: "go.defer:second" };
+  const order = ["go.defer:first", "go.defer:second"];
+  expect(shownMapChecks([second, first], [], order)).toEqual([first, second]);
+  expect(shownMapChecks([second, first], [first], order)).toEqual([second]);
+  // 作成済みの印は自分の組だけから作る。マップの問題の項目も、Concept 単位の自動選択に残る。
+  const objectives = order.map((id) => ({ id, label: id, value: 0 }));
+  expect(
+    generationTargets("concept", objectives, [], savedTargetsOf([])).map((t) => t.objectiveId),
+  ).toEqual(order);
 });

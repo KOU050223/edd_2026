@@ -25,6 +25,7 @@ import {
 import { InMemoryMasteryOverrideRepository } from "../repository/mastery-overrides.js";
 import { createAiRoute } from "./ai.js";
 import { createChecksRoute, parseModelList } from "./checks.js";
+import { personalCheck } from "../maps/test-map.js";
 import {
   seedTestMap,
   TEST_MAP_ID,
@@ -973,13 +974,94 @@ describe("GET /v1/checks", () => {
 
     const response = await call(harness, `/checks?conceptId=${CONCEPT_ID}`, {}, "other-token");
 
-    await expect(response.json()).resolves.toEqual({ checks: [] });
+    await expect(response.json()).resolves.toEqual({ checks: [], mapChecks: [] });
   });
 
   it("Concept ID の形式を満たさない要求を弾く", async () => {
     const response = await call(buildApp(), "/checks?conceptId=Not.Valid");
 
     expect(response.status).toBe(400);
+  });
+});
+
+describe("GET /v1/checks のマップの問題（#250）", () => {
+  const NODE = "msrc00001.borrow01";
+  const KEPT = `${NODE}:keep`;
+  const DROPPED = `${NODE}:drop`;
+  const OTHER = `${NODE}:other`;
+
+  /** 公開の問題を3組持つ取り込んだマップ。項目 DROPPED は取り込んだあとに消した。 */
+  async function importedMap(harness: Harness) {
+    const created = await harness.maps.createImported(USER_A, {
+      id: "mper00001",
+      content: {
+        title: "取り込んだ",
+        description: "",
+        nodes: [{ kind: "own", conceptId: NODE, label: "借用", summary: "参照を貸す。" }],
+        edges: [],
+      },
+      objectives: [KEPT, DROPPED, OTHER].map((id) => ({
+        id,
+        conceptId: NODE,
+        label: id,
+        source: "ai" as const,
+      })),
+      source: { mapId: "msrc00001", version: 1, key: null, title: "元", nodeIds: [NODE] },
+      checks: [KEPT, DROPPED, OTHER].map((objectiveId) => personalCheck(NODE, objectiveId)),
+      nowIso: "2026-10-09T00:00:00.000Z",
+      nowMs: 0,
+      maxMaps: 20,
+    });
+    expect(created).toBe(true);
+    await harness.maps.replaceObjectives(USER_A, {
+      mapId: "mper00001",
+      conceptId: NODE,
+      objectives: [KEPT, OTHER].map((id) => ({ id, label: id, source: "ai" as const })),
+      nowIso: "2026-10-09T00:00:00.000Z",
+      nowMs: 0,
+    });
+  }
+
+  it("取り込んだマップの公開の問題を、AI を使わずに分けて返す", async () => {
+    const fetchMock = stubUpstream(generatedCheck());
+    const harness = buildApp();
+    await importedMap(harness);
+
+    const response = await call(harness, `/checks?conceptId=${NODE}`);
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      checks: unknown[];
+      mapChecks: { objectiveId: string }[];
+    };
+    expect(body.checks).toEqual([]);
+    // 消した項目を狙った組は返さない。
+    expect(body.mapChecks.map((check) => check.objectiveId)).toEqual([KEPT, OTHER]);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(await usedToday(harness)).toBe(0);
+  });
+
+  it("同じ狙いに自分の組があれば、公開の問題は返さない", async () => {
+    const harness = buildApp();
+    await importedMap(harness);
+    await harness.checks.put(USER_A, personalCheck(NODE, KEPT), 0, { mapId: "mper00001" });
+
+    const body = (await (await call(harness, `/checks?conceptId=${NODE}`)).json()) as {
+      checks: { objectiveId: string }[];
+      mapChecks: { objectiveId: string }[];
+    };
+
+    expect(body.checks.map((check) => check.objectiveId)).toEqual([KEPT]);
+    expect(body.mapChecks.map((check) => check.objectiveId)).toEqual([OTHER]);
+  });
+
+  it("他人の取り込んだマップの公開の問題は返さない", async () => {
+    const harness = buildApp();
+    await importedMap(harness);
+
+    const response = await call(harness, `/checks?conceptId=${NODE}`, {}, "other-token");
+
+    await expect(response.json()).resolves.toEqual({ checks: [], mapChecks: [] });
   });
 });
 
