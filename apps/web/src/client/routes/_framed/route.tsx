@@ -5,6 +5,30 @@ import { fetchLoggedIn } from "../../session.js";
 // 締め切りを設ける（.agents/rules/rules.md RULE-001）。
 const AUTH_REQUEST_TIMEOUT_MS = 10_000;
 
+/**
+ * ログアウトして、Worker が返す IdP のログアウトの URL へ移る（#301）。IdP のセッションも消すので、
+ * 次のログインでアカウントを選び直せる。IdP からはトップへ戻る。
+ *
+ * 応答が読めなければトップへ移る。Worker が KV のセッションと Cookie を消せていればログアウトは済んでいる
+ * （IdP のセッションだけが残る）。
+ */
+async function logout() {
+  let next = "/";
+  try {
+    const response = await fetch("/logout", {
+      method: "POST",
+      signal: AbortSignal.timeout(AUTH_REQUEST_TIMEOUT_MS),
+    });
+    const body = (await response.json()) as { redirectTo?: unknown };
+    if (typeof body.redirectTo === "string") next = body.redirectTo;
+  } catch (error) {
+    // 失敗してもトップへ移る（RULE-004: 記録して先へ進む）。ヘッダーがログインの状態を出し直すので、
+    // セッションが残っていれば画面で分かる。
+    console.error("logout failed", error);
+  }
+  window.location.href = next;
+}
+
 function Header() {
   const { loggedIn } = Route.useLoaderData();
   return (
@@ -19,18 +43,7 @@ function Header() {
         <Link to="/history">履歴</Link>
         <Link to="/settings">設定</Link>
         {loggedIn ? (
-          <button
-            onClick={() =>
-              fetch("/logout", {
-                method: "POST",
-                signal: AbortSignal.timeout(AUTH_REQUEST_TIMEOUT_MS),
-              }).finally(() => {
-                window.location.href = "/login";
-              })
-            }
-          >
-            ログアウト
-          </button>
+          <button onClick={() => void logout()}>ログアウト</button>
         ) : (
           // `/login` は Worker が受けて IdP へ転送するので、SPA の Link ではなく
           // ページ遷移になる通常のリンクで出す。
