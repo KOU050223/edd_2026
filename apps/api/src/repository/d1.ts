@@ -1787,6 +1787,7 @@ interface LearningMapRow {
   latest_version: number | null;
   /** `get` だけが読む（0019）。 */
   revision?: number;
+  share_key?: string | null;
   created_at: string;
   updated_at: string;
   node_count: number;
@@ -1840,6 +1841,19 @@ function toLearningMapVisibility(row: {
   throw new Error(
     `learning_maps.visibility and share_scope disagree: ${row.id} (${row.visibility}, ${String(row.share_scope)})`,
   );
+}
+
+/** 鍵は範囲が link のときだけ持つ（0019）。食い違えば壊れている。 */
+function toShareKey(row: {
+  id: string;
+  share_scope: string | null;
+  share_key?: string | null;
+}): string | null {
+  const key = row.share_key ?? null;
+  if ((row.share_scope === "link") !== (key !== null)) {
+    throw new Error(`learning_maps.share_key disagrees with share_scope: ${row.id}`);
+  }
+  return key;
 }
 
 function requireRevision(row: LearningMapRow): number {
@@ -2098,7 +2112,7 @@ export class D1LearningMapRepository implements LearningMapRepository {
       this.db
         .prepare(
           `SELECT id, title, description, visibility, share_scope, created_at, updated_at,
-                  0 AS node_count, ${LATEST_VERSION} AS latest_version, revision,
+                  0 AS node_count, ${LATEST_VERSION} AS latest_version, revision, share_key,
                   creation_checks_level, creation_checks_attempts, creation_checks_done_at,
                   creation_checks_started_at_ms
            FROM learning_maps WHERE id = ? AND owner_user_id = ?`,
@@ -2133,6 +2147,7 @@ export class D1LearningMapRepository implements LearningMapRepository {
       visibility: toLearningMapVisibility(row),
       latestVersion: row.latest_version,
       revision: requireRevision(row),
+      shareKey: toShareKey(row),
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       nodes: rowsOf<LearningMapNodeRow>(nodes).map(toStoredMapNode),
@@ -2294,6 +2309,7 @@ export class D1LearningMapRepository implements LearningMapRepository {
       expectedLatest: number | null;
       expectedRevision: number;
       scope: ShareScope;
+      shareKey: string | null;
       content: string;
       contentHash: string;
       checksIncluded: boolean;
@@ -2334,7 +2350,7 @@ export class D1LearningMapRepository implements LearningMapRepository {
         ),
       this.db
         .prepare(
-          `UPDATE learning_maps SET visibility = 'shared', share_scope = ?
+          `UPDATE learning_maps SET visibility = 'shared', share_scope = ?, share_key = ?
            WHERE id = ? AND owner_user_id = ?
              AND EXISTS (
                SELECT 1 FROM learning_map_versions
@@ -2342,7 +2358,16 @@ export class D1LearningMapRepository implements LearningMapRepository {
                  AND restored_from IS NULL
              )`,
         )
-        .bind(params.scope, mapId, ownerUserId, mapId, version, params.nowMs, params.contentHash),
+        .bind(
+          params.scope,
+          params.shareKey,
+          mapId,
+          ownerUserId,
+          mapId,
+          version,
+          params.nowMs,
+          params.contentHash,
+        ),
     ]);
     return changesOf(inserted) === 1;
   }
@@ -2351,16 +2376,18 @@ export class D1LearningMapRepository implements LearningMapRepository {
     ownerUserId: string,
     mapId: string,
     scope: ShareScope | null,
+    shareKey: string | null,
   ): Promise<boolean> {
     // 共有へ切り替えるのは、版が1つ以上あるときだけ（中身を確かめずに出さない、S1-a）。
     const result = await this.db
       .prepare(
         `UPDATE learning_maps
-         SET visibility = CASE WHEN ? IS NULL THEN 'private' ELSE 'shared' END, share_scope = ?
+         SET visibility = CASE WHEN ? IS NULL THEN 'private' ELSE 'shared' END,
+             share_scope = ?, share_key = ?
          WHERE id = ? AND owner_user_id = ?
            AND (? IS NULL OR ${LATEST_VERSION} IS NOT NULL)`,
       )
-      .bind(scope, scope, mapId, ownerUserId, scope, mapId)
+      .bind(scope, scope, shareKey, mapId, ownerUserId, scope, mapId)
       .run();
     return changesOf(result) === 1;
   }
@@ -2510,7 +2537,8 @@ export class D1LearningMapRepository implements LearningMapRepository {
     const [map, latest] = await this.db.batch([
       this.db
         .prepare(
-          `SELECT id, owner_user_id, visibility, share_scope FROM learning_maps WHERE id = ?`,
+          `SELECT id, owner_user_id, visibility, share_scope, share_key
+           FROM learning_maps WHERE id = ?`,
         )
         .bind(mapId),
       this.db
@@ -2525,6 +2553,7 @@ export class D1LearningMapRepository implements LearningMapRepository {
       owner_user_id: string;
       visibility: string;
       share_scope: string | null;
+      share_key: string | null;
     }>(map)[0];
     if (row === undefined) return null;
     const version = rowsOf<MapVersionRow>(latest)[0];
@@ -2532,6 +2561,7 @@ export class D1LearningMapRepository implements LearningMapRepository {
       id: row.id,
       ownerUserId: row.owner_user_id,
       visibility: toLearningMapVisibility(row),
+      shareKey: toShareKey(row),
       latest: version === undefined ? null : toStoredMapVersion(version),
     };
   }

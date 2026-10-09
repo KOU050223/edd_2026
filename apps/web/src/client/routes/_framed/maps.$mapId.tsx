@@ -21,6 +21,7 @@ import {
 import { fetchLearningMap, mapDefinitions, type LearningMapView } from "../../learning-maps.js";
 import {
   fetchSharedMap,
+  shareLinkOf,
   VISIBILITY_BADGES,
   VISIBILITY_LABELS,
   type SharedMapView,
@@ -110,23 +111,56 @@ function CreationChecksPanel({
   );
 }
 
+/** 「リンクだけ」の共有のリンクと、写すボタン（#244 の決定 U1）。 */
+function ShareLink({ mapId, shareKey }: { mapId: string; shareKey: string }) {
+  const link = shareLinkOf(window.location.origin, mapId, shareKey);
+  const [copied, setCopied] = useState<"done" | "failed">();
+  const copy = () => {
+    navigator.clipboard.writeText(link).then(
+      () => setCopied("done"),
+      // 写せなかったことを黙らない（RULE-004）。リンクは画面に出ているので手で写せる。
+      () => setCopied("failed"),
+    );
+  };
+  return (
+    <p className="share-link">
+      <span className="muted">共有のリンク（知っている人だけが開けます）:</span>
+      <input readOnly value={link} onFocus={(event) => event.currentTarget.select()} />
+      <button type="button" onClick={copy}>
+        リンクを写す
+      </button>
+      {copied === "done" && <span role="status">写しました</span>}
+      {copied === "failed" && (
+        <span className="error-text" role="alert">
+          写せませんでした。欄から手で写してください。
+        </span>
+      )}
+    </p>
+  );
+}
+
 /** 持ち主に見せる共有の状態（#244）。共有の設定と版の履歴への入口。 */
 function SharingStatus({ map }: { map: LearningMapView }) {
   return (
-    <p className="share-status">
-      <span>
-        共有: <strong>{VISIBILITY_LABELS[map.visibility]}</strong>
-        {map.latestVersion !== null && <span className="muted">（版 {map.latestVersion}）</span>}
-      </span>
-      <Link to="/maps/$mapId/share" params={{ mapId: map.id }} className="link">
-        {map.visibility === "private" ? "共有する" : "共有の設定・新しい版を上げる"}
-      </Link>
-      {map.latestVersion !== null && (
-        <Link to="/maps/$mapId/history" params={{ mapId: map.id }} className="link">
-          版の履歴
+    <>
+      <p className="share-status">
+        <span>
+          共有: <strong>{VISIBILITY_LABELS[map.visibility]}</strong>
+          {map.latestVersion !== null && <span className="muted">（版 {map.latestVersion}）</span>}
+        </span>
+        <Link to="/maps/$mapId/share" params={{ mapId: map.id }} className="link">
+          {map.visibility === "private" ? "共有する" : "共有の設定・新しい版を上げる"}
         </Link>
+        {map.latestVersion !== null && (
+          <Link to="/maps/$mapId/history" params={{ mapId: map.id }} className="link">
+            版の履歴
+          </Link>
+        )}
+      </p>
+      {map.visibility === "link" && map.shareKey !== null && (
+        <ShareLink mapId={map.id} shareKey={map.shareKey} />
       )}
-    </p>
+    </>
   );
 }
 
@@ -155,7 +189,7 @@ function LearningMapPage() {
   const { loaded, profile, overrides } = Route.useLoaderData();
   const map = loaded.map;
   const own = loaded.kind === "own" ? loaded.map : undefined;
-  const { concept: selectedId } = Route.useSearch();
+  const { concept: selectedId, key } = Route.useSearch();
   const router = useRouter();
   const navigate = useNavigate();
   const { saveError, pending, changeStatus } = useMasteryChange();
@@ -193,7 +227,8 @@ function LearningMapPage() {
       goToConcept(conceptId);
       return;
     }
-    void navigate({ to: "/maps/$mapId", params: { mapId }, search: { concept: conceptId } });
+    // 「リンクだけ」の鍵は選び直しても持ち続ける（外すと読み直しで 404 になる）。
+    void navigate({ to: "/maps/$mapId", params: { mapId }, search: { concept: conceptId, key } });
   };
 
   // 狭い画面では詳細が地図の下に回るので、選んだことが見えるところまで送る。
@@ -312,11 +347,13 @@ function LearningMapPage() {
 }
 
 /**
- * 自分のマップなら手元のマップ、そうでなければ共有の側の版を読む（#244 の T5。リンクは
- * `/maps/<マップ ID>`）。自分のマップでも共有されたマップでもなければ、共有の側の 404 をそのまま返す。
+ * 自分のマップなら手元のマップ、そうでなければ共有の側の版を読む（#244 の T5・U1。「リンクだけ」の
+ * リンクは `/maps/<マップ ID>?key=<鍵>`）。自分のマップでも、読める共有マップでもなければ、
+ * 共有の側の 404 をそのまま返す。
  */
 async function loadMap(
   mapId: string,
+  key: string | undefined,
   retry: boolean | number,
 ): Promise<{ kind: "own"; map: LearningMapView } | { kind: "shared"; map: SharedMapView }> {
   try {
@@ -324,18 +361,23 @@ async function loadMap(
   } catch (error: unknown) {
     if (!(error instanceof ApiError && error.kind === "not_found")) throw error;
   }
-  return { kind: "shared", map: await fetchSharedMap(mapId, fetch, retry) };
+  return { kind: "shared", map: await fetchSharedMap(mapId, key, fetch, retry) };
 }
 
 export const Route = createFileRoute("/_framed/maps/$mapId")({
-  validateSearch: parseConceptSearch,
+  // `key` は「リンクだけ」の共有の鍵（#244 の決定 U1）。
+  validateSearch: (search: Record<string, unknown>): { concept?: string; key?: string } => ({
+    ...parseConceptSearch(search),
+    ...(typeof search.key === "string" ? { key: search.key } : {}),
+  }),
+  loaderDeps: ({ search }) => ({ key: search.key }),
   // 編集や確認問題から戻ってきたとき、古い中身を見せない。
   staleTime: 0,
   // マップと習熟度は1つの結果にまとめる。片方だけ古い組み合わせを出さない（RULE-005）。
-  loader: async ({ params }) => {
+  loader: async ({ params, deps }) => {
     const retry = takeLoginRetry();
     const [loaded, profile, overrides] = await Promise.all([
-      loadMap(params.mapId, retry),
+      loadMap(params.mapId, deps.key, retry),
       requestJson<MapProfile>("/api/v1/learning-profile", fetch, retry),
       requestJson<MasteryOverrides>("/api/v1/mastery-overrides", fetch, retry),
     ]);

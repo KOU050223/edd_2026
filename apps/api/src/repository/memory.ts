@@ -819,6 +819,7 @@ export class InMemoryLearningMapRepository implements LearningMapRepository {
       visibility: "private",
       latestVersion: null,
       revision: 0,
+      shareKey: null,
       versions: [],
       createdAt: params.nowIso,
       updatedAt: params.nowIso,
@@ -900,6 +901,7 @@ export class InMemoryLearningMapRepository implements LearningMapRepository {
       visibility: copy.visibility,
       latestVersion: copy.latestVersion,
       revision: copy.revision,
+      shareKey: copy.shareKey,
       createdAt: copy.createdAt,
       updatedAt: copy.updatedAt,
       nodes: copy.nodes,
@@ -949,6 +951,7 @@ export class InMemoryLearningMapRepository implements LearningMapRepository {
       expectedLatest: number | null;
       expectedRevision: number;
       scope: ShareScope;
+      shareKey: string | null;
       content: string;
       contentHash: string;
       checksIncluded: boolean;
@@ -979,15 +982,22 @@ export class InMemoryLearningMapRepository implements LearningMapRepository {
     });
     map.latestVersion = version;
     map.visibility = params.scope;
+    map.shareKey = params.shareKey;
     return Promise.resolve(true);
   }
 
-  setShareScope(ownerUserId: string, mapId: string, scope: ShareScope | null): Promise<boolean> {
+  setShareScope(
+    ownerUserId: string,
+    mapId: string,
+    scope: ShareScope | null,
+    shareKey: string | null,
+  ): Promise<boolean> {
     const map = this.owned(ownerUserId, mapId);
     if (map === undefined || (scope !== null && map.latestVersion === null)) {
       return Promise.resolve(false);
     }
     map.visibility = scope ?? "private";
+    map.shareKey = shareKey;
     return Promise.resolve(true);
   }
 
@@ -1076,6 +1086,7 @@ export class InMemoryLearningMapRepository implements LearningMapRepository {
       id: map.id,
       ownerUserId: map.ownerUserId,
       visibility: map.visibility,
+      shareKey: map.shareKey,
       latest: latest === undefined ? null : toStoredVersion(latest),
     });
   }

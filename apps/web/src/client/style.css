@@ -1645,3 +1645,15 @@ button.link.danger {
     grid-template-columns: 1fr;
   }
 }
+.share-link {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  font-size: 14px;
+}
+.share-link input {
+  flex: 1;
+  min-width: 0;
+  max-width: 520px;
+}

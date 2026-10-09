@@ -643,6 +643,8 @@ export interface StoredLearningMap extends StoredMapContent {
    * 共有へ上げる・復元するときに、読んだときから変わっていないことを確かめるのに使う。
    */
   revision: number;
+  /** 「リンクだけ」の共有の鍵（0019、決定 U1）。範囲が `link` のときだけ持つ。 */
+  shareKey: string | null;
   createdAt: string;
   updatedAt: string;
   /** Concept ID → 項目（保存した順）。項目の無いノードは含まない。 */
@@ -687,6 +689,8 @@ export interface StoredSharedMap {
   id: string;
   ownerUserId: string;
   visibility: LearningMapVisibility;
+  /** 範囲が `link` のときの鍵。 */
+  shareKey: string | null;
   /** いちばん新しい版。まだ一度も上げていなければ `null`。 */
   latest: StoredMapVersion | null;
 }
@@ -781,6 +785,8 @@ export interface LearningMapRepository {
       expectedLatest: number | null;
       expectedRevision: number;
       scope: ShareScope;
+      /** 範囲が `link` なら鍵、それ以外は `null`。 */
+      shareKey: string | null;
       content: string;
       contentHash: string;
       checksIncluded: boolean;
@@ -795,7 +801,13 @@ export interface LearningMapRepository {
    * 共有へ切り替える（`null` 以外）のは、版が1つ以上あるときだけ。
    * @returns 自分のマップが無いか、版が無いのに共有へ切り替えようとしたら `false`。
    */
-  setShareScope(ownerUserId: string, mapId: string, scope: ShareScope | null): Promise<boolean>;
+  setShareScope(
+    ownerUserId: string,
+    mapId: string,
+    scope: ShareScope | null,
+    /** 範囲が `link` なら鍵、それ以外は `null`。 */
+    shareKey: string | null,
+  ): Promise<boolean>;
 
   /** 自分のマップの版の一覧（新しい版から、中身は含めない）。自分のマップでなければ `null`。 */
   listVersions(ownerUserId: string, mapId: string): Promise<MapVersionMeta[] | null>;

@@ -52,6 +52,7 @@ import {
   type SaveLearningMapResponse,
   type SharedMapContentView,
   type SharedMapView,
+  type ShareScope,
 } from "../contract/learning-maps.js";
 import { newMapId, resolveMapContent } from "../maps/content.js";
 import { generateLearningMap, type MapGenerationDeps } from "../maps/generate.js";
@@ -149,6 +150,31 @@ function parseVersionParam(raw: string): number {
     throw new HTTPException(404, { message: "version not found" });
   }
   return version;
+}
+
+/**
+ * 「リンクだけ」の鍵（#244 の決定 U1）。すでに「リンクだけ」で共有していれば今の鍵を使い続け、
+ * 「リンクだけ」へ切り替えるときは作り直す（共有をやめて再開すると前のリンクは使えない）。
+ * 32 文字（英小文字と数字）で、推測できない長さにする。
+ */
+function shareKeyFor(
+  deps: LearningMapsDeps,
+  map: StoredLearningMap,
+  scope: ShareScope | null,
+): string | null {
+  if (scope !== "link") return null;
+  if (map.visibility === "link" && map.shareKey !== null) return map.shareKey;
+  return Array.from({ length: 4 }, () => deps.newKey()).join("");
+}
+
+/** 鍵を比べる。比べる時間から一致した長さが分からないよう、最後まで比べる。 */
+function sameKey(given: string | undefined, expected: string | null): boolean {
+  if (given === undefined || expected === null || given.length !== expected.length) return false;
+  let diff = 0;
+  for (let index = 0; index < expected.length; index++) {
+    diff |= given.charCodeAt(index) ^ expected.charCodeAt(index);
+  }
+  return diff === 0;
 }
 
 function toVersionMeta(version: StoredMapVersion): MapVersionMeta {
@@ -311,6 +337,7 @@ export function createLearningMapsRoute(resolve: LearningMapsDepsResolver) {
       description: map.description,
       visibility: map.visibility,
       latestVersion: map.latestVersion,
+      shareKey: map.shareKey,
       createdAt: map.createdAt,
       updatedAt: map.updatedAt,
       nodes: map.nodes.map((node) =>
@@ -684,6 +711,7 @@ export function createLearningMapsRoute(resolve: LearningMapsDepsResolver) {
       expectedLatest: input.baseVersion,
       expectedRevision: map.revision,
       scope: input.visibility,
+      shareKey: shareKeyFor(deps, map, input.visibility),
       content: serializeSnapshot(snapshot),
       contentHash,
       checksIncluded: input.includeChecks,
@@ -720,7 +748,9 @@ export function createLearningMapsRoute(resolve: LearningMapsDepsResolver) {
     const scope = visibility === "private" ? null : visibility;
     if (scope !== null && map.latestVersion === null) conflict("not_published");
     // 読んでから書くまでの間に、別の端末でマップが消された。
-    if (!(await deps.maps.setShareScope(userId, mapId, scope))) notFound();
+    if (!(await deps.maps.setShareScope(userId, mapId, scope, shareKeyFor(deps, map, scope)))) {
+      notFound();
+    }
     return c.json({ visibility }, 200);
   });
 
@@ -807,14 +837,19 @@ export function createLearningMapsRoute(resolve: LearningMapsDepsResolver) {
     return c.json(body, 200, { "cache-control": "no-store" });
   });
 
-  // 共有の側のいちばん新しい版（#244）。リンクを知っている人（link）と全員（public）が読める。
-  // 共有されていないマップは、持ち主にも 404 にする（持ち主は手元のマップを読む）。
+  // 共有の側のいちばん新しい版（#244）。リンクを知っている人（link、`?key=` の鍵が合う人）と
+  // 全員（public）が読める。共有されていないマップは、持ち主にも 404 にする（持ち主は手元のマップを読む）。
+  // 鍵が合わないときも、マップがあることを隠すため 404 にする（決定 U1）。
   app.get("/shared-maps/:id", async (c) => {
     const userId = c.get("user").userId;
     const mapId = c.req.param("id");
     const deps = resolve(c.env);
     const shared = await deps.maps.getShared(mapId);
     if (shared === null || shared.visibility === "private" || shared.latest === null) notFound();
+    const isOwner = shared.ownerUserId === userId;
+    if (shared.visibility === "link" && !isOwner && !sameKey(c.req.query("key"), shared.shareKey)) {
+      notFound();
+    }
     const snapshot = snapshotOf(mapId, shared.latest);
     const content = await contentViewOf(deps, snapshot);
     const body: SharedMapView = {
@@ -822,7 +857,7 @@ export function createLearningMapsRoute(resolve: LearningMapsDepsResolver) {
       visibility: shared.visibility,
       version: shared.latest.version,
       publishedAt: shared.latest.createdAt,
-      isOwner: shared.ownerUserId === userId,
+      isOwner,
       title: content.title,
       description: content.description,
       nodes: content.nodes,

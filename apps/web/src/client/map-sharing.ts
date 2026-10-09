@@ -274,12 +274,20 @@ export function fetchSharedMaps(
   return requestJson(SHARED_MAPS_PATH, fetcher, retry);
 }
 
+/** 共有の側の版。「リンクだけ」のマップは鍵が要る（決定 U1）。 */
 export function fetchSharedMap(
   mapId: string,
+  key?: string,
   fetcher: typeof fetch = fetch,
   retry: boolean | number = false,
 ): Promise<SharedMapView> {
-  return requestJson(`${SHARED_MAPS_PATH}/${encodeURIComponent(mapId)}`, fetcher, retry);
+  const query = key === undefined ? "" : `?key=${encodeURIComponent(key)}`;
+  return requestJson(`${SHARED_MAPS_PATH}/${encodeURIComponent(mapId)}${query}`, fetcher, retry);
+}
+
+/** 「リンクだけ」の共有のリンク。`origin` は画面の origin（`window.location.origin`）。 */
+export function shareLinkOf(origin: string, mapId: string, shareKey: string): string {
+  return `${origin}/maps/${encodeURIComponent(mapId)}?key=${encodeURIComponent(shareKey)}`;
 }
 
 /** 履歴の1行に添える要約。何も変わっていなければ「変更なし」。 */

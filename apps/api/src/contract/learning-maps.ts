@@ -197,6 +197,11 @@ export type CreationChecksStatus = "pending" | "done" | "exhausted";
 
 /** `GET /v1/learning-maps/:id` の応答。ノードは保存した順（学習の順）に並ぶ。 */
 export interface LearningMapView extends Omit<LearningMapSummary, "nodeCount"> {
+  /**
+   * 範囲が「リンクだけ」のときの鍵（#244 の決定 U1）。持ち主だけが受け取り、
+   * `/maps/<マップ ID>?key=<鍵>` のリンクを組み立てる。ほかの範囲では `null`。
+   */
+  shareKey: string | null;
   nodes: LearningMapNodeView[];
   edges: LearningMapEdge[];
   /** AI で作るときに「確認問題も作る」を選んだマップだけが持つ（#247）。 */

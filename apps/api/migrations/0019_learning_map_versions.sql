@@ -13,6 +13,15 @@
 -- 共有をやめても版は残す（再び共有したら続きの番号になる）。
 ALTER TABLE learning_maps ADD COLUMN share_scope TEXT CHECK (share_scope IN ('link', 'public'));
 
+-- ## learning_maps.share_key
+--
+-- 「リンクを知っている人だけ」の共有の鍵（2026-10-09 の決定 U1）。リンクは `/maps/<マップ ID>?key=<鍵>` で、
+-- 鍵が合わなければ持ち主以外には見せない。手作りのノードの ID（`<マップ ID>.<識別子>`）は参照や
+-- フォークで別の共有マップに出るので、マップ ID を知っていることを「リンクを知っている」とはみなさない。
+-- share_scope が link のときだけ持ち、ほかの範囲では NULL。「リンクだけ」へ切り替えるたびに作り直す
+-- （共有をやめて再開すると前のリンクは使えない）。そろえるのは書く側（repository/d1.ts）の責務。
+ALTER TABLE learning_maps ADD COLUMN share_key TEXT;
+
 -- ## learning_maps.revision
 --
 -- 手元のマップの書き換えの回数。中身（題名・説明・ノード・線）か「理解すること」を書き換えるたびに

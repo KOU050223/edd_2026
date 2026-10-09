@@ -69,6 +69,8 @@ export interface LearningMapSummary {
 export type CreationChecksStatus = "pending" | "done" | "exhausted";
 
 export interface LearningMapView extends Omit<LearningMapSummary, "nodeCount"> {
+  /** 範囲が「リンクだけ」のときの鍵（#244 の決定 U1）。リンクは `/maps/<ID>?key=<鍵>`。 */
+  shareKey: string | null;
   nodes: LearningMapNodeView[];
   edges: { from: string; to: string }[];
   creationChecks?: { status: CreationChecksStatus };

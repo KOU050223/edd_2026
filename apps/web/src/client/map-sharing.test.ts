@@ -5,8 +5,10 @@ import {
   describeSummary,
   fetchPublishPreview,
   publishLearningMap,
+  fetchSharedMap,
   restoreMapVersion,
   setMapVisibility,
+  shareLinkOf,
   shareConflictText,
   ShareConflictError,
 } from "./map-sharing.js";
@@ -93,4 +95,16 @@ test("履歴の要約と変わったところの文", () => {
   ).toBe("変更なし");
   expect(describeChangedFields(["label", "objectives"])).toBe("表示名・理解すること");
   expect(shareConflictText(new ShareConflictError("unknown_code"))).toContain("unknown_code");
+});
+
+test("「リンクだけ」のマップは鍵を付けて読み、リンクにも鍵を載せる", async () => {
+  const withKey = respond(200, {});
+  await fetchSharedMap("mrust0001", "abc", withKey.fetcher);
+  expect(withKey.calls[0]!.url).toBe("/api/v1/shared-maps/mrust0001?key=abc");
+  const withoutKey = respond(200, {});
+  await fetchSharedMap("mrust0001", undefined, withoutKey.fetcher);
+  expect(withoutKey.calls[0]!.url).toBe("/api/v1/shared-maps/mrust0001");
+  expect(shareLinkOf("https://example.test", "mrust0001", "abc")).toBe(
+    "https://example.test/maps/mrust0001?key=abc",
+  );
 });

@@ -140,6 +140,15 @@ async function publish(
   );
 }
 
+/**
+ * 持ち主以外として共有の側を読む。「リンクだけ」なら持ち主の画面から鍵を取って付ける（決定 U1）。
+ */
+async function readShared(mapId: string, token = "token-b") {
+  const own = await json<LearningMapView>(await send("GET", `/learning-maps/${mapId}`, "token-a"));
+  const query = own.shareKey === null ? "" : `?key=${own.shareKey}`;
+  return send("GET", `/shared-maps/${mapId}${query}`, token);
+}
+
 /** ノードの表示名を変えて手元を保存する。 */
 async function rename(map: LearningMapView, label: string) {
   return json<SaveLearningMapResponse>(
@@ -232,9 +241,7 @@ describe("共有へ上げる（T1-a）", () => {
     expect(own.visibility).toBe("link");
     expect(own.latestVersion).toBe(1);
 
-    const shared = await json<SharedMapView>(
-      await send("GET", `/shared-maps/${map.id}`, "token-b"),
-    );
+    const shared = await json<SharedMapView>(await readShared(map.id));
     expect(shared).toMatchObject({
       id: map.id,
       visibility: "link",
@@ -252,9 +259,7 @@ describe("共有へ上げる（T1-a）", () => {
     await publish(map.id);
     const renamed = await rename(map, "束縛");
 
-    const shared = await json<SharedMapView>(
-      await send("GET", `/shared-maps/${map.id}`, "token-b"),
-    );
+    const shared = await json<SharedMapView>(await readShared(map.id));
     expect(shared.nodes[0]).toMatchObject({ label: "変数" });
 
     const shown = await json<MapPublishPreview>(await preview(map.id));
@@ -270,9 +275,7 @@ describe("共有へ上げる（T1-a）", () => {
 
     const second = await publish(renamed.map.id);
     expect(second.version).toMatchObject({ version: 2, summary: { changed: 1 } });
-    const updated = await json<SharedMapView>(
-      await send("GET", `/shared-maps/${map.id}`, "token-b"),
-    );
+    const updated = await json<SharedMapView>(await readShared(map.id));
     expect(updated).toMatchObject({ version: 2 });
     expect(updated.nodes[0]).toMatchObject({ label: "束縛" });
   });
@@ -337,7 +340,7 @@ describe("共有へ上げる（T1-a）", () => {
       send("DELETE", `/learning-maps/${map.id}`, "token-b"),
     ];
     for (const response of await Promise.all(attempts)) expect(response.status).toBe(404);
-    expect((await send("GET", `/shared-maps/${map.id}`, "token-b")).status).toBe(200);
+    expect((await readShared(map.id)).status).toBe(200);
   });
 
   test("共有に含めた作成時の確認問題は版に写り、あとで消しても版は変わらない", async () => {
@@ -345,10 +348,7 @@ describe("共有へ上げる（T1-a）", () => {
     const node = map.nodes[1]!.conceptId;
     await putCreationCheck(map.id, node);
     await publish(map.id);
-    expect(
-      (await json<SharedMapView>(await send("GET", `/shared-maps/${map.id}`, "token-b")))
-        .checkCount,
-    ).toBe(1);
+    expect((await json<SharedMapView>(await readShared(map.id))).checkCount).toBe(1);
 
     await checks.deleteAllByUser("user-a");
     const version = await json<MapVersionResponse>(
@@ -363,10 +363,7 @@ describe("共有へ上げる（T1-a）", () => {
     await putCreationCheck(map.id, map.nodes[1]!.conceptId);
     const published = await publish(map.id, "link", false);
     expect(published.version.checksIncluded).toBe(false);
-    expect(
-      (await json<SharedMapView>(await send("GET", `/shared-maps/${map.id}`, "token-b")))
-        .checkCount,
-    ).toBe(0);
+    expect((await json<SharedMapView>(await readShared(map.id))).checkCount).toBe(0);
     // 次の確認画面の既定は、前の版で選んだもの。
     expect((await json<MapPublishPreview>(await preview(map.id))).includeChecks).toBe(false);
   });
@@ -391,9 +388,7 @@ describe("共有へ上げる（T1-a）", () => {
     // 元のマップを消しても、共有の側には上げた時点の中身が残る。
     expect((await send("DELETE", `/learning-maps/${other.map.id}`, "token-a")).status).toBe(204);
 
-    const shared = await json<SharedMapView>(
-      await send("GET", `/shared-maps/${map.id}`, "token-b"),
-    );
+    const shared = await json<SharedMapView>(await readShared(map.id));
     expect(shared.nodes).toEqual([
       {
         kind: "reference",
@@ -446,6 +441,7 @@ describe("手元の書き換えとの競合（PR #294 のレビュー）", () =>
         expectedLatest: 2,
         expectedRevision: read.revision,
         scope: "link",
+        shareKey: "k".repeat(32),
         content: "{}",
         contentHash: "0".repeat(64),
         checksIncluded: false,
@@ -498,9 +494,7 @@ describe("共有の範囲（T5）", () => {
     await json(
       await send("PUT", `/learning-maps/${map.id}/visibility`, "token-a", { visibility: "public" }),
     );
-    const shared = await json<SharedMapView>(
-      await send("GET", `/shared-maps/${map.id}`, "token-b"),
-    );
+    const shared = await json<SharedMapView>(await readShared(map.id));
     expect(shared).toMatchObject({ visibility: "public", version: 1 });
   });
 
@@ -537,6 +531,79 @@ describe("共有の範囲（T5）", () => {
       },
       expect.objectContaining({ id: first.map.id, title: "一つ目" }),
     ]);
+  });
+});
+
+describe("「リンクだけ」の鍵（決定 U1）", () => {
+  test("鍵が合わなければ持ち主以外には見せず、持ち主は鍵なしで読める", async () => {
+    const { map } = await create();
+    await publish(map.id, "link");
+    const own = await json<LearningMapView>(
+      await send("GET", `/learning-maps/${map.id}`, "token-a"),
+    );
+    expect(own.shareKey).toMatch(/^[a-z0-9]{32}$/);
+
+    expect((await send("GET", `/shared-maps/${map.id}`, "token-b")).status).toBe(404);
+    expect((await send("GET", `/shared-maps/${map.id}?key=wrong`, "token-b")).status).toBe(404);
+    const wrongSameLength = "x".repeat(32);
+    expect(
+      (await send("GET", `/shared-maps/${map.id}?key=${wrongSameLength}`, "token-b")).status,
+    ).toBe(404);
+    expect(
+      (await send("GET", `/shared-maps/${map.id}?key=${own.shareKey!}`, "token-b")).status,
+    ).toBe(200);
+    expect((await send("GET", `/shared-maps/${map.id}`, "token-a")).status).toBe(200);
+  });
+
+  test("「リンクだけ」のまま版を上げても鍵は変わらず、切り替え直すと作り直す", async () => {
+    const { map } = await create();
+    await publish(map.id, "link");
+    const keyOf = async () =>
+      (await json<LearningMapView>(await send("GET", `/learning-maps/${map.id}`, "token-a")))
+        .shareKey;
+    const first = await keyOf();
+    await rename(map, "束縛");
+    await publish(map.id, "link");
+    expect(await keyOf()).toBe(first);
+
+    await json(
+      await send("PUT", `/learning-maps/${map.id}/visibility`, "token-a", { visibility: "public" }),
+    );
+    expect(await keyOf()).toBeNull();
+    await json(
+      await send("PUT", `/learning-maps/${map.id}/visibility`, "token-a", { visibility: "link" }),
+    );
+    const second = await keyOf();
+    expect(second).toMatch(/^[a-z0-9]{32}$/);
+    expect(second).not.toBe(first);
+    // 前のリンクは使えない。
+    expect((await send("GET", `/shared-maps/${map.id}?key=${first!}`, "token-b")).status).toBe(404);
+
+    await json(
+      await send("PUT", `/learning-maps/${map.id}/visibility`, "token-a", {
+        visibility: "private",
+      }),
+    );
+    expect(await keyOf()).toBeNull();
+  });
+
+  test("全員に共有したマップの参照からマップ ID が分かっても、「リンクだけ」のマップは開けない", async () => {
+    const hidden = await create({
+      title: "リンクだけ",
+      nodes: [{ kind: "own", ref: "new:x", label: "借用", summary: "参照を貸す。" }],
+    });
+    await publish(hidden.map.id, "link");
+    const borrowed = hidden.map.nodes[0]!.conceptId;
+    const { map } = await create({
+      title: "全員",
+      nodes: [{ kind: "reference", conceptId: borrowed }],
+    });
+    await publish(map.id, "public");
+
+    const shown = await json<SharedMapView>(await send("GET", `/shared-maps/${map.id}`, "token-b"));
+    const leaked = shown.nodes[0]!.conceptId.split(".")[0]!;
+    expect(leaked).toBe(hidden.map.id);
+    expect((await send("GET", `/shared-maps/${leaked}`, "token-b")).status).toBe(404);
   });
 });
 
@@ -607,9 +674,7 @@ describe("版の履歴と復元（T2）", () => {
     expect((await checks.listAllByUser("user-a")).map((check) => check.objectiveId)).toEqual([]);
 
     // 取り込んだ人には新しい版として届く。
-    const shared = await json<SharedMapView>(
-      await send("GET", `/shared-maps/${map.id}`, "token-b"),
-    );
+    const shared = await json<SharedMapView>(await readShared(map.id));
     expect(shared).toMatchObject({ version: 3 });
     expect(shared.nodes[0]).toMatchObject({ label: "変数" });
   });
