@@ -44,6 +44,8 @@ function HistoryPage() {
 
   const open = (version: number) => {
     if (opened?.version === version) {
+      // 読み込み中の応答があっても、閉じたものを開き直さない（PR #294 のレビュー）。
+      ++latestRequest.current;
       setOpened(undefined);
       return;
     }

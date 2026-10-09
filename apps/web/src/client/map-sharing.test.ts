@@ -75,16 +75,18 @@ test("履歴の要約と変わったところの文", () => {
       removed: 0,
       changed: 1,
       titleChanged: true,
+      reordered: true,
       checksAdded: 1,
       checksRemoved: 0,
     }),
-  ).toBe("題名・説明・2 ノードを追加・1 ノードを変更・確認問題 +1 / −0");
+  ).toBe("題名・説明・2 ノードを追加・1 ノードを変更・並びを変更・確認問題 +1 / −0");
   expect(
     describeSummary({
       added: 0,
       removed: 0,
       changed: 0,
       titleChanged: false,
+      reordered: false,
       checksAdded: 0,
       checksRemoved: 0,
     }),

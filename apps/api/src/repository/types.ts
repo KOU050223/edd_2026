@@ -638,6 +638,11 @@ export interface StoredLearningMap extends StoredMapContent {
   visibility: LearningMapVisibility;
   /** 共有の側のいちばん新しい版の番号（#244）。まだ一度も上げていなければ `null`。 */
   latestVersion: number | null;
+  /**
+   * 手元のマップの書き換えの回数（migrations/0019 の revision）。中身か項目を書き換えるたびに増える。
+   * 共有へ上げる・復元するときに、読んだときから変わっていないことを確かめるのに使う。
+   */
+  revision: number;
   createdAt: string;
   updatedAt: string;
   /** Concept ID → 項目（保存した順）。項目の無いノードは含まない。 */
@@ -763,8 +768,9 @@ export interface LearningMapRepository {
   /**
    * 共有の新しい版を足し、共有の範囲を `scope` にする（#244 の T1-a）。
    *
-   * いちばん新しい版が `expectedLatest`（まだ版が無ければ `null`）のときだけ書く。
-   * 確認画面を見たあとに別の端末で上げられていたら、何も書かず `false` を返す。
+   * いちばん新しい版が `expectedLatest`（まだ版が無ければ `null`）で、手元のマップの
+   * 書き換えの回数が `expectedRevision` のときだけ書く。中身を読んだあとに別の端末で
+   * 上げられた・手元が直されたら、何も書かず `false` を返す。
    * 版の番号は `expectedLatest + 1`（無ければ 1）。判定と書き込みは1つのトランザクションで行う。
    * 自分のマップでなければ `false`。
    */
@@ -773,6 +779,7 @@ export interface LearningMapRepository {
     mapId: string,
     params: {
       expectedLatest: number | null;
+      expectedRevision: number;
       scope: ShareScope;
       content: string;
       contentHash: string;
@@ -805,7 +812,8 @@ export interface LearningMapRepository {
    * 確認問題も消える（{@link replaceObjectives} と同じ扱い）。消えるノードの確認問題も消える
    * （{@link replace} と同じ）。
    *
-   * いちばん新しい版が `expectedLatest` のときだけ書く。違えば何も書かず `false`。
+   * いちばん新しい版が `expectedLatest` で、手元のマップの書き換えの回数が `expectedRevision` の
+   * ときだけ書く。違えば何も書かず `false`（読んだあとに手元で直した分を黙って消さない）。
    */
   restoreVersion(
     ownerUserId: string,
@@ -813,6 +821,7 @@ export interface LearningMapRepository {
     params: {
       fromVersion: number;
       expectedLatest: number;
+      expectedRevision: number;
       content: StoredMapContent;
       objectives: readonly StoredLearningObjective[];
       summary: MapVersionSummary;

@@ -13,6 +13,14 @@
 -- 共有をやめても版は残す（再び共有したら続きの番号になる）。
 ALTER TABLE learning_maps ADD COLUMN share_scope TEXT CHECK (share_scope IN ('link', 'public'));
 
+-- ## learning_maps.revision
+--
+-- 手元のマップの書き換えの回数。中身（題名・説明・ノード・線）か「理解すること」を書き換えるたびに
+-- 1 つ増やす。共有へ上げる・復元するときに、読んだときの値と同じときだけ書く
+-- （読んでから書くまでの間に別の画面で手元が直されたら、確かめていない中身を上げない・
+-- 直した分を復元で黙って消さない。PR #294 のレビュー）。
+ALTER TABLE learning_maps ADD COLUMN revision INTEGER NOT NULL DEFAULT 0;
+
 -- 全員の一覧（public）を引く。
 CREATE INDEX idx_learning_maps_share_scope ON learning_maps (share_scope)
   WHERE share_scope IS NOT NULL;

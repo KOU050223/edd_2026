@@ -63,9 +63,33 @@ describe("diffContents", () => {
       removed: 1,
       changed: 2,
       titleChanged: true,
+      reordered: false,
       checksAdded: 0,
       checksRemoved: 0,
     });
+  });
+
+  test("並びだけを変えても差分になる", () => {
+    const reversed = {
+      ...structuredClone(BASE),
+      nodes: [...structuredClone(BASE).nodes].reverse(),
+    };
+    const diff = diffContents(BASE, reversed);
+    expect(diff.reordered).toBe(true);
+    expect(diff.changed).toEqual([]);
+    expect(isEmptyDiff(diff)).toBe(false);
+    // 足した・消したノードで位置がずれただけなら、並びの変更にしない。
+    const shifted = { ...structuredClone(BASE), nodes: structuredClone(BASE).nodes.slice(1) };
+    expect(diffContents(BASE, shifted).reordered).toBe(false);
+  });
+
+  test("確認問題はキーの順に依らずに比べる", () => {
+    const original = personalCheck("m1.b", "m1.b:x");
+    const { objectiveId, ...rest } = original;
+    // D1 から読んだ組は level の後に objectiveId が来る。
+    const reorderedKeys = { ...rest, objectiveId } as typeof original;
+    const diff = diffContents(BASE, { ...structuredClone(BASE), checks: [reorderedKeys] });
+    expect(diff.checks).toEqual({ added: [], removed: [] });
   });
 
   test("確認問題は中身が変わったら、消して足したものとして数える", () => {

@@ -57,6 +57,8 @@ export interface LearningMapDiff {
   added: LearningMapNodeView[];
   removed: LearningMapNodeView[];
   changed: MapNodeChange[];
+  /** 両方にあるノードの並び（学習の順）が変わったか。 */
+  reordered: boolean;
   checks: { added: PersonalConceptCheck[]; removed: PersonalConceptCheck[] };
 }
 
@@ -65,6 +67,7 @@ export interface MapVersionSummary {
   removed: number;
   changed: number;
   titleChanged: boolean;
+  reordered: boolean;
   checksAdded: number;
   checksRemoved: number;
 }
@@ -134,7 +137,7 @@ export function shareConflictText(error: ShareConflictError): string {
     case "content_changed":
       return "確認のあとにマップが変わりました。変わった中身を表示し直したので、もう一度確かめてください。";
     case "version_conflict":
-      return "別の画面で先に版が増えました。表示し直したので、もう一度確かめてください。";
+      return "別の画面で版が増えたか、手元のマップが直されました。表示し直したので、もう一度確かめてください。";
     case "no_changes":
       return "前の版から中身が変わっていないので、新しい版は作りません。";
     case "not_published":
@@ -286,6 +289,7 @@ export function describeSummary(summary: MapVersionSummary): string {
     summary.added > 0 ? `${String(summary.added)} ノードを追加` : undefined,
     summary.removed > 0 ? `${String(summary.removed)} ノードを削除` : undefined,
     summary.changed > 0 ? `${String(summary.changed)} ノードを変更` : undefined,
+    summary.reordered ? "並びを変更" : undefined,
     summary.checksAdded + summary.checksRemoved > 0
       ? `確認問題 +${String(summary.checksAdded)} / −${String(summary.checksRemoved)}`
       : undefined,
@@ -319,6 +323,7 @@ export function isEmptyDiff(diff: LearningMapDiff): boolean {
     diff.added.length === 0 &&
     diff.removed.length === 0 &&
     diff.changed.length === 0 &&
+    !diff.reordered &&
     diff.checks.added.length === 0 &&
     diff.checks.removed.length === 0
   );

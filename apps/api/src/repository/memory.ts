@@ -818,6 +818,7 @@ export class InMemoryLearningMapRepository implements LearningMapRepository {
       ownerUserId,
       visibility: "private",
       latestVersion: null,
+      revision: 0,
       versions: [],
       createdAt: params.nowIso,
       updatedAt: params.nowIso,
@@ -898,6 +899,7 @@ export class InMemoryLearningMapRepository implements LearningMapRepository {
       description: copy.description,
       visibility: copy.visibility,
       latestVersion: copy.latestVersion,
+      revision: copy.revision,
       createdAt: copy.createdAt,
       updatedAt: copy.updatedAt,
       nodes: copy.nodes,
@@ -935,6 +937,7 @@ export class InMemoryLearningMapRepository implements LearningMapRepository {
       edges,
       updatedAt: now.nowIso,
       updatedAtMs: now.nowMs,
+      revision: map.revision + 1,
     });
     return Promise.resolve(true);
   }
@@ -944,6 +947,7 @@ export class InMemoryLearningMapRepository implements LearningMapRepository {
     mapId: string,
     params: {
       expectedLatest: number | null;
+      expectedRevision: number;
       scope: ShareScope;
       content: string;
       contentHash: string;
@@ -954,7 +958,11 @@ export class InMemoryLearningMapRepository implements LearningMapRepository {
     },
   ): Promise<boolean> {
     const map = this.owned(ownerUserId, mapId);
-    if (map === undefined || map.latestVersion !== params.expectedLatest) {
+    if (
+      map === undefined ||
+      map.latestVersion !== params.expectedLatest ||
+      map.revision !== params.expectedRevision
+    ) {
       return Promise.resolve(false);
     }
     const version = (params.expectedLatest ?? 0) + 1;
@@ -1008,6 +1016,7 @@ export class InMemoryLearningMapRepository implements LearningMapRepository {
     params: {
       fromVersion: number;
       expectedLatest: number;
+      expectedRevision: number;
       content: StoredMapContent;
       objectives: readonly StoredLearningObjective[];
       summary: MapVersionSummary;
@@ -1017,7 +1026,12 @@ export class InMemoryLearningMapRepository implements LearningMapRepository {
   ): Promise<boolean> {
     const map = this.owned(ownerUserId, mapId);
     const from = map?.versions.find((candidate) => candidate.version === params.fromVersion);
-    if (map === undefined || from === undefined || map.latestVersion !== params.expectedLatest) {
+    if (
+      map === undefined ||
+      from === undefined ||
+      map.latestVersion !== params.expectedLatest ||
+      map.revision !== params.expectedRevision
+    ) {
       return false;
     }
     await this.replace(ownerUserId, mapId, params.content, params);
@@ -1139,6 +1153,7 @@ export class InMemoryLearningMapRepository implements LearningMapRepository {
       );
     map.updatedAt = params.nowIso;
     map.updatedAtMs = params.nowMs;
+    map.revision += 1;
     return Promise.resolve(true);
   }
 

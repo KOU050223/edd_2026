@@ -354,6 +354,8 @@ export interface LearningMapDiff {
   added: LearningMapNodeView[];
   removed: LearningMapNodeView[];
   changed: MapNodeChange[];
+  /** 両方にあるノードの並び（学習の順）が変わったか。並びだけを変えても新しい版になる。 */
+  reordered: boolean;
   /** 確認問題は Concept と狙いの組で比べ、中身が変わったものは消して足したものとして数える。 */
   checks: { added: PersonalConceptCheck[]; removed: PersonalConceptCheck[] };
 }
@@ -364,6 +366,7 @@ export interface MapVersionSummary {
   removed: number;
   changed: number;
   titleChanged: boolean;
+  reordered: boolean;
   checksAdded: number;
   checksRemoved: number;
 }

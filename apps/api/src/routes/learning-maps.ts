@@ -678,8 +678,11 @@ export function createLearningMapsRoute(resolve: LearningMapsDepsResolver) {
     ]);
     const summary = summarizeDiff(diffContents(before, content));
     const nowIso = deps.nowIso();
+    // 中身を読んだときの手元のまま上げる。読んだあとに別の画面で手元が直されたら、
+    // 確かめた中身と今の手元が食い違うので上げない（PR #294 のレビュー）。
     const published = await deps.maps.publishVersion(userId, mapId, {
       expectedLatest: input.baseVersion,
+      expectedRevision: map.revision,
       scope: input.visibility,
       content: serializeSnapshot(snapshot),
       contentHash,
@@ -688,8 +691,9 @@ export function createLearningMapsRoute(resolve: LearningMapsDepsResolver) {
       nowIso,
       nowMs: deps.nowMs(),
     });
-    // 読んでから書くまでの間に、別の端末で上げられた（またはマップが消された）。
-    if (!published) conflict("version_conflict");
+    // 読んでから書くまでの間に、別の端末で上げられたか、手元が直された（またはマップが消された）。
+    // どちらかは区別せず、確認画面を読み直させる。
+    if (!published) conflict("content_changed");
     const body: PublishLearningMapResponse = {
       version: {
         version: (input.baseVersion ?? 0) + 1,
@@ -771,6 +775,8 @@ export function createLearningMapsRoute(resolve: LearningMapsDepsResolver) {
     const restored = await deps.maps.restoreVersion(userId, mapId, {
       fromVersion,
       expectedLatest: baseVersion,
+      // 読んだあとに別の画面で手元が直されたら、その分を黙って消さない（PR #294 のレビュー）。
+      expectedRevision: map.revision,
       content: stored,
       objectives,
       summary,

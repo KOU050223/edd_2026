@@ -282,6 +282,25 @@ function checkKey(check: PersonalConceptCheck): string {
 }
 
 /**
+ * キーの順に依らない JSON。保存した版を読んだ組（スキーマの順）と、D1 から読んだ組
+ * （列から組み立てた順）はキーの順が違うので、そのまま文字列にすると同じ組が違って見える
+ * （PR #294 のレビュー）。配列の順は保つ。
+ */
+function canonicalJson(value: unknown): string {
+  const canonical = (item: unknown): unknown =>
+    Array.isArray(item)
+      ? item.map(canonical)
+      : item !== null && typeof item === "object"
+        ? Object.fromEntries(
+            Object.keys(item)
+              .sort()
+              .map((key) => [key, canonical((item as Record<string, unknown>)[key])]),
+          )
+        : item;
+  return JSON.stringify(canonical(value));
+}
+
+/**
  * 2つの中身の差分。`before` が `null` なら（まだ版が無い）、すべて「足した」になる。
  * ノードは Concept ID で突き合わせる。
  */
@@ -324,11 +343,17 @@ export function diffContents(
     }
   }
   const removed = (before?.nodes ?? []).filter((node) => !afterIds.has(node.conceptId));
+  // 両方にあるノードだけで並びを比べる（足した・消したノードで位置がずれた分は数えない）。
+  const kept = (nodes: readonly LearningMapNodeView[], other: ReadonlySet<string>) =>
+    nodes.map((node) => node.conceptId).filter((conceptId) => other.has(conceptId));
+  const beforeOrder = kept(before?.nodes ?? [], afterIds);
+  const afterOrder = kept(after.nodes, new Set(beforeNodes.keys()));
+  const reordered = beforeOrder.some((conceptId, index) => afterOrder[index] !== conceptId);
 
   const beforeChecks = new Map((before?.checks ?? []).map((check) => [checkKey(check), check]));
   const afterChecks = new Map(after.checks.map((check) => [checkKey(check), check]));
   const sameCheck = (a: PersonalConceptCheck, b: PersonalConceptCheck) =>
-    JSON.stringify(a) === JSON.stringify(b);
+    canonicalJson(a) === canonicalJson(b);
   const checksAdded = after.checks.filter((check) => {
     const old = beforeChecks.get(checkKey(check));
     return old === undefined || !sameCheck(old, check);
@@ -350,6 +375,7 @@ export function diffContents(
     added,
     removed,
     changed,
+    reordered,
     checks: { added: checksAdded, removed: checksRemoved },
   };
 }
@@ -362,6 +388,7 @@ export function isEmptyDiff(diff: LearningMapDiff): boolean {
     diff.added.length === 0 &&
     diff.removed.length === 0 &&
     diff.changed.length === 0 &&
+    !diff.reordered &&
     diff.checks.added.length === 0 &&
     diff.checks.removed.length === 0
   );
@@ -373,6 +400,7 @@ export function summarizeDiff(diff: LearningMapDiff): MapVersionSummary {
     removed: diff.removed.length,
     changed: diff.changed.length,
     titleChanged: diff.title !== null,
+    reordered: diff.reordered,
     checksAdded: diff.checks.added.length,
     checksRemoved: diff.checks.removed.length,
   };

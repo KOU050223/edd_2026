@@ -421,6 +421,58 @@ describe("共有へ上げる（T1-a）", () => {
   });
 });
 
+describe("手元の書き換えとの競合（PR #294 のレビュー）", () => {
+  test("読んだあとに手元が直されたら、上げも復元もしない", async () => {
+    const { map } = await create();
+    await publish(map.id);
+    await rename(map, "束縛");
+    await publish(map.id);
+    const repository = new InMemoryLearningMapRepository(store);
+    const read = (await repository.get("user-a", map.id))!;
+    // 読んだあとに、別の画面で手元を直した。
+    await rename(map, "別の画面");
+
+    const summary = {
+      added: 0,
+      removed: 0,
+      changed: 0,
+      titleChanged: false,
+      reordered: false,
+      checksAdded: 0,
+      checksRemoved: 0,
+    };
+    expect(
+      await repository.publishVersion("user-a", map.id, {
+        expectedLatest: 2,
+        expectedRevision: read.revision,
+        scope: "link",
+        content: "{}",
+        contentHash: "0".repeat(64),
+        checksIncluded: false,
+        summary,
+        nowIso: "2026-10-09T00:00:00.000Z",
+        nowMs: 9,
+      }),
+    ).toBe(false);
+    expect(
+      await repository.restoreVersion("user-a", map.id, {
+        fromVersion: 1,
+        expectedLatest: 2,
+        expectedRevision: read.revision,
+        content: { title: "t", description: "", nodes: [], edges: [] },
+        objectives: [],
+        summary,
+        nowIso: "2026-10-09T00:00:00.000Z",
+        nowMs: 9,
+      }),
+    ).toBe(false);
+    const after = (await repository.get("user-a", map.id))!;
+    expect(after.latestVersion).toBe(2);
+    expect(after.nodes[0]).toMatchObject({ label: "別の画面" });
+    expect(after.revision).toBeGreaterThan(read.revision);
+  });
+});
+
 describe("共有の範囲（T5）", () => {
   test("版が無いうちは範囲だけで共有へ切り替えられない", async () => {
     const { map } = await create();

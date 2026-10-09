@@ -15,23 +15,28 @@ import {
   type SharedMapContentView,
 } from "./map-sharing.js";
 
-function NodeBody({ node }: { node: LearningMapNodeView }) {
-  if (node.kind === "reference") {
-    return (
-      <>
-        <strong>{node.origin?.label ?? MISSING_ORIGIN_LABEL}</strong>
-        <span className="muted">（既存の Concept の参照）</span>
-        {node.origin?.summary && <p className="muted">{node.origin.summary}</p>}
-      </>
-    );
-  }
+/**
+ * ノード1つ。参照のノードも、元の表示名・概要・「理解すること」を省略せずに出す
+ * （持ち主の別のマップのノードを参照していると、その中身も版へ写って出ていくため。PR #294 のレビュー）。
+ */
+function NodeBody({ node, prerequisite }: { node: LearningMapNodeView; prerequisite?: string }) {
+  const shown =
+    node.kind === "own"
+      ? node
+      : {
+          label: node.origin?.label ?? MISSING_ORIGIN_LABEL,
+          summary: node.origin?.summary,
+          objectives: node.origin?.objectives ?? [],
+        };
   return (
     <>
-      <strong>{node.label}</strong>
-      <p className="muted">{node.summary}</p>
-      {node.objectives.length > 0 && (
+      <strong>{shown.label}</strong>
+      {node.kind === "reference" && <span className="muted">（既存の Concept の参照）</span>}
+      {prerequisite !== undefined && <p className="muted">前提: {prerequisite}</p>}
+      {shown.summary && <p className="muted">{shown.summary}</p>}
+      {shown.objectives.length > 0 && (
         <ul className="share-objectives">
-          {node.objectives.map((objective) => (
+          {shown.objectives.map((objective) => (
             <li key={objective.id}>{objective.label}</li>
           ))}
         </ul>
@@ -69,6 +74,8 @@ function labelLookup(nodes: readonly LearningMapNodeView[]) {
 /** 版の中身の全部。 */
 export function MapContentList({ content }: { content: SharedMapContentView }) {
   const labelOf = labelLookup(content.nodes);
+  // 前提は1つのノードにつき1つまで（#242）。
+  const prerequisiteOf = new Map(content.edges.map((edge) => [edge.to, edge.from]));
   return (
     <div className="share-content">
       <p>
@@ -84,11 +91,17 @@ export function MapContentList({ content }: { content: SharedMapContentView }) {
         <p className="muted">ノードはありません。</p>
       ) : (
         <ol className="share-nodes">
-          {content.nodes.map((node) => (
-            <li key={node.conceptId}>
-              <NodeBody node={node} />
-            </li>
-          ))}
+          {content.nodes.map((node) => {
+            const prerequisite = prerequisiteOf.get(node.conceptId);
+            return (
+              <li key={node.conceptId}>
+                <NodeBody
+                  node={node}
+                  prerequisite={prerequisite === undefined ? "なし" : labelOf(prerequisite)}
+                />
+              </li>
+            );
+          })}
         </ol>
       )}
       <h3>確認問題（{content.checks.length} 組）</h3>
@@ -125,6 +138,11 @@ export function MapDiffList({
         <p>
           <strong>説明:</strong> {diff.description.before || "（なし）"} →{" "}
           {diff.description.after || "（なし）"}
+        </p>
+      )}
+      {diff.reordered && (
+        <p>
+          <strong>ノードの並び（学習の順）を変えました。</strong>
         </p>
       )}
       {diff.added.length > 0 && (

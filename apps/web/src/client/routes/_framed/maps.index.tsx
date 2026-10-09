@@ -102,7 +102,22 @@ function CreateMapForm({ full }: { full: boolean }) {
  * 範囲が「全員」の共有マップ（#244 の T5）。新しく上げた順。作成者の名前は出さない。
  * 評価・検索はスコープ外（#244）。
  */
-function SharedMapList({ maps }: { maps: readonly SharedMapSummary[] }) {
+function SharedMapList({
+  shared,
+}: {
+  shared: { maps: readonly SharedMapSummary[] } | { error: string };
+}) {
+  if ("error" in shared) {
+    return (
+      <section>
+        <h2>みんなの共有マップ</h2>
+        <p className="error-text" role="alert">
+          共有マップの一覧を読めませんでした：{shared.error}
+        </p>
+      </section>
+    );
+  }
+  const { maps } = shared;
   return (
     <section>
       <h2>みんなの共有マップ</h2>
@@ -218,7 +233,7 @@ function MapList() {
           ))}
         </ul>
       )}
-      <SharedMapList maps={shared} />
+      <SharedMapList shared={shared} />
     </>
   );
 }
@@ -226,12 +241,17 @@ function MapList() {
 export const Route = createFileRoute("/_framed/maps/")({
   // 作成・削除のあとに戻ってきたとき、古い一覧を見せない。
   staleTime: 0,
-  // 自分のマップと共有マップの一覧は1つの結果にまとめる（RULE-005）。
+  // 自分のマップと共有マップの一覧は1つの結果にまとめる（RULE-005）。共有マップの一覧が
+  // 読めなくても、自分のマップの作成・削除は使えるようにする。失敗はその場所に出す（握りつぶさない）。
   loader: async () => {
     const retry = takeLoginRetry();
-    const [{ maps }, { maps: shared }] = await Promise.all([
+    const [{ maps }, shared] = await Promise.all([
       fetchLearningMaps(fetch, retry),
-      fetchSharedMaps(fetch, retry),
+      fetchSharedMaps(fetch, retry).catch((error: unknown) => {
+        // セッション切れは画面全体の扱い（ログインへ送る）に任せる。
+        if (error instanceof ApiError && error.kind === "session_expired") throw error;
+        return { error: toErrorText(error) };
+      }),
     ]);
     return { maps, shared };
   },

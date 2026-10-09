@@ -1785,6 +1785,8 @@ interface LearningMapRow {
   visibility: string;
   share_scope: string | null;
   latest_version: number | null;
+  /** `get` だけが読む（0019）。 */
+  revision?: number;
   created_at: string;
   updated_at: string;
   node_count: number;
@@ -1840,6 +1842,16 @@ function toLearningMapVisibility(row: {
   );
 }
 
+function requireRevision(row: LearningMapRow): number {
+  if (typeof row.revision !== "number") {
+    throw new Error(`learning_maps.revision is missing: ${row.id}`);
+  }
+  return row.revision;
+}
+
+/** 手元のマップの書き換えの回数が読んだときのままであることの条件。`?` は map_id, revision。 */
+const SAME_REVISION = "(SELECT revision FROM learning_maps WHERE id = ?) = ?";
+
 /** learning_map_versions の1行。 */
 interface MapVersionRow {
   version: number;
@@ -1885,7 +1897,9 @@ function isMapVersionSummary(value: unknown): value is MapVersionSummary {
   return (
     ["added", "removed", "changed", "checksAdded", "checksRemoved"].every(
       (key) => typeof record[key] === "number",
-    ) && typeof record.titleChanged === "boolean"
+    ) &&
+    typeof record.titleChanged === "boolean" &&
+    typeof record.reordered === "boolean"
   );
 }
 
@@ -2084,7 +2098,7 @@ export class D1LearningMapRepository implements LearningMapRepository {
       this.db
         .prepare(
           `SELECT id, title, description, visibility, share_scope, created_at, updated_at,
-                  0 AS node_count, ${LATEST_VERSION} AS latest_version,
+                  0 AS node_count, ${LATEST_VERSION} AS latest_version, revision,
                   creation_checks_level, creation_checks_attempts, creation_checks_done_at,
                   creation_checks_started_at_ms
            FROM learning_maps WHERE id = ? AND owner_user_id = ?`,
@@ -2118,6 +2132,7 @@ export class D1LearningMapRepository implements LearningMapRepository {
       description: row.description,
       visibility: toLearningMapVisibility(row),
       latestVersion: row.latest_version,
+      revision: requireRevision(row),
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       nodes: rowsOf<LearningMapNodeRow>(nodes).map(toStoredMapNode),
@@ -2215,7 +2230,8 @@ export class D1LearningMapRepository implements LearningMapRepository {
     return [
       this.db
         .prepare(
-          `UPDATE learning_maps SET title = ?, description = ?, updated_at = ?, updated_at_ms = ?
+          `UPDATE learning_maps
+           SET title = ?, description = ?, updated_at = ?, updated_at_ms = ?, revision = revision + 1
            WHERE id = ? AND owner_user_id = ? AND ${guard.sql}`,
         )
         .bind(
@@ -2276,6 +2292,7 @@ export class D1LearningMapRepository implements LearningMapRepository {
     mapId: string,
     params: {
       expectedLatest: number | null;
+      expectedRevision: number;
       scope: ShareScope;
       content: string;
       contentHash: string;
@@ -2296,7 +2313,7 @@ export class D1LearningMapRepository implements LearningMapRepository {
              (map_id, version, content, content_hash, author_user_id, restored_from,
               checks_included, summary, created_at, created_at_ms)
            SELECT ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?
-           WHERE ${OWNED_MAP} AND ${LATEST_VERSION} IS ?`,
+           WHERE ${OWNED_MAP} AND ${LATEST_VERSION} IS ? AND ${SAME_REVISION}`,
         )
         .bind(
           mapId,
@@ -2312,6 +2329,8 @@ export class D1LearningMapRepository implements LearningMapRepository {
           ownerUserId,
           mapId,
           params.expectedLatest,
+          mapId,
+          params.expectedRevision,
         ),
       this.db
         .prepare(
@@ -2385,6 +2404,7 @@ export class D1LearningMapRepository implements LearningMapRepository {
     params: {
       fromVersion: number;
       expectedLatest: number;
+      expectedRevision: number;
       content: StoredMapContent;
       objectives: readonly StoredLearningObjective[];
       summary: MapVersionSummary;
@@ -2419,7 +2439,8 @@ export class D1LearningMapRepository implements LearningMapRepository {
               checks_included, summary, created_at, created_at_ms)
            SELECT map_id, ?, content, content_hash, ?, version, checks_included, ?, ?, ?
            FROM learning_map_versions
-           WHERE map_id = ? AND version = ? AND ${OWNED_MAP} AND ${LATEST_VERSION} = ?`,
+           WHERE map_id = ? AND version = ? AND ${OWNED_MAP} AND ${LATEST_VERSION} = ?
+             AND ${SAME_REVISION}`,
         )
         .bind(
           version,
@@ -2433,6 +2454,8 @@ export class D1LearningMapRepository implements LearningMapRepository {
           ownerUserId,
           mapId,
           params.expectedLatest,
+          mapId,
+          params.expectedRevision,
         ),
       ...this.replaceStatements(ownerUserId, mapId, params.content, params, restored),
       // 残すノードの項目のうち、戻す版に無いものを狙った自分の確認問題を消す
@@ -2596,7 +2619,7 @@ export class D1LearningMapRepository implements LearningMapRepository {
     const [touched] = await this.db.batch([
       this.db
         .prepare(
-          `UPDATE learning_maps SET updated_at = ?, updated_at_ms = ?
+          `UPDATE learning_maps SET updated_at = ?, updated_at_ms = ?, revision = revision + 1
            WHERE id = ? AND ${OWNED_MAP_NODE}`,
         )
         .bind(params.nowIso, params.nowMs, mapId, ...ownedNode),
