@@ -5,6 +5,8 @@ import {
   createLearningMap,
   deleteLearningMap,
   fetchOwnMapConcepts,
+  fetchOwnMapContaining,
+  hasSourceUpdate,
   isMapId,
   isOnExistingMap,
   MapInputError,
@@ -23,6 +25,7 @@ const MAP: LearningMapView = {
   description: "",
   visibility: "private",
   latestVersion: null,
+  source: null,
   shareKey: null,
   createdAt: "2026-10-01T00:00:00.000Z",
   updatedAt: "2026-10-01T00:00:00.000Z",
@@ -195,4 +198,39 @@ test("参照の候補は、件数を指定すると自分のノードを全部�
     "/api/v1/learning-maps:concepts",
     "/api/v1/learning-maps:concepts?limit=1000",
   ]);
+});
+
+test("取り込み元の新しい版があるときだけ「更新あり」", () => {
+  const source = { mapId: "mrust0001", title: "Rust", version: 1, latestVersion: 2 };
+  expect(hasSourceUpdate(source)).toBe(true);
+  expect(hasSourceUpdate({ ...source, latestVersion: 1 })).toBe(false);
+  expect(hasSourceUpdate({ ...source, latestVersion: null })).toBe(false);
+  expect(hasSourceUpdate(null)).toBe(false);
+});
+
+test("取り込んだノードは、ID の前半のマップが無ければ自分のノードを持つマップから引く", async () => {
+  const urls: string[] = [];
+  const fetcher = ((url: string) => {
+    urls.push(url);
+    if (url === "/api/v1/learning-maps/mrust0001") {
+      return Promise.resolve(new Response(JSON.stringify({ error: "x" }), { status: 404 }));
+    }
+    if (url.startsWith("/api/v1/learning-maps:concepts")) {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({ concepts: [{ id: "mrust0001.binding1", mapId: "mper00001" }] }),
+        ),
+      );
+    }
+    return Promise.resolve(new Response(JSON.stringify({ ...MAP, id: "mper00001" })));
+  }) as unknown as typeof fetch;
+  const map = await fetchOwnMapContaining("mrust0001.binding1", fetcher);
+  expect(map?.id).toBe("mper00001");
+  expect(urls).toEqual([
+    "/api/v1/learning-maps/mrust0001",
+    "/api/v1/learning-maps:concepts?limit=1000",
+    "/api/v1/learning-maps/mper00001",
+  ]);
+  // 固定の Concept は手作りのノードではないので引かない。
+  expect(await fetchOwnMapContaining("go.defer", fetcher)).toBeUndefined();
 });

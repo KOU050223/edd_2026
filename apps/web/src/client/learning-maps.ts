@@ -47,6 +47,22 @@ export type LearningMapNodeView =
       } | null;
     };
 
+/**
+ * 取り込み元（#244 の T3・T4）。`latestVersion` が `version` より新しければ「更新あり」。
+ * `latestVersion` が `null` なら、元が消えた・共有をやめた・リンクの鍵が変わったので取り込み直せない。
+ */
+export interface MapSourceView {
+  mapId: string;
+  title: string;
+  version: number;
+  latestVersion: number | null;
+}
+
+/** 取り込み元に新しい版があるか。 */
+export function hasSourceUpdate(source: MapSourceView | null): boolean {
+  return source?.latestVersion != null && source.latestVersion > source.version;
+}
+
 export interface LearningMapSummary {
   id: string;
   title: string;
@@ -54,6 +70,8 @@ export interface LearningMapSummary {
   visibility: LearningMapVisibility;
   /** 共有の側のいちばん新しい版の番号。まだ一度も共有へ上げていなければ `null`。 */
   latestVersion: number | null;
+  /** 取り込んだマップなら取り込み元（#244）。 */
+  source: MapSourceView | null;
   nodeCount: number;
   createdAt: string;
   updatedAt: string;
@@ -304,4 +322,38 @@ export function fetchOwnMapConcepts(
 /** マップを消す。ノード・線・項目と、そのノードの確認問題も消える（#242）。 */
 export function deleteLearningMap(mapId: string, fetcher: typeof fetch = fetch): Promise<void> {
   return deleteJson(`${LEARNING_MAPS_PATH}/${encodeURIComponent(mapId)}`, fetcher);
+}
+
+/**
+ * その Concept を自分のノードとして持つマップ。取り込んだマップのノードは元のマップの ID を
+ * 前半に持つ（#244 で ID を引き継ぐ）ので、ID の形からは属するマップが分からない。無ければ `undefined`。
+ */
+export async function findOwnMapOf(
+  conceptId: string,
+  fetcher: typeof fetch = fetch,
+  retry: boolean | number = false,
+): Promise<string | undefined> {
+  const { concepts } = await fetchOwnMapConcepts(fetcher, retry, OWN_NODES_LIMIT);
+  return concepts.find((concept) => concept.id === conceptId)?.mapId;
+}
+
+/**
+ * 手で作ったノードを持つ自分のマップを読む。まず ID の前半のマップを読み、自分のマップに無ければ
+ * （取り込んだマップのノード）自分のノードの一覧から属するマップを探す。どちらにも無ければ 404 のまま。
+ */
+export async function fetchOwnMapContaining(
+  conceptId: string,
+  fetcher: typeof fetch = fetch,
+  retry: boolean | number = false,
+): Promise<LearningMapView | undefined> {
+  const prefix = mapIdOfConcept(conceptId);
+  if (prefix === undefined) return undefined;
+  try {
+    return await fetchLearningMap(prefix, fetcher, retry);
+  } catch (error: unknown) {
+    if (!(error instanceof ApiError && error.kind === "not_found")) throw error;
+    const found = await findOwnMapOf(conceptId, fetcher, retry);
+    if (found === undefined) throw error;
+    return fetchLearningMap(found, fetcher, retry);
+  }
 }

@@ -9,6 +9,7 @@ import {
   MAP_LIMITS,
   MapInputError,
   MapLimitError,
+  hasSourceUpdate,
 } from "../../learning-maps.js";
 import { fetchSharedMaps, VISIBILITY_BADGES, type SharedMapSummary } from "../../map-sharing.js";
 import { takeLoginRetry } from "../../session.js";
@@ -220,7 +221,13 @@ function MapList() {
                 <p className="muted">
                   {map.nodeCount} ノード・更新 {new Date(map.updatedAt).toLocaleDateString("ja-JP")}
                   {map.visibility !== "private" && `・${VISIBILITY_BADGES[map.visibility]}`}
+                  {map.source !== null && `・「${map.source.title}」から取り込み`}
                 </p>
+                {hasSourceUpdate(map.source) && (
+                  <p>
+                    <strong>更新あり</strong>（版 {map.source?.latestVersion}）
+                  </p>
+                )}
               </Link>
               <button
                 className="link danger"

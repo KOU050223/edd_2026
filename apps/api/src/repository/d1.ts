@@ -35,6 +35,7 @@ import {
   type UserSettingsInput,
 } from "../contract/user-settings.js";
 import { parseConceptCheck } from "../checks/response.js";
+import { toMapSourceView } from "../maps/import.js";
 import { ACCOUNT_DELETION_TOMBSTONE_TTL_MS } from "./types.js";
 import type { ImportSessionView } from "../contract/history-import.js";
 import type { ConversationSummary } from "../contract/conversations.js";
@@ -76,9 +77,11 @@ import type {
   StoredLearningObjective,
   StoredMapContent,
   StoredMapNode,
+  StoredMapSource,
   StoredMapVersion,
   StoredOwnMapNode,
   StoredSharedMap,
+  MapSourceInput,
   UserPlanRepository,
   UserSettingsRepository,
   FixedMapCreatorRepository,
@@ -1785,6 +1788,13 @@ interface LearningMapRow {
   visibility: string;
   share_scope: string | null;
   latest_version: number | null;
+  source_map_id: string | null;
+  source_version: number | null;
+  source_key: string | null;
+  source_title: string | null;
+  source_node_ids: string | null;
+  source_latest_version: number | null;
+  source_latest_at: string | null;
   /** `get` だけが読む（0019）。 */
   revision?: number;
   share_key?: string | null;
@@ -1921,6 +1931,52 @@ function toStoredMapVersion(row: MapVersionRow): StoredMapVersion {
   return { ...toMapVersionMeta(row), content: row.content, contentHash: row.content_hash };
 }
 
+/**
+ * 取り込み元の列（0020）。`m` は learning_maps。いちばん新しい版は、元が全員に共有されているか、
+ * 取り込んだときの鍵で「リンクだけ」の共有が読めるときだけ引く（#244 の決定 U1）。
+ */
+const SOURCE_COLUMNS = `m.source_map_id, m.source_version, m.source_key, m.source_title,
+  m.source_node_ids,
+  (SELECT v.version FROM learning_map_versions v JOIN learning_maps s ON s.id = v.map_id
+   WHERE v.map_id = m.source_map_id
+     AND (s.share_scope = 'public' OR (s.share_scope = 'link' AND s.share_key = m.source_key))
+   ORDER BY v.version DESC LIMIT 1) AS source_latest_version,
+  (SELECT v.created_at FROM learning_map_versions v JOIN learning_maps s ON s.id = v.map_id
+   WHERE v.map_id = m.source_map_id
+     AND (s.share_scope = 'public' OR (s.share_scope = 'link' AND s.share_key = m.source_key))
+   ORDER BY v.version DESC LIMIT 1) AS source_latest_at`;
+
+function toMapSource(row: LearningMapRow): StoredMapSource | null {
+  if (row.source_map_id === null) return null;
+  if (
+    typeof row.source_version !== "number" ||
+    typeof row.source_title !== "string" ||
+    typeof row.source_node_ids !== "string"
+  ) {
+    throw new Error(`learning_maps has an incomplete source: ${row.id}`);
+  }
+  let nodeIds: unknown;
+  try {
+    nodeIds = JSON.parse(row.source_node_ids);
+  } catch (error) {
+    throw new Error(`learning_maps.source_node_ids is not JSON: ${row.id}`, { cause: error });
+  }
+  if (!Array.isArray(nodeIds) || !nodeIds.every((id) => typeof id === "string")) {
+    throw new Error(`learning_maps.source_node_ids has an unexpected shape: ${row.id}`);
+  }
+  return {
+    mapId: row.source_map_id,
+    version: row.source_version,
+    key: row.source_key,
+    title: row.source_title,
+    nodeIds,
+    latest:
+      row.source_latest_version === null || row.source_latest_at === null
+        ? null
+        : { version: row.source_latest_version, publishedAt: row.source_latest_at },
+  };
+}
+
 /** マップのいちばん新しい版の番号。`?` は map_id。無ければ NULL。 */
 const LATEST_VERSION = "(SELECT MAX(version) FROM learning_map_versions WHERE map_id = ?)";
 
@@ -2000,6 +2056,38 @@ const INSERT_MAP_NODES = `INSERT INTO learning_map_nodes (map_id, concept_id, is
          json_extract(value, '$.label'), json_extract(value, '$.summary'), CAST(key AS INTEGER)
   FROM json_each(?)
   WHERE ${OWNED_MAP}`;
+
+/**
+ * 取り込んだ版の公開の確認問題を写す（0020、#244 の T6）。`?` は map_id, 確認問題の JSON。
+ * 呼び出し側が `WHERE` を足す。
+ */
+const INSERT_IMPORTED_CHECKS = `INSERT INTO imported_map_checks
+    (map_id, concept_id, target, scope, objective_id, level, body, model, generated_at)
+  SELECT ?, json_extract(value, '$.conceptId'), json_extract(value, '$.target'),
+         json_extract(value, '$.scope'), json_extract(value, '$.objectiveId'),
+         json_extract(value, '$.level'), json_extract(value, '$.body'),
+         json_extract(value, '$.model'), json_extract(value, '$.generatedAt')
+  FROM json_each(?)`;
+
+/** 本文は user_concept_checks と同じ形（`parseConceptCheck` をそのまま通せる）。 */
+function importedChecksJson(checks: readonly PersonalConceptCheck[]): string {
+  return JSON.stringify(
+    checks.map((check) => ({
+      conceptId: check.conceptId,
+      target: checkTargetOf(check),
+      scope: check.scope,
+      objectiveId: check.objectiveId ?? null,
+      level: check.level,
+      body: JSON.stringify({
+        conceptId: check.conceptId,
+        overview: check.overview,
+        practice: check.practice,
+      }),
+      model: check.model,
+      generatedAt: check.generatedAt,
+    })),
+  );
+}
 
 /** `?` は map_id, 線の JSON, map_id, owner_user_id。 */
 const INSERT_MAP_EDGES = `INSERT INTO learning_map_edges (map_id, from_concept_id, to_concept_id)
@@ -2087,6 +2175,7 @@ export class D1LearningMapRepository implements LearningMapRepository {
         `SELECT m.id, m.title, m.description, m.visibility, m.share_scope, m.created_at, m.updated_at,
                 (SELECT MAX(version) FROM learning_map_versions v WHERE v.map_id = m.id)
                   AS latest_version,
+                ${SOURCE_COLUMNS},
                 (SELECT COUNT(*) FROM learning_map_nodes n WHERE n.map_id = m.id) AS node_count
          FROM learning_maps m
          WHERE m.owner_user_id = ?
@@ -2100,6 +2189,7 @@ export class D1LearningMapRepository implements LearningMapRepository {
       description: row.description,
       visibility: toLearningMapVisibility(row),
       latestVersion: row.latest_version,
+      source: toMapSourceView(toMapSource(row)),
       nodeCount: row.node_count,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
@@ -2111,11 +2201,13 @@ export class D1LearningMapRepository implements LearningMapRepository {
     const [map, nodes, edges, objectives] = await this.db.batch([
       this.db
         .prepare(
-          `SELECT id, title, description, visibility, share_scope, created_at, updated_at,
-                  0 AS node_count, ${LATEST_VERSION} AS latest_version, revision, share_key,
-                  creation_checks_level, creation_checks_attempts, creation_checks_done_at,
-                  creation_checks_started_at_ms
-           FROM learning_maps WHERE id = ? AND owner_user_id = ?`,
+          `SELECT m.id, m.title, m.description, m.visibility, m.share_scope, m.created_at,
+                  m.updated_at, 0 AS node_count,
+                  (SELECT MAX(version) FROM learning_map_versions WHERE map_id = ?) AS latest_version,
+                  m.revision, m.share_key, ${SOURCE_COLUMNS},
+                  m.creation_checks_level, m.creation_checks_attempts, m.creation_checks_done_at,
+                  m.creation_checks_started_at_ms
+           FROM learning_maps m WHERE m.id = ? AND m.owner_user_id = ?`,
         )
         .bind(mapId, mapId, ownerUserId),
       this.db
@@ -2148,6 +2240,7 @@ export class D1LearningMapRepository implements LearningMapRepository {
       latestVersion: row.latest_version,
       revision: requireRevision(row),
       shareKey: toShareKey(row),
+      source: toMapSource(row),
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       nodes: rowsOf<LearningMapNodeRow>(nodes).map(toStoredMapNode),
@@ -2222,15 +2315,18 @@ export class D1LearningMapRepository implements LearningMapRepository {
     content: StoredMapContent,
     now: { nowIso: string; nowMs: number },
   ): Promise<boolean> {
-    const [updated] = await this.db.batch(
+    const results = await this.db.batch(
       this.replaceStatements(ownerUserId, mapId, content, now, NO_GUARD),
     );
-    return changesOf(updated) === 1;
+    return changesOf(results.at(-1)) === 1;
   }
 
   /**
    * マップの中身を置き換える文。どの文も `guard` が真のときだけ書く（復元では「新しい版を
-   * 足せたとき」、#244）。最初の文が learning_maps の UPDATE で、書けたら1行変わる。
+   * 足せたとき」、取り込み直しでは「読んだときのまま」、#244）。
+   *
+   * **最後の文が learning_maps の UPDATE** で、書けたら1行変わる。書き換えの回数（revision）を
+   * ここで増やすので、`guard` が回数を見ていても、ほかの文はすべて増やす前に判定される。
    */
   private replaceStatements(
     ownerUserId: string,
@@ -2238,26 +2334,12 @@ export class D1LearningMapRepository implements LearningMapRepository {
     content: StoredMapContent,
     now: { nowIso: string; nowMs: number },
     guard: SqlGuard,
+    extraMapUpdate: SqlGuard = { sql: "", binds: [] },
   ): D1PreparedStatement[] {
     const nodes = nodesJson(content.nodes);
     // ノードを全部消して入れ直さない。消すと、残したノードの「理解すること」まで
     // CASCADE で消える。送られなかったノードだけを消し、残りは上書きする。
     return [
-      this.db
-        .prepare(
-          `UPDATE learning_maps
-           SET title = ?, description = ?, updated_at = ?, updated_at_ms = ?, revision = revision + 1
-           WHERE id = ? AND owner_user_id = ? AND ${guard.sql}`,
-        )
-        .bind(
-          content.title,
-          content.description,
-          now.nowIso,
-          now.nowMs,
-          mapId,
-          ownerUserId,
-          ...guard.binds,
-        ),
       // 外すノードの確認問題を、ノードを消す前に消す（#242、2026-10-07 の決定）。
       // user_concept_checks はノードを参照していないので、CASCADE では消えない。
       this.db
@@ -2299,6 +2381,90 @@ export class D1LearningMapRepository implements LearningMapRepository {
       this.db
         .prepare(`${INSERT_MAP_EDGES} AND ${guard.sql}`)
         .bind(mapId, JSON.stringify(content.edges), mapId, ownerUserId, ...guard.binds),
+      this.db
+        .prepare(
+          `UPDATE learning_maps
+           SET title = ?, description = ?, updated_at = ?, updated_at_ms = ?,
+               revision = revision + 1${extraMapUpdate.sql}
+           WHERE id = ? AND owner_user_id = ? AND ${guard.sql}`,
+        )
+        .bind(
+          content.title,
+          content.description,
+          now.nowIso,
+          now.nowMs,
+          ...extraMapUpdate.binds,
+          mapId,
+          ownerUserId,
+          ...guard.binds,
+        ),
+    ];
+  }
+
+  /**
+   * 参照ではないノードの「理解すること」を全部置き換える文（復元・取り込み直し、#244）。
+   * ノードを入れ終えた後に並べること（項目はノードを (map_id, concept_id) で参照する）。
+   * 消える項目を狙った自分の確認問題も消す（replaceObjectives と同じ。消えるノードの分は
+   * replaceStatements が消す）。
+   */
+  private replaceAllObjectivesStatements(
+    ownerUserId: string,
+    mapId: string,
+    objectives: readonly StoredLearningObjective[],
+    nowIso: string,
+    guard: SqlGuard,
+  ): D1PreparedStatement[] {
+    const positions = new Map<string, number>();
+    const json = JSON.stringify(
+      objectives.map((objective) => {
+        const position = positions.get(objective.conceptId) ?? 0;
+        positions.set(objective.conceptId, position + 1);
+        return { ...objective, position };
+      }),
+    );
+    return [
+      this.db
+        .prepare(
+          `DELETE FROM user_concept_checks
+           WHERE user_id = ? AND ${guard.sql}
+             AND objective_id IS NOT NULL
+             AND concept_id IN (
+               SELECT concept_id FROM learning_map_nodes WHERE map_id = ? AND is_reference = 0
+             )
+             AND objective_id NOT IN (SELECT json_extract(value, '$.id') FROM json_each(?))`,
+        )
+        .bind(ownerUserId, ...guard.binds, mapId, json),
+      this.db
+        .prepare(
+          `DELETE FROM learning_objectives
+           WHERE map_id = ? AND ${guard.sql}
+             AND id NOT IN (SELECT json_extract(value, '$.id') FROM json_each(?))`,
+        )
+        .bind(mapId, ...guard.binds, json),
+      // ID が同じマップの別のノードの項目と重なったら、concept_id に NULL を入れようとして
+      // NOT NULL 制約で文ごと失敗させる（書き飛ばすと、上の DELETE だけが確定する。
+      // replaceFixedObjectives と同じ考え方）。別のマップの項目とは重ならない（0020 で
+      // マップ＋項目 ID で一意にした）。
+      this.db
+        .prepare(
+          `INSERT INTO learning_objectives
+             (id, concept_id, map_id, label, source, position, created_at, updated_at)
+           SELECT json_extract(value, '$.id'), json_extract(value, '$.conceptId'), ?,
+                  json_extract(value, '$.label'), json_extract(value, '$.source'),
+                  json_extract(value, '$.position'), ?, ?
+           FROM json_each(?)
+           WHERE ${guard.sql}
+           ON CONFLICT (map_id, id) WHERE map_id IS NOT NULL DO UPDATE SET
+             concept_id = CASE
+               WHEN learning_objectives.concept_id = excluded.concept_id
+               THEN excluded.concept_id
+             END,
+             label = excluded.label,
+             source = excluded.source,
+             position = excluded.position,
+             updated_at = excluded.updated_at`,
+        )
+        .bind(mapId, nowIso, nowIso, json, ...guard.binds),
     ];
   }
 
@@ -2449,14 +2615,6 @@ export class D1LearningMapRepository implements LearningMapRepository {
       )`,
       binds: [mapId, version, params.nowMs, params.fromVersion],
     };
-    const positions = new Map<string, number>();
-    const objectives = JSON.stringify(
-      params.objectives.map((objective) => {
-        const position = positions.get(objective.conceptId) ?? 0;
-        positions.set(objective.conceptId, position + 1);
-        return { ...objective, position };
-      }),
-    );
     const [inserted] = await this.db.batch([
       // 中身・ハッシュ・確認問題を含めたかは元の版のまま写す。
       this.db
@@ -2485,29 +2643,71 @@ export class D1LearningMapRepository implements LearningMapRepository {
           params.expectedRevision,
         ),
       ...this.replaceStatements(ownerUserId, mapId, params.content, params, restored),
-      // 残すノードの項目のうち、戻す版に無いものを狙った自分の確認問題を消す
-      // （replaceObjectives と同じ。消えるノードの分は replaceStatements が消している）。
+      ...this.replaceAllObjectivesStatements(
+        ownerUserId,
+        mapId,
+        params.objectives,
+        params.nowIso,
+        restored,
+      ),
+    ]);
+    return changesOf(inserted) === 1;
+  }
+
+  async createImported(
+    ownerUserId: string,
+    params: {
+      id: string;
+      content: StoredMapContent;
+      objectives: readonly StoredLearningObjective[];
+      source: MapSourceInput;
+      checks: readonly PersonalConceptCheck[];
+      nowIso: string;
+      nowMs: number;
+      maxMaps: number;
+    },
+  ): Promise<boolean> {
+    const { id, content, source } = params;
+    const positions = new Map<string, number>();
+    const objectives = params.objectives.map((objective) => {
+      const position = positions.get(objective.conceptId) ?? 0;
+      positions.set(objective.conceptId, position + 1);
+      return { ...objective, position };
+    });
+    // 数える・確かめることと書くことを1文にまとめる（create と同じ）。マップの行が入ったときだけ、
+    // ほかの文が書く（どれも OWNED_MAP を条件にしている）。
+    const [inserted] = await this.db.batch([
       this.db
         .prepare(
-          `DELETE FROM user_concept_checks
-           WHERE user_id = ? AND ${restored.sql}
-             AND objective_id IS NOT NULL
-             AND concept_id IN (
-               SELECT concept_id FROM learning_map_nodes WHERE map_id = ? AND is_reference = 0
-             )
-             AND objective_id NOT IN (SELECT json_extract(value, '$.id') FROM json_each(?))`,
+          `INSERT INTO learning_maps
+             (id, owner_user_id, title, description, visibility, created_at, updated_at, updated_at_ms,
+              source_map_id, source_version, source_key, source_title, source_node_ids)
+           SELECT ?, ?, ?, ?, 'private', ?, ?, ?, ?, ?, ?, ?, ?
+           WHERE (SELECT COUNT(*) FROM learning_maps WHERE owner_user_id = ?) < ?
+             AND NOT EXISTS (
+               SELECT 1 FROM learning_maps WHERE owner_user_id = ? AND source_map_id = ?
+             )`,
         )
-        .bind(ownerUserId, ...restored.binds, mapId, objectives),
-      this.db
-        .prepare(
-          `DELETE FROM learning_objectives
-           WHERE map_id = ? AND ${restored.sql}
-             AND id NOT IN (SELECT json_extract(value, '$.id') FROM json_each(?))`,
-        )
-        .bind(mapId, ...restored.binds, objectives),
-      // 項目はノードを (map_id, concept_id) で参照する。上の文でノードを入れ終えてから書く。
-      // ID が別のマップの項目と重なったら、concept_id に NULL を入れようとして NOT NULL 制約で文ごと失敗させる
-      // （書き飛ばすと、上の DELETE だけが確定する。replaceFixedObjectives と同じ考え方）。
+        .bind(
+          id,
+          ownerUserId,
+          content.title,
+          content.description,
+          params.nowIso,
+          params.nowIso,
+          params.nowMs,
+          source.mapId,
+          source.version,
+          source.key,
+          source.title,
+          JSON.stringify(source.nodeIds),
+          ownerUserId,
+          params.maxMaps,
+          ownerUserId,
+          source.mapId,
+        ),
+      this.db.prepare(INSERT_MAP_NODES).bind(id, nodesJson(content.nodes), id, ownerUserId),
+      this.db.prepare(INSERT_MAP_EDGES).bind(id, JSON.stringify(content.edges), id, ownerUserId),
       this.db
         .prepare(
           `INSERT INTO learning_objectives
@@ -2516,21 +2716,95 @@ export class D1LearningMapRepository implements LearningMapRepository {
                   json_extract(value, '$.label'), json_extract(value, '$.source'),
                   json_extract(value, '$.position'), ?, ?
            FROM json_each(?)
-           WHERE ${restored.sql}
-           ON CONFLICT (id) DO UPDATE SET
-             concept_id = CASE
-               WHEN learning_objectives.map_id = excluded.map_id
-                 AND learning_objectives.concept_id = excluded.concept_id
-               THEN excluded.concept_id
-             END,
-             label = excluded.label,
-             source = excluded.source,
-             position = excluded.position,
-             updated_at = excluded.updated_at`,
+           WHERE ${OWNED_MAP}`,
         )
-        .bind(mapId, params.nowIso, params.nowIso, objectives, ...restored.binds),
+        .bind(id, params.nowIso, params.nowIso, JSON.stringify(objectives), id, ownerUserId),
+      this.db
+        .prepare(`${INSERT_IMPORTED_CHECKS} WHERE ${OWNED_MAP}`)
+        .bind(id, importedChecksJson(params.checks), id, ownerUserId),
     ]);
     return changesOf(inserted) === 1;
+  }
+
+  async reimport(
+    ownerUserId: string,
+    mapId: string,
+    params: {
+      expectedSourceVersion: number;
+      expectedRevision: number;
+      source: { version: number; nodeIds: readonly string[] };
+      content: StoredMapContent;
+      objectives: readonly StoredLearningObjective[];
+      checks: readonly PersonalConceptCheck[];
+      nowIso: string;
+      nowMs: number;
+    },
+  ): Promise<boolean> {
+    // 取り込んだ版と書き換えの回数が読んだときのままなら書く。どちらも最後の UPDATE（replaceStatements の
+    // 末尾）まで変わらないので、すべての文が同じ判定になる。
+    const unchanged: SqlGuard = {
+      sql: `EXISTS (
+        SELECT 1 FROM learning_maps
+        WHERE id = ? AND owner_user_id = ? AND source_version = ? AND revision = ?
+      )`,
+      binds: [mapId, ownerUserId, params.expectedSourceVersion, params.expectedRevision],
+    };
+    const results = await this.db.batch([
+      this.db
+        .prepare(`DELETE FROM imported_map_checks WHERE map_id = ? AND ${unchanged.sql}`)
+        .bind(mapId, ...unchanged.binds),
+      this.db
+        .prepare(`${INSERT_IMPORTED_CHECKS} WHERE ${unchanged.sql}`)
+        .bind(mapId, importedChecksJson(params.checks), ...unchanged.binds),
+      // 項目の文はノードを入れ終えてから、マップの行の UPDATE（回数を増やす）より前に並べる。
+      ...this.replaceStatements(ownerUserId, mapId, params.content, params, unchanged).slice(0, -1),
+      ...this.replaceAllObjectivesStatements(
+        ownerUserId,
+        mapId,
+        params.objectives,
+        params.nowIso,
+        unchanged,
+      ),
+      ...this.replaceStatements(ownerUserId, mapId, params.content, params, unchanged, {
+        sql: ", source_version = ?, source_node_ids = ?",
+        binds: [params.source.version, JSON.stringify(params.source.nodeIds)],
+      }).slice(-1),
+    ]);
+    return changesOf(results.at(-1)) === 1;
+  }
+
+  async listImportedChecks(ownerUserId: string, mapId: string): Promise<PersonalConceptCheck[]> {
+    const { results } = await this.db
+      .prepare(
+        `SELECT ${PERSONAL_CHECK_COLUMNS} FROM imported_map_checks
+         WHERE map_id = ? AND ${OWNED_MAP}
+         ORDER BY concept_id ASC, target ASC`,
+      )
+      .bind(mapId, mapId, ownerUserId)
+      .all<PersonalCheckRow>();
+    return results.map(toPersonalCheck);
+  }
+
+  async getSharedVersion(
+    mapId: string,
+    version: number,
+    key: string | null,
+  ): Promise<StoredMapVersion | null> {
+    // 読めるか（範囲と鍵）を、版を読むのと同じ文で確かめる。先に確かめてから読むと、
+    // その間に共有をやめられても中身を返してしまう（PR #295 のレビュー）。
+    const row = await this.db
+      .prepare(
+        `SELECT ${MAP_VERSION_COLUMNS} FROM learning_map_versions
+         WHERE map_id = ? AND version = ?
+           AND EXISTS (
+             SELECT 1 FROM learning_maps s
+             WHERE s.id = ?
+               AND (s.share_scope = 'public' OR (s.share_scope = 'link' AND s.share_key = ?))
+           )`,
+      )
+      .bind(mapId, version, mapId, key)
+      .first<MapVersionRow>();
+    return row === null ? null : toStoredMapVersion(row);
   }
 
   async getShared(mapId: string): Promise<StoredSharedMap | null> {
@@ -2678,13 +2952,12 @@ export class D1LearningMapRepository implements LearningMapRepository {
                   json_extract(value, '$.source'), CAST(key AS INTEGER), ?, ?
            FROM json_each(?)
            WHERE ${OWNED_MAP_NODE}
-           ON CONFLICT (id) DO UPDATE SET
+           ON CONFLICT (map_id, id) WHERE map_id IS NOT NULL DO UPDATE SET
              label = excluded.label,
              source = excluded.source,
              position = excluded.position,
              updated_at = excluded.updated_at
-           WHERE learning_objectives.map_id = excluded.map_id
-             AND learning_objectives.concept_id = excluded.concept_id`,
+           WHERE learning_objectives.concept_id = excluded.concept_id`,
         )
         .bind(conceptId, mapId, params.nowIso, params.nowIso, objectives, ...ownedNode),
     ]);
@@ -2784,7 +3057,7 @@ export class D1LearningMapRepository implements LearningMapRepository {
         )
         .bind(conceptId, objectives, conceptId, revision),
       // 作った時刻は最初に入れたときのまま残す。
-      // ID が他の Concept やマップの項目と重なったら、concept_id に NULL を入れようとして
+      // ID が他の Concept の項目と重なったら、concept_id に NULL を入れようとして
       // NOT NULL 制約で文ごと失敗させる。batch ごと巻き戻るので、上の2つの DELETE も残らない
       // （ON CONFLICT の WHERE で書き飛ばすと、DELETE だけが確定して項目が消える）。
       // SELECT の WHERE は、SELECT と ON CONFLICT の構文の曖昧さを避けるためにも要る（SQLite の upsert）。
@@ -2796,10 +3069,9 @@ export class D1LearningMapRepository implements LearningMapRepository {
                   json_extract(value, '$.source'), CAST(key AS INTEGER), ?, ?
            FROM json_each(?)
            WHERE ${claimed}
-           ON CONFLICT (id) DO UPDATE SET
+           ON CONFLICT (id) WHERE map_id IS NULL DO UPDATE SET
              concept_id = CASE
-               WHEN learning_objectives.map_id IS NULL
-                 AND learning_objectives.concept_id = excluded.concept_id
+               WHEN learning_objectives.concept_id = excluded.concept_id
                THEN excluded.concept_id
              END,
              label = excluded.label,
@@ -2837,20 +3109,19 @@ export class D1LearningMapRepository implements LearningMapRepository {
    *
    * 線は (map_id, concept_id) の組で引く。参照のノードは元のノードと同じ concept_id で
    * 別のマップに置かれるので、ID だけで引くと、別のマップで参照に引いた線が
-   * 元のノードの前提に混ざる。項目は参照ではないノードにしか無いので、ID だけで引ける。
+   * 元のノードの前提に混ざる。項目も同じ組で引く（取り込んだマップは元と同じ ID を持つ、#244）。
    */
   private async withEdgesAndObjectives(
     rows: readonly OwnMapNodeRow[],
   ): Promise<StoredOwnMapNode[]> {
     if (rows.length === 0) return [];
-    const ids = JSON.stringify(rows.map((row) => row.concept_id));
     const nodes = JSON.stringify(
       rows.map((row) => ({ mapId: row.map_id, conceptId: row.concept_id })),
     );
     const [edges, objectives] = await this.db.batch([
       this.db
         .prepare(
-          `SELECT e.from_concept_id, e.to_concept_id
+          `SELECT e.map_id, e.from_concept_id, e.to_concept_id
            FROM learning_map_edges e
            JOIN json_each(?) j
              ON e.map_id = json_extract(j.value, '$.mapId')
@@ -2858,32 +3129,40 @@ export class D1LearningMapRepository implements LearningMapRepository {
            ORDER BY e.rowid`,
         )
         .bind(nodes),
+      // 項目も (map_id, concept_id) の組で引く。取り込んだマップ（#244）は元のマップと同じ
+      // Concept ID・項目 ID を持つので、ID だけで引くと他人のマップの項目が混ざる。
       this.db
         .prepare(
-          `SELECT id, concept_id, label, source FROM learning_objectives
-           WHERE map_id IS NOT NULL AND concept_id IN (SELECT value FROM json_each(?))
-           ORDER BY concept_id, position`,
+          `SELECT o.map_id, o.id, o.concept_id, o.label, o.source
+           FROM learning_objectives o
+           JOIN json_each(?) j
+             ON o.map_id = json_extract(j.value, '$.mapId')
+            AND o.concept_id = json_extract(j.value, '$.conceptId')
+           ORDER BY o.concept_id, o.position`,
         )
-        .bind(ids),
+        .bind(nodes),
     ]);
+    // 組み合わせるときも (map_id, concept_id) で突き合わせる。取り込んだマップは元と同じ
+    // Concept ID を持つので、ID だけで束ねると、別のマップの線・項目が混ざりうる（PR #295 のレビュー）。
+    const keyOf = (mapId: string, conceptId: string) => `${mapId}\n${conceptId}`;
     const prerequisites = new Map<string, string[]>();
-    for (const edge of rowsOf<LearningMapEdgeRow>(edges)) {
-      prerequisites.set(edge.to_concept_id, [
-        ...(prerequisites.get(edge.to_concept_id) ?? []),
-        edge.from_concept_id,
-      ]);
+    for (const edge of rowsOf<LearningMapEdgeRow & { map_id: string }>(edges)) {
+      const key = keyOf(edge.map_id, edge.to_concept_id);
+      prerequisites.set(key, [...(prerequisites.get(key) ?? []), edge.from_concept_id]);
     }
-    const objectivesById = groupByConcept(
-      rowsOf<LearningObjectiveRow>(objectives).map(toLearningObjective),
-    );
+    const objectivesByNode = new Map<string, StoredLearningObjective[]>();
+    for (const row of rowsOf<LearningObjectiveRow & { map_id: string }>(objectives)) {
+      const key = keyOf(row.map_id, row.concept_id);
+      objectivesByNode.set(key, [...(objectivesByNode.get(key) ?? []), toLearningObjective(row)]);
+    }
     return rows.map((row) => ({
       conceptId: row.concept_id,
       label: row.label,
       summary: row.summary,
       mapId: row.map_id,
       mapTitle: row.map_title,
-      prerequisites: prerequisites.get(row.concept_id) ?? [],
-      objectives: objectivesById.get(row.concept_id) ?? [],
+      prerequisites: prerequisites.get(keyOf(row.map_id, row.concept_id)) ?? [],
+      objectives: objectivesByNode.get(keyOf(row.map_id, row.concept_id)) ?? [],
     }));
   }
 }
