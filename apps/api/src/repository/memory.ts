@@ -44,9 +44,18 @@ import type {
   CheckOrigin,
   StoredLearningObjective,
   StoredMapContent,
+  StoredMapVersion,
   StoredOwnMapNode,
+  StoredSharedMap,
 } from "./types.js";
-import type { LearningMapSummary, LearningObjectiveSource } from "../contract/learning-maps.js";
+import type {
+  LearningMapSummary,
+  LearningObjectiveSource,
+  MapVersionMeta,
+  MapVersionSummary,
+  SharedMapSummary,
+  ShareScope,
+} from "../contract/learning-maps.js";
 
 export interface InMemoryRepositoryStore {
   readonly users: Map<string, { createdAtMs: number }>;
@@ -104,6 +113,8 @@ export interface InMemoryRepositoryStore {
 export interface InMemoryLearningMap extends StoredLearningMap {
   ownerUserId: string;
   updatedAtMs: number;
+  /** 共有の版（#244）。古い版から。D1 の learning_map_versions に対応する。 */
+  versions: (StoredMapVersion & { createdAtMs: number })[];
 }
 
 export function createInMemoryRepositoryStore(): InMemoryRepositoryStore {
@@ -806,6 +817,8 @@ export class InMemoryLearningMapRepository implements LearningMapRepository {
       id: params.id,
       ownerUserId,
       visibility: "private",
+      latestVersion: null,
+      versions: [],
       createdAt: params.nowIso,
       updatedAt: params.nowIso,
       updatedAtMs: params.nowMs,
@@ -867,6 +880,7 @@ export class InMemoryLearningMapRepository implements LearningMapRepository {
         title: map.title,
         description: map.description,
         visibility: map.visibility,
+        latestVersion: map.latestVersion,
         nodeCount: map.nodes.length,
         createdAt: map.createdAt,
         updatedAt: map.updatedAt,
@@ -883,6 +897,7 @@ export class InMemoryLearningMapRepository implements LearningMapRepository {
       title: copy.title,
       description: copy.description,
       visibility: copy.visibility,
+      latestVersion: copy.latestVersion,
       createdAt: copy.createdAt,
       updatedAt: copy.updatedAt,
       nodes: copy.nodes,
@@ -922,6 +937,164 @@ export class InMemoryLearningMapRepository implements LearningMapRepository {
       updatedAtMs: now.nowMs,
     });
     return Promise.resolve(true);
+  }
+
+  publishVersion(
+    ownerUserId: string,
+    mapId: string,
+    params: {
+      expectedLatest: number | null;
+      scope: ShareScope;
+      content: string;
+      contentHash: string;
+      checksIncluded: boolean;
+      summary: MapVersionSummary;
+      nowIso: string;
+      nowMs: number;
+    },
+  ): Promise<boolean> {
+    const map = this.owned(ownerUserId, mapId);
+    if (map === undefined || map.latestVersion !== params.expectedLatest) {
+      return Promise.resolve(false);
+    }
+    const version = (params.expectedLatest ?? 0) + 1;
+    map.versions.push({
+      version,
+      content: params.content,
+      contentHash: params.contentHash,
+      authorUserId: ownerUserId,
+      restoredFrom: null,
+      checksIncluded: params.checksIncluded,
+      summary: structuredClone(params.summary),
+      createdAt: params.nowIso,
+      createdAtMs: params.nowMs,
+    });
+    map.latestVersion = version;
+    map.visibility = params.scope;
+    return Promise.resolve(true);
+  }
+
+  setShareScope(ownerUserId: string, mapId: string, scope: ShareScope | null): Promise<boolean> {
+    const map = this.owned(ownerUserId, mapId);
+    if (map === undefined || (scope !== null && map.latestVersion === null)) {
+      return Promise.resolve(false);
+    }
+    map.visibility = scope ?? "private";
+    return Promise.resolve(true);
+  }
+
+  listVersions(ownerUserId: string, mapId: string): Promise<MapVersionMeta[] | null> {
+    const map = this.owned(ownerUserId, mapId);
+    if (map === undefined) return Promise.resolve(null);
+    return Promise.resolve(
+      [...map.versions].reverse().map((version) => toVersionMeta(structuredClone(version))),
+    );
+  }
+
+  getVersion(
+    ownerUserId: string,
+    mapId: string,
+    version: number,
+  ): Promise<StoredMapVersion | null> {
+    const found = this.owned(ownerUserId, mapId)?.versions.find(
+      (candidate) => candidate.version === version,
+    );
+    return Promise.resolve(found === undefined ? null : toStoredVersion(found));
+  }
+
+  async restoreVersion(
+    ownerUserId: string,
+    mapId: string,
+    params: {
+      fromVersion: number;
+      expectedLatest: number;
+      content: StoredMapContent;
+      objectives: readonly StoredLearningObjective[];
+      summary: MapVersionSummary;
+      nowIso: string;
+      nowMs: number;
+    },
+  ): Promise<boolean> {
+    const map = this.owned(ownerUserId, mapId);
+    const from = map?.versions.find((candidate) => candidate.version === params.fromVersion);
+    if (map === undefined || from === undefined || map.latestVersion !== params.expectedLatest) {
+      return false;
+    }
+    await this.replace(ownerUserId, mapId, params.content, params);
+    // 項目を全部置き換える。外す項目を狙った確認問題は消す（replaceObjectives と同じ）。
+    const keptIds = new Set(params.objectives.map((objective) => objective.id));
+    const ownIds = new Set(
+      params.content.nodes.filter((node) => node.kind === "own").map((node) => node.conceptId),
+    );
+    this.dropChecks(
+      ownerUserId,
+      (check) =>
+        ownIds.has(check.conceptId) &&
+        check.objectiveId !== undefined &&
+        !keptIds.has(check.objectiveId),
+    );
+    map.objectives = new Map();
+    for (const objective of params.objectives) {
+      map.objectives.set(objective.conceptId, [
+        ...(map.objectives.get(objective.conceptId) ?? []),
+        { ...objective },
+      ]);
+    }
+    const version = params.expectedLatest + 1;
+    map.versions.push({
+      ...structuredClone(from),
+      version,
+      authorUserId: ownerUserId,
+      restoredFrom: params.fromVersion,
+      summary: structuredClone(params.summary),
+      createdAt: params.nowIso,
+      createdAtMs: params.nowMs,
+    });
+    map.latestVersion = version;
+    return true;
+  }
+
+  getShared(mapId: string): Promise<StoredSharedMap | null> {
+    const map = this.store.learningMaps.get(mapId);
+    if (map === undefined) return Promise.resolve(null);
+    const latest = map.versions.at(-1);
+    return Promise.resolve({
+      id: map.id,
+      ownerUserId: map.ownerUserId,
+      visibility: map.visibility,
+      latest: latest === undefined ? null : toStoredVersion(latest),
+    });
+  }
+
+  /** D1 の ORDER BY v.created_at_ms DESC, m.id ASC と一致させる。 */
+  listPublic(limit: number): Promise<SharedMapSummary[]> {
+    const listed = [...this.store.learningMaps.values()].flatMap((map) => {
+      const latest = map.versions.at(-1);
+      if (map.visibility !== "public" || latest === undefined) return [];
+      const content = JSON.parse(latest.content) as {
+        title: string;
+        description: string;
+        nodes: unknown[];
+      };
+      return [
+        {
+          summary: {
+            id: map.id,
+            title: content.title,
+            description: content.description,
+            nodeCount: content.nodes.length,
+            version: latest.version,
+            publishedAt: latest.createdAt,
+          },
+          at: latest.createdAtMs,
+        },
+      ];
+    });
+    listed.sort(
+      (a, b) =>
+        b.at - a.at || (a.summary.id < b.summary.id ? -1 : a.summary.id > b.summary.id ? 1 : 0),
+    );
+    return Promise.resolve(listed.slice(0, limit).map((entry) => entry.summary));
   }
 
   delete(ownerUserId: string, mapId: string): Promise<boolean> {
@@ -1078,4 +1251,20 @@ export class InMemoryLearningMapRepository implements LearningMapRepository {
       ),
     );
   }
+}
+
+function toVersionMeta(version: StoredMapVersion): MapVersionMeta {
+  return {
+    version: version.version,
+    createdAt: version.createdAt,
+    authorUserId: version.authorUserId,
+    restoredFrom: version.restoredFrom,
+    checksIncluded: version.checksIncluded,
+    summary: version.summary,
+  };
+}
+
+function toStoredVersion(version: StoredMapVersion): StoredMapVersion {
+  const copy = structuredClone(version);
+  return { ...toVersionMeta(copy), content: copy.content, contentHash: copy.contentHash };
 }

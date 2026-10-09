@@ -27,6 +27,8 @@ import { Route as FramedSettingsDataRouteImport } from './routes/_framed/setting
 import { Route as FramedSettingsUsageRouteImport } from './routes/_framed/settings/usage'
 import { Route as FramedMapLanguageObjectivesRouteImport } from './routes/_framed/map.$language_.objectives'
 import { Route as FramedMapsMapIdEditRouteImport } from './routes/_framed/maps.$mapId_.edit'
+import { Route as FramedMapsMapIdHistoryRouteImport } from './routes/_framed/maps.$mapId_.history'
+import { Route as FramedMapsMapIdShareRouteImport } from './routes/_framed/maps.$mapId_.share'
 
 const FramedRouteRoute = FramedRouteRouteImport.update({
   id: '/_framed',
@@ -119,6 +121,16 @@ const FramedMapsMapIdEditRoute = FramedMapsMapIdEditRouteImport.update({
   path: '/maps/$mapId/edit',
   getParentRoute: () => FramedRouteRoute,
 } as any)
+const FramedMapsMapIdHistoryRoute = FramedMapsMapIdHistoryRouteImport.update({
+  id: '/maps/$mapId_/history',
+  path: '/maps/$mapId/history',
+  getParentRoute: () => FramedRouteRoute,
+} as any)
+const FramedMapsMapIdShareRoute = FramedMapsMapIdShareRouteImport.update({
+  id: '/maps/$mapId_/share',
+  path: '/maps/$mapId/share',
+  getParentRoute: () => FramedRouteRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof FramedIndexRoute
@@ -138,6 +150,8 @@ export interface FileRoutesByFullPath {
   '/settings/': typeof FramedSettingsIndexRoute
   '/map/$language/objectives': typeof FramedMapLanguageObjectivesRoute
   '/maps/$mapId/edit': typeof FramedMapsMapIdEditRoute
+  '/maps/$mapId/history': typeof FramedMapsMapIdHistoryRoute
+  '/maps/$mapId/share': typeof FramedMapsMapIdShareRoute
 }
 export interface FileRoutesByTo {
   '/login-failed': typeof LoginFailedRoute
@@ -156,6 +170,8 @@ export interface FileRoutesByTo {
   '/settings': typeof FramedSettingsIndexRoute
   '/map/$language/objectives': typeof FramedMapLanguageObjectivesRoute
   '/maps/$mapId/edit': typeof FramedMapsMapIdEditRoute
+  '/maps/$mapId/history': typeof FramedMapsMapIdHistoryRoute
+  '/maps/$mapId/share': typeof FramedMapsMapIdShareRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -177,6 +193,8 @@ export interface FileRoutesById {
   '/_framed/settings/': typeof FramedSettingsIndexRoute
   '/_framed/map/$language_/objectives': typeof FramedMapLanguageObjectivesRoute
   '/_framed/maps/$mapId_/edit': typeof FramedMapsMapIdEditRoute
+  '/_framed/maps/$mapId_/history': typeof FramedMapsMapIdHistoryRoute
+  '/_framed/maps/$mapId_/share': typeof FramedMapsMapIdShareRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -198,6 +216,8 @@ export interface FileRouteTypes {
     | '/settings/'
     | '/map/$language/objectives'
     | '/maps/$mapId/edit'
+    | '/maps/$mapId/history'
+    | '/maps/$mapId/share'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/login-failed'
@@ -216,6 +236,8 @@ export interface FileRouteTypes {
     | '/settings'
     | '/map/$language/objectives'
     | '/maps/$mapId/edit'
+    | '/maps/$mapId/history'
+    | '/maps/$mapId/share'
   id:
     | '__root__'
     | '/_framed'
@@ -236,6 +258,8 @@ export interface FileRouteTypes {
     | '/_framed/settings/'
     | '/_framed/map/$language_/objectives'
     | '/_framed/maps/$mapId_/edit'
+    | '/_framed/maps/$mapId_/history'
+    | '/_framed/maps/$mapId_/share'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -371,6 +395,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof FramedMapsMapIdEditRouteImport
       parentRoute: typeof FramedRouteRoute
     }
+    '/_framed/maps/$mapId_/history': {
+      id: '/_framed/maps/$mapId_/history'
+      path: '/maps/$mapId/history'
+      fullPath: '/maps/$mapId/history'
+      preLoaderRoute: typeof FramedMapsMapIdHistoryRouteImport
+      parentRoute: typeof FramedRouteRoute
+    }
+    '/_framed/maps/$mapId_/share': {
+      id: '/_framed/maps/$mapId_/share'
+      path: '/maps/$mapId/share'
+      fullPath: '/maps/$mapId/share'
+      preLoaderRoute: typeof FramedMapsMapIdShareRouteImport
+      parentRoute: typeof FramedRouteRoute
+    }
   }
 }
 
@@ -404,6 +442,8 @@ interface FramedRouteRouteChildren {
   FramedMapsIndexRoute: typeof FramedMapsIndexRoute
   FramedMapLanguageObjectivesRoute: typeof FramedMapLanguageObjectivesRoute
   FramedMapsMapIdEditRoute: typeof FramedMapsMapIdEditRoute
+  FramedMapsMapIdHistoryRoute: typeof FramedMapsMapIdHistoryRoute
+  FramedMapsMapIdShareRoute: typeof FramedMapsMapIdShareRoute
 }
 
 const FramedRouteRouteChildren: FramedRouteRouteChildren = {
@@ -419,6 +459,8 @@ const FramedRouteRouteChildren: FramedRouteRouteChildren = {
   FramedMapsIndexRoute: FramedMapsIndexRoute,
   FramedMapLanguageObjectivesRoute: FramedMapLanguageObjectivesRoute,
   FramedMapsMapIdEditRoute: FramedMapsMapIdEditRoute,
+  FramedMapsMapIdHistoryRoute: FramedMapsMapIdHistoryRoute,
+  FramedMapsMapIdShareRoute: FramedMapsMapIdShareRoute,
 }
 
 const FramedRouteRouteWithChildren = FramedRouteRoute._addFileChildren(

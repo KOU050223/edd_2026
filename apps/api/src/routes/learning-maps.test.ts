@@ -68,6 +68,7 @@ beforeEach(() => {
       identity,
       // テストが途中で差し替えられるよう、リクエストのたびに今の値を読む。
       maps,
+      checks: new InMemoryPersonalCheckRepository(store),
       fixedConcepts: FIXED_CONCEPTS,
       // 呼ばれた順に k0000001, k0000002 … を返す。採番の結果をテストで言い当てられるようにする。
       newKey: () => `k${String(++keys).padStart(7, "0")}`,
@@ -142,6 +143,7 @@ test("マップを作ると、ID を振ったノードと線を返し、一覧�
       title: "Rust 入門",
       description: "所有権まで",
       visibility: "private",
+      latestVersion: null,
       nodeCount: 2,
       createdAt: map.createdAt,
       updatedAt: map.updatedAt,

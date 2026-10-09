@@ -10,6 +10,7 @@ import {
   MapInputError,
   MapLimitError,
 } from "../../learning-maps.js";
+import { fetchSharedMaps, VISIBILITY_BADGES, type SharedMapSummary } from "../../map-sharing.js";
 import { takeLoginRetry } from "../../session.js";
 
 /** マップを作る。作るのは題名と説明だけで、ノードは作ったあとの編集画面で足す。 */
@@ -98,11 +99,41 @@ function CreateMapForm({ full }: { full: boolean }) {
 }
 
 /**
+ * 範囲が「全員」の共有マップ（#244 の T5）。新しく上げた順。作成者の名前は出さない。
+ * 評価・検索はスコープ外（#244）。
+ */
+function SharedMapList({ maps }: { maps: readonly SharedMapSummary[] }) {
+  return (
+    <section>
+      <h2>みんなの共有マップ</h2>
+      {maps.length === 0 ? (
+        <p className="hint">まだ全員に共有されたマップはありません。</p>
+      ) : (
+        <ul className="map-list">
+          {maps.map((map) => (
+            <li key={map.id} className="map-list-item">
+              <Link to="/maps/$mapId" params={{ mapId: map.id }} className="map-list-link">
+                <h3>{map.title}</h3>
+                {map.description && <p className="muted">{map.description}</p>}
+                <p className="muted">
+                  {map.nodeCount} ノード・版 {map.version}・
+                  {new Date(map.publishedAt).toLocaleDateString("ja-JP")}
+                </p>
+              </Link>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+/**
  * 自分が手で作った学習マップの一覧（Issue #242）。マップは最初は作成者だけのもの。
- * 作成・表示への導線・削除を持つ。
+ * 作成・表示への導線・削除を持つ。下に、全員に共有されたマップの一覧を出す（#244）。
  */
 function MapList() {
-  const { maps } = Route.useLoaderData();
+  const { maps, shared } = Route.useLoaderData();
   const router = useRouter();
   const [deleting, setDeleting] = useState<string>();
   const [deleteError, setDeleteError] = useState<string>();
@@ -173,6 +204,7 @@ function MapList() {
                 {map.description && <p className="muted">{map.description}</p>}
                 <p className="muted">
                   {map.nodeCount} ノード・更新 {new Date(map.updatedAt).toLocaleDateString("ja-JP")}
+                  {map.visibility !== "private" && `・${VISIBILITY_BADGES[map.visibility]}`}
                 </p>
               </Link>
               <button
@@ -186,6 +218,7 @@ function MapList() {
           ))}
         </ul>
       )}
+      <SharedMapList maps={shared} />
     </>
   );
 }
@@ -193,6 +226,14 @@ function MapList() {
 export const Route = createFileRoute("/_framed/maps/")({
   // 作成・削除のあとに戻ってきたとき、古い一覧を見せない。
   staleTime: 0,
-  loader: () => fetchLearningMaps(fetch, takeLoginRetry()),
+  // 自分のマップと共有マップの一覧は1つの結果にまとめる（RULE-005）。
+  loader: async () => {
+    const retry = takeLoginRetry();
+    const [{ maps }, { maps: shared }] = await Promise.all([
+      fetchLearningMaps(fetch, retry),
+      fetchSharedMaps(fetch, retry),
+    ]);
+    return { maps, shared };
+  },
   component: MapList,
 });

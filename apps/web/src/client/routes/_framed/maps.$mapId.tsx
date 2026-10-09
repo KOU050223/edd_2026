@@ -18,7 +18,13 @@ import {
   linkConcepts,
   summarizeTree,
 } from "../../learning-map.js";
-import { fetchLearningMap, mapDefinitions } from "../../learning-maps.js";
+import { fetchLearningMap, mapDefinitions, type LearningMapView } from "../../learning-maps.js";
+import {
+  fetchSharedMap,
+  VISIBILITY_BADGES,
+  VISIBILITY_LABELS,
+  type SharedMapView,
+} from "../../map-sharing.js";
 import {
   CreationChecksError,
   creationChecksSummary,
@@ -104,13 +110,51 @@ function CreationChecksPanel({
   );
 }
 
+/** 持ち主に見せる共有の状態（#244）。共有の設定と版の履歴への入口。 */
+function SharingStatus({ map }: { map: LearningMapView }) {
+  return (
+    <p className="share-status">
+      <span>
+        共有: <strong>{VISIBILITY_LABELS[map.visibility]}</strong>
+        {map.latestVersion !== null && <span className="muted">（版 {map.latestVersion}）</span>}
+      </span>
+      <Link to="/maps/$mapId/share" params={{ mapId: map.id }} className="link">
+        {map.visibility === "private" ? "共有する" : "共有の設定・新しい版を上げる"}
+      </Link>
+      {map.latestVersion !== null && (
+        <Link to="/maps/$mapId/history" params={{ mapId: map.id }} className="link">
+          版の履歴
+        </Link>
+      )}
+    </p>
+  );
+}
+
+/** 持ち主以外に見せる、共有の側の版の説明（#244）。 */
+function SharedNotice({ map }: { map: SharedMapView }) {
+  return (
+    <section className="message">
+      <p>
+        共有マップ（{VISIBILITY_BADGES[map.visibility]}・版 {map.version}・
+        {new Date(map.publishedAt).toLocaleDateString("ja-JP")}）を見ています。
+        読むことはできますが、編集はできません。
+      </p>
+    </section>
+  );
+}
+
 /**
- * 手で作った学習マップ1件の表示（Issue #242）。言語別マップ（`/map/$language`）と同じ
+ * 学習マップ1件の表示（Issue #242）。言語別マップ（`/map/$language`）と同じ
  * `SkillTree` と詳細パネルを使う。ノードを選ぶと `?concept=` 付きの URL へ遷移する。
+ *
+ * 自分のマップなら手元のマップを、他人のマップなら共有の側のいちばん新しい版を出す（#244）。
+ * 他人のマップは読むだけで、理解度の変更と確認問題の入口は出さない。
  */
 function LearningMapPage() {
   const { mapId } = Route.useParams();
-  const { map, profile, overrides } = Route.useLoaderData();
+  const { loaded, profile, overrides } = Route.useLoaderData();
+  const map = loaded.map;
+  const own = loaded.kind === "own" ? loaded.map : undefined;
   const { concept: selectedId } = Route.useSearch();
   const router = useRouter();
   const navigate = useNavigate();
@@ -175,17 +219,24 @@ function LearningMapPage() {
     <>
       <p className="map-head">
         <Link to="/maps" className="link">
-          ← 自分のマップ
+          {own ? "← 自分のマップ" : "← マップの一覧"}
         </Link>
         <h1>{map.title}</h1>
         {/* 編集はノードごとではなくマップ単位（まとめて保存する）なので、そう書く。 */}
-        <Link to="/maps/$mapId/edit" params={{ mapId }} className="link">
-          マップを編集
-        </Link>
+        {own && (
+          <Link to="/maps/$mapId/edit" params={{ mapId }} className="link">
+            マップを編集
+          </Link>
+        )}
       </p>
       {map.description && <p className="muted">{map.description}</p>}
-      {map.creationChecks !== undefined && map.creationChecks.status !== "done" && (
-        <CreationChecksPanel mapId={mapId} status={map.creationChecks.status} />
+      {own ? (
+        <SharingStatus map={own} />
+      ) : (
+        loaded.kind === "shared" && <SharedNotice map={loaded.map} />
+      )}
+      {own?.creationChecks !== undefined && own.creationChecks.status !== "done" && (
+        <CreationChecksPanel mapId={mapId} status={own.creationChecks.status} />
       )}
       {summary && (
         <section className="summary" aria-label={`${map.title} の集計`}>
@@ -209,13 +260,17 @@ function LearningMapPage() {
         </section>
       )}
       {tree === undefined ? (
-        <p className="hint">
-          このマップにはまだノードがありません。
-          <Link to="/maps/$mapId/edit" params={{ mapId }} className="link">
-            マップを編集
-          </Link>
-          からノードを足してください。
-        </p>
+        own ? (
+          <p className="hint">
+            このマップにはまだノードがありません。
+            <Link to="/maps/$mapId/edit" params={{ mapId }} className="link">
+              マップを編集
+            </Link>
+            からノードを足してください。
+          </p>
+        ) : (
+          <p className="hint">このマップにはノードがありません。</p>
+        )
       ) : (
         <div className={selected ? "map-layout" : undefined}>
           <div className="map">
@@ -242,8 +297,9 @@ function LearningMapPage() {
               concepts={concepts}
               isCurrent={selected.conceptId === current}
               pending={pending.includes(selected.conceptId)}
-              // マップの画面はログインしないと開けない。
-              loggedIn
+              // マップの画面はログインしないと開けない。他人のマップは読むだけなので、
+              // 理解度の変更と確認問題の入口を出さない（取り込んでから使う、#244）。
+              loggedIn={own !== undefined}
               onChange={(status) => changeStatus(selected.conceptId, status)}
               onSelect={select}
               panel={detail}
@@ -255,6 +311,22 @@ function LearningMapPage() {
   );
 }
 
+/**
+ * 自分のマップなら手元のマップ、そうでなければ共有の側の版を読む（#244 の T5。リンクは
+ * `/maps/<マップ ID>`）。自分のマップでも共有されたマップでもなければ、共有の側の 404 をそのまま返す。
+ */
+async function loadMap(
+  mapId: string,
+  retry: boolean | number,
+): Promise<{ kind: "own"; map: LearningMapView } | { kind: "shared"; map: SharedMapView }> {
+  try {
+    return { kind: "own", map: await fetchLearningMap(mapId, fetch, retry) };
+  } catch (error: unknown) {
+    if (!(error instanceof ApiError && error.kind === "not_found")) throw error;
+  }
+  return { kind: "shared", map: await fetchSharedMap(mapId, fetch, retry) };
+}
+
 export const Route = createFileRoute("/_framed/maps/$mapId")({
   validateSearch: parseConceptSearch,
   // 編集や確認問題から戻ってきたとき、古い中身を見せない。
@@ -262,12 +334,12 @@ export const Route = createFileRoute("/_framed/maps/$mapId")({
   // マップと習熟度は1つの結果にまとめる。片方だけ古い組み合わせを出さない（RULE-005）。
   loader: async ({ params }) => {
     const retry = takeLoginRetry();
-    const [map, profile, overrides] = await Promise.all([
-      fetchLearningMap(params.mapId, fetch, retry),
+    const [loaded, profile, overrides] = await Promise.all([
+      loadMap(params.mapId, retry),
       requestJson<MapProfile>("/api/v1/learning-profile", fetch, retry),
       requestJson<MasteryOverrides>("/api/v1/mastery-overrides", fetch, retry),
     ]);
-    return { map, profile, overrides };
+    return { loaded, profile, overrides };
   },
   component: LearningMapPage,
 });

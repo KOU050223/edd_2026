@@ -179,6 +179,11 @@ app.use(
   "/v1/learning-maps*",
   rateLimit((env) => env.PROFILE_RATE_LIMITER),
 );
+// 共有マップ（#244）。一覧・表示は画面を開くたびで、学習マップと同じ上限を使う。
+app.use(
+  "/v1/shared-maps*",
+  rateLimit((env) => env.PROFILE_RATE_LIMITER),
+);
 // 言語別マップの項目の作り直し（#245）。使うのは作成者だけで、頻度は学習マップの編集と同じ。
 app.use(
   "/v1/fixed-maps*",
@@ -371,6 +376,7 @@ app.route(
   createLearningMapsRoute((env) => ({
     identity: new D1IdentityRepository(env.DB),
     maps: new D1LearningMapRepository(env.DB),
+    checks: new D1PersonalCheckRepository(env.DB),
     fixedConcepts: CONCEPTS,
     newKey: randomKey,
     nowIso: () => new Date().toISOString(),

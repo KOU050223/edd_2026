@@ -17,7 +17,9 @@ export const MAP_LIMITS = {
   description: 400,
 } as const;
 
-export type LearningMapVisibility = "private" | "shared";
+/** 共有の範囲（#244）。`link` はリンクを知っている人だけ、`public` は全員（一覧に出す）。 */
+export type ShareScope = "link" | "public";
+export type LearningMapVisibility = "private" | ShareScope;
 
 export interface LearningObjectiveView {
   id: string;
@@ -50,6 +52,8 @@ export interface LearningMapSummary {
   title: string;
   description: string;
   visibility: LearningMapVisibility;
+  /** 共有の側のいちばん新しい版の番号。まだ一度も共有へ上げていなければ `null`。 */
+  latestVersion: number | null;
   nodeCount: number;
   createdAt: string;
   updatedAt: string;
@@ -115,7 +119,9 @@ export interface MapDefinitions {
  * 参照のノードも同じ木に置くので、`language` は元の Concept の領域ではなくこのマップの ID にする。
  * 前提は線から引く（線の両端は同じマップのノード）。
  */
-export function mapDefinitions(map: LearningMapView): MapDefinitions {
+export function mapDefinitions(
+  map: Pick<LearningMapView, "id" | "nodes" | "edges">,
+): MapDefinitions {
   const prerequisites = new Map<string, string[]>();
   for (const edge of map.edges) {
     prerequisites.set(edge.to, [...(prerequisites.get(edge.to) ?? []), edge.from]);

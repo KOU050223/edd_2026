@@ -174,6 +174,7 @@ beforeEach(() => {
     createLearningMapsRoute(() => ({
       identity,
       maps,
+      checks,
       fixedConcepts: FIXED_CONCEPTS,
       newKey: () => `k${String(++keys).padStart(7, "0")}`,
       nowIso: () => NOW.toISOString(),

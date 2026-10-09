@@ -28,6 +28,10 @@ import type { ConversationSummary } from "../contract/conversations.js";
 import type {
   LearningMapSummary,
   LearningMapVisibility,
+  MapVersionMeta,
+  MapVersionSummary,
+  SharedMapSummary,
+  ShareScope,
   LearningObjectiveSource,
 } from "../contract/learning-maps.js";
 import type { UserSettings, UserSettingsInput } from "../contract/user-settings.js";
@@ -632,6 +636,8 @@ export interface StoredLearningObjective {
 export interface StoredLearningMap extends StoredMapContent {
   id: string;
   visibility: LearningMapVisibility;
+  /** 共有の側のいちばん新しい版の番号（#244）。まだ一度も上げていなければ `null`。 */
+  latestVersion: number | null;
   createdAt: string;
   updatedAt: string;
   /** Concept ID → 項目（保存した順）。項目の無いノードは含まない。 */
@@ -662,6 +668,22 @@ export interface StoredOwnMapNode {
   /** 前提のノードの Concept ID（同じマップの線から引く）。 */
   prerequisites: string[];
   objectives: StoredLearningObjective[];
+}
+
+/** 共有の版1件（migrations/0019_learning_map_versions.sql、#244）。中身は JSON のまま返す。 */
+export interface StoredMapVersion extends MapVersionMeta {
+  /** maps/snapshot.ts の MapSnapshot の JSON。 */
+  content: string;
+  contentHash: string;
+}
+
+/** 共有の側から見たマップ（持ち主に限らず読む）。 */
+export interface StoredSharedMap {
+  id: string;
+  ownerUserId: string;
+  visibility: LearningMapVisibility;
+  /** いちばん新しい版。まだ一度も上げていなければ `null`。 */
+  latest: StoredMapVersion | null;
 }
 
 /**
@@ -737,6 +759,73 @@ export interface LearningMapRepository {
     content: StoredMapContent,
     now: { nowIso: string; nowMs: number },
   ): Promise<boolean>;
+
+  /**
+   * 共有の新しい版を足し、共有の範囲を `scope` にする（#244 の T1-a）。
+   *
+   * いちばん新しい版が `expectedLatest`（まだ版が無ければ `null`）のときだけ書く。
+   * 確認画面を見たあとに別の端末で上げられていたら、何も書かず `false` を返す。
+   * 版の番号は `expectedLatest + 1`（無ければ 1）。判定と書き込みは1つのトランザクションで行う。
+   * 自分のマップでなければ `false`。
+   */
+  publishVersion(
+    ownerUserId: string,
+    mapId: string,
+    params: {
+      expectedLatest: number | null;
+      scope: ShareScope;
+      content: string;
+      contentHash: string;
+      checksIncluded: boolean;
+      summary: MapVersionSummary;
+      nowIso: string;
+      nowMs: number;
+    },
+  ): Promise<boolean>;
+
+  /**
+   * 共有の範囲だけを変える。版は作らない。`null` で非公開に戻す（版は残す）。
+   * 共有へ切り替える（`null` 以外）のは、版が1つ以上あるときだけ。
+   * @returns 自分のマップが無いか、版が無いのに共有へ切り替えようとしたら `false`。
+   */
+  setShareScope(ownerUserId: string, mapId: string, scope: ShareScope | null): Promise<boolean>;
+
+  /** 自分のマップの版の一覧（新しい版から、中身は含めない）。自分のマップでなければ `null`。 */
+  listVersions(ownerUserId: string, mapId: string): Promise<MapVersionMeta[] | null>;
+
+  /** 自分のマップの版1つ。自分のマップでないか、その版が無ければ `null`。 */
+  getVersion(ownerUserId: string, mapId: string, version: number): Promise<StoredMapVersion | null>;
+
+  /**
+   * 過去の版 `fromVersion` の中身で新しい版を作り、手元のマップもその中身に戻す（#244 の T2）。
+   * 履歴は書き換えない。新しい版の中身・ハッシュ・確認問題を含めたかは元の版のまま写す。
+   *
+   * 手元は `content`（題名・説明・ノード・線）と `objectives`（参照ではないノードの項目の全部）で
+   * 置き換える。残すノードの項目のうち `objectives` に無いものは消え、それを狙った自分の
+   * 確認問題も消える（{@link replaceObjectives} と同じ扱い）。消えるノードの確認問題も消える
+   * （{@link replace} と同じ）。
+   *
+   * いちばん新しい版が `expectedLatest` のときだけ書く。違えば何も書かず `false`。
+   */
+  restoreVersion(
+    ownerUserId: string,
+    mapId: string,
+    params: {
+      fromVersion: number;
+      expectedLatest: number;
+      content: StoredMapContent;
+      objectives: readonly StoredLearningObjective[];
+      summary: MapVersionSummary;
+      nowIso: string;
+      nowMs: number;
+    },
+  ): Promise<boolean>;
+
+  /** 持ち主に限らずマップを読む（共有の側の表示、#244）。マップが無ければ `null`。 */
+  getShared(mapId: string): Promise<StoredSharedMap | null>;
+
+  /** 範囲が「全員」の共有マップ。新しく上げた順（同時刻は ID の昇順）に `limit` 件まで。 */
+  listPublic(limit: number): Promise<SharedMapSummary[]>;
 
   /** マップを消す。ノード・線・項目も消える。@returns 消したら `true`。 */
   delete(ownerUserId: string, mapId: string): Promise<boolean>;
