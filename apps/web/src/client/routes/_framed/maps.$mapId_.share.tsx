@@ -1,5 +1,5 @@
 import { CHECK_LEVEL_LABELS, CHECK_LEVELS, type CheckLevel } from "@gakushu-sochi/domain";
-import { createFileRoute, Link, useNavigate, useRouter } from "@tanstack/react-router";
+import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
 import { useRef, useState } from "react";
 import { ApiError, createSubmitGuard } from "../../api.js";
 import {
@@ -28,6 +28,7 @@ import {
   VISIBILITY_LABELS,
   type MapPublishPreview,
 } from "../../map-sharing.js";
+import { useOpenMapAfterWrite } from "../../learning-map-view.js";
 import { takeLoginRetry } from "../../session.js";
 
 /** 失敗を画面の文にする。セッション切れはログインへ送る。 */
@@ -187,7 +188,7 @@ function ForkChecksPanel({
 function SharePage() {
   const { mapId } = Route.useParams();
   const { preview: loaded, map, consent } = Route.useLoaderData();
-  const navigate = useNavigate();
+  const openMap = useOpenMapAfterWrite();
   const router = useRouter();
   const [preview, setPreview] = useState<MapPublishPreview>(loaded);
   const [scope, setScope] = useState<ShareScope>(
@@ -234,7 +235,7 @@ function SharePage() {
             baseVersion: preview.latest?.version ?? null,
             contentHash: preview.contentHash,
           });
-          await navigate({ to: "/maps/$mapId", params: { mapId } });
+          await openMap(mapId);
         } catch (value: unknown) {
           setError(failureText(value));
           // 中身や版が変わっていたら、今の中身を見せ直す（確かめていない中身を上げさせない）。
@@ -264,8 +265,7 @@ function SharePage() {
       .run("share", async () => {
         try {
           await setMapVisibility(mapId, visibility);
-          await router.invalidate();
-          await navigate({ to: "/maps/$mapId", params: { mapId } });
+          await openMap(mapId);
         } catch (value: unknown) {
           setError(failureText(value));
         }

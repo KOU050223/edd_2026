@@ -9,6 +9,7 @@
  * 別の利用者を巻き添えにする。逆に IP は変えられるので、上限の回避も容易である。
  */
 
+import type { Hono } from "hono";
 import { createMiddleware } from "hono/factory";
 import { HTTPException } from "hono/http-exception";
 import type { AuthVariables } from "./middleware.js";
@@ -46,4 +47,25 @@ export function rateLimit(selectLimiter: (env: CloudflareBindings) => RateLimit)
 
     await next();
   });
+}
+
+/**
+ * 学習マップ（#242）・共有マップ（#244）・言語別マップ（#245）の経路を `MAP_RATE_LIMITER` で数える（#299）。
+ *
+ * どれも画面を開くたびに読み、共有・取り込みの操作では画面を何度も行き来する。Profile と同じ枠
+ * （1 分 30 回）では、ふつうの操作で上限に届いた。全イベントを導出する Profile より軽いので別枠にする。
+ * 生成の口（`learning-maps:generate` など）も含む。AI の回数は `ai_usage` が別に数える。
+ *
+ * 生成の同意の口（`/v1/map-generation-consent`）はこの前置きに当たらないので、
+ * `routes/learning-maps.ts` が同じ枠で数える。
+ */
+export function useMapRateLimit(
+  app: Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>,
+) {
+  for (const path of ["/v1/learning-maps*", "/v1/shared-maps*", "/v1/fixed-maps*"]) {
+    app.use(
+      path,
+      rateLimit((env) => env.MAP_RATE_LIMITER),
+    );
+  }
 }

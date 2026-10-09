@@ -2,7 +2,7 @@ import { expect, test, vi } from "vitest";
 import { Hono } from "hono";
 import { type AuthVariables } from "./middleware.js";
 import { AUTHORIZED_HEADERS, stubAuth } from "./test-auth.js";
-import { rateLimit } from "./rate-limit.js";
+import { rateLimit, useMapRateLimit } from "./rate-limit.js";
 
 /** 呼ばれた key を記録し、指定回数を超えたら拒否するテスト用のリミッタ。 */
 function fakeLimiter(allowed: number) {
@@ -178,4 +178,57 @@ test("認証が無ければレート制限より前に401で止める", async ()
   expect(res.status).toBe(401);
   // userId が決まっていない状態で数えていない。
   expect(keys).toEqual([]);
+});
+
+/** `app.ts` と同じく `useMapRateLimit` を付けたアプリ。`/v1/learning-profile` は Profile の枠で数える。 */
+function buildMapApp(env: { MAP_RATE_LIMITER: RateLimit; PROFILE_RATE_LIMITER: RateLimit }) {
+  const app = new Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>();
+  app.use("/v1/*", stubAuth("user-a"));
+  useMapRateLimit(app);
+  app.use(
+    "/v1/learning-profile",
+    rateLimit((env) => env.PROFILE_RATE_LIMITER),
+  );
+  app.all("/v1/*", (c) => c.json({ ok: true }));
+  return (path: string, method = "GET") =>
+    app.request(
+      path,
+      { method, headers: AUTHORIZED_HEADERS },
+      env as unknown as CloudflareBindings,
+    );
+}
+
+const MAP_PATHS = [
+  "/v1/learning-maps",
+  "/v1/learning-maps/m1234abcd",
+  "/v1/learning-maps:concepts",
+  "/v1/shared-maps",
+  "/v1/shared-maps/m1234abcd",
+  "/v1/fixed-maps",
+];
+
+test("マップ系の経路は Profile ではなくマップの枠で数える（#299）", async () => {
+  const map = fakeLimiter(Number.POSITIVE_INFINITY);
+  const profile = fakeLimiter(0);
+  const request = buildMapApp({
+    MAP_RATE_LIMITER: map.limiter,
+    PROFILE_RATE_LIMITER: profile.limiter,
+  });
+
+  for (const path of MAP_PATHS) expect((await request(path)).status).toBe(200);
+  expect(map.keys).toHaveLength(MAP_PATHS.length);
+  expect(profile.keys).toEqual([]);
+});
+
+test("マップの枠を使い切ってもマップ系だけが止まり、Profile は止まらない（#299）", async () => {
+  const map = fakeLimiter(0);
+  const profile = fakeLimiter(Number.POSITIVE_INFINITY);
+  const request = buildMapApp({
+    MAP_RATE_LIMITER: map.limiter,
+    PROFILE_RATE_LIMITER: profile.limiter,
+  });
+
+  for (const path of MAP_PATHS) expect((await request(path)).status).toBe(429);
+  expect((await request("/v1/learning-maps:generate", "POST")).status).toBe(429);
+  expect((await request("/v1/learning-profile")).status).toBe(200);
 });

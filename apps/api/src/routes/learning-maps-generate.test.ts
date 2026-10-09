@@ -38,7 +38,7 @@ const PASSING_LIMITER = {
     return Promise.resolve({ success: true });
   },
 } as unknown as RateLimit;
-const ENV = { PROFILE_RATE_LIMITER: PASSING_LIMITER } as unknown as CloudflareBindings;
+const ENV = { MAP_RATE_LIMITER: PASSING_LIMITER } as unknown as CloudflareBindings;
 
 const FIXED_CONCEPTS: Concept[] = [
   {

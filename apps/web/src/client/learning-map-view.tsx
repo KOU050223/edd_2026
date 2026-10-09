@@ -259,6 +259,23 @@ export function useGoToConcept(): (conceptId: string) => void {
 }
 
 /**
+ * 書き込みのあと、マップの画面へ移る（#299）。
+ *
+ * 今の画面の loader は読み直さない。離れるだけなので、読み直すと API の回数を無駄に使う
+ * （`router.invalidate()` は今の画面も読み直す）。それ以外の読み込み済みの画面（リンクに乗せて先読みした
+ * マップの画面・一覧）は捨ててから移る。捨てないと、先読みの古い中身を最大 30 秒見せる。
+ */
+export function useOpenMapAfterWrite(): (mapId: string) => Promise<void> {
+  const router = useRouter();
+  const navigate = useNavigate();
+  return async (mapId) => {
+    const current = new Set(router.state.matches.map((match) => match.id));
+    await router.invalidate({ filter: (match) => !current.has(match.id) });
+    await navigate({ to: "/maps/$mapId", params: { mapId } });
+  };
+}
+
+/**
  * 理解度の手動修正を保存する。送信中は入口で弾く（RULE-007）。
  * 保存できたら loader を捨てて取り直す。応答をそのまま state へ入れると、
  * 以後の再読み込みが表示へ届かなくなる（保存した値が固定されてしまう）。
