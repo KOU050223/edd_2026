@@ -2301,8 +2301,9 @@ export class D1LearningMapRepository implements LearningMapRepository {
     const result = await this.db
       .prepare(
         `UPDATE learning_maps SET creation_checks_level = ?
-         WHERE id = ? AND owner_user_id = ?
-           AND source_map_id IS NOT NULL AND creation_checks_level IS NULL`,
+         WHERE id = ? AND owner_user_id = ? AND source_map_id IS NOT NULL
+           AND (creation_checks_level IS NULL
+             OR (creation_checks_attempts = 0 AND creation_checks_done_at IS NULL))`,
       )
       .bind(level, mapId, ownerUserId)
       .run();

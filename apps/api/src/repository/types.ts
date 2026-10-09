@@ -778,8 +778,9 @@ export interface LearningMapRepository {
 
   /**
    * 取り込んだマップ（フォークして公開するマップ、#246 の V4-a）で、作成時の確認問題を作れるようにする。
-   * まだ作れるようになっていない（技術レベルが無い）取り込んだマップのときだけ、`level` を入れる。
-   * @returns 入れたら `true`。自分の取り込んだマップでないか、すでに入っていれば `false`。
+   * 技術レベルを `level` にする。まだ一度も頼んでいない（頼んだ回数が 0 で、作成済みでない）ときは
+   * 入れ直せる（設定の不足などで頼む前に止まったら、選び直したレベルで作れるようにする。PR #297 のレビュー）。
+   * @returns 入れたら `true`。自分の取り込んだマップでないか、すでに頼んだあとなら `false`。
    */
   enableCreationChecks(ownerUserId: string, mapId: string, level: CheckLevel): Promise<boolean>;
 

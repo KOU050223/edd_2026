@@ -874,7 +874,10 @@ export class InMemoryLearningMapRepository implements LearningMapRepository {
 
   enableCreationChecks(ownerUserId: string, mapId: string, level: CheckLevel): Promise<boolean> {
     const map = this.owned(ownerUserId, mapId);
-    if (map?.source == null || map.creationChecks !== null) return Promise.resolve(false);
+    const state = map?.creationChecks;
+    if (map?.source == null || (state != null && (state.attempts > 0 || state.doneAt !== null))) {
+      return Promise.resolve(false);
+    }
     map.creationChecks = { level, attempts: 0, doneAt: null, startedAtMs: null };
     return Promise.resolve(true);
   }

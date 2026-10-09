@@ -243,6 +243,12 @@ export async function generateForkChecks(
       ) {
         throw new MapConsentRequiredError(failure.version);
       }
+      if (status === 409 && failure.error === "creation_checks_level_locked") {
+        throw new CreationChecksError(
+          "一度頼んだあとは、最初に選んだ技術レベルでしか作り直せません。",
+          true,
+        );
+      }
       return withMessage(
         status,
         failure,

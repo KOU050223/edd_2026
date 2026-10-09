@@ -189,6 +189,19 @@ describe("generateForkChecks", () => {
     ).resolves.toEqual(result);
   });
 
+  it("一度頼んだあとに違う技術レベルを選んだら、それと分かる文にする", async () => {
+    const fetcher = vi.fn(async () =>
+      Response.json({ error: "creation_checks_level_locked" }, { status: 409 }),
+    );
+
+    const error = await generateForkChecks("mabcdefgh", { level: "advanced" }, fetcher).catch(
+      (value: unknown) => value,
+    );
+
+    expect(error).toBeInstanceOf(CreationChecksError);
+    expect((error as CreationChecksError).detail).toContain("最初に選んだ技術レベル");
+  });
+
   it("同意が無ければ、文面の版を持つ例外にする", async () => {
     const fetcher = vi.fn(async () =>
       Response.json({ error: "map generation consent required", version: 2 }, { status: 403 }),

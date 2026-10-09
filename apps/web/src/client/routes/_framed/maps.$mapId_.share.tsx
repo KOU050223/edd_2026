@@ -59,8 +59,12 @@ function ForkChecksPanel({
   const [running, setRunning] = useState(false);
   const [message, setMessage] = useState<string>();
   const [error, setError] = useState<string>();
+  const [consentSaving, setConsentSaving] = useState(false);
+  const [consentError, setConsentError] = useState<string>();
   const status = map.creationChecks?.status;
-  if (status === "done" || status === "exhausted") return null;
+  // 作成済み・回数切れなら作る入口は出さない。直前の結果（作れた数・失敗）はそのまま出す（PR #297 のレビュー）。
+  const closed = status === "done" || status === "exhausted";
+  if (closed && message === undefined && error === undefined) return null;
 
   const run = (consentVersion?: number) => {
     // 送信中は入口で弾く（RULE-007）。
@@ -92,19 +96,24 @@ function ForkChecksPanel({
   };
 
   const agree = (remember: boolean) => {
+    if (consentSaving) return;
     const version = consent.version;
-    setAsking(false);
     if (!remember) {
+      setAsking(false);
       run(version);
       return;
     }
-    changeGenerationConsent({ grant: version }, fetch, MAP_GENERATION_CONSENT_PATH).then(
-      (saved) => {
+    // 記録できるまで同意の確認を開いたままにし、失敗はそこに出す（マップの生成の画面と同じ）。
+    setConsentSaving(true);
+    setConsentError(undefined);
+    changeGenerationConsent({ grant: version }, fetch, MAP_GENERATION_CONSENT_PATH)
+      .then((saved) => {
         setConsent(saved);
+        setAsking(false);
         run(version);
-      },
-      (value: unknown) => setError(failureText(value)),
-    );
+      })
+      .catch((value: unknown) => setConsentError(failureText(value)))
+      .finally(() => setConsentSaving(false));
   };
 
   return (
@@ -113,40 +122,45 @@ function ForkChecksPanel({
         元の公開の確認問題は引き継ぎます。まだ公開の問題が無いノードは、手前から最大 10
         組を作れます（AI の利用回数を {MAP_GENERATION_COST} 回使います。作らなくても公開できます）。
       </p>
-      <div className="actions">
-        <label>
-          技術レベル{" "}
-          <select
-            value={level}
-            disabled={running || status === "pending"}
-            onChange={(event) => setLevel(event.target.value as CheckLevel)}
+      {!closed && (
+        <div className="actions">
+          <label>
+            技術レベル{" "}
+            <select
+              value={level}
+              disabled={running}
+              onChange={(event) => setLevel(event.target.value as CheckLevel)}
+            >
+              {CHECK_LEVELS.map((value) => (
+                <option key={value} value={value}>
+                  {CHECK_LEVEL_LABELS[value]}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            type="button"
+            disabled={running || asking}
+            onClick={() => (consent.granted ? run() : setAsking(true))}
           >
-            {CHECK_LEVELS.map((value) => (
-              <option key={value} value={value}>
-                {CHECK_LEVEL_LABELS[value]}
-              </option>
-            ))}
-          </select>
-        </label>
-        <button
-          type="button"
-          disabled={running || asking}
-          onClick={() => (consent.granted ? run() : setAsking(true))}
-        >
-          {running
-            ? "確認問題を作っています…"
-            : status === "pending"
-              ? "確認問題をもう一度作る"
-              : "公開の問題が無いノードの確認問題を作る"}
-        </button>
-      </div>
-      {asking && (
+            {running
+              ? "確認問題を作っています…"
+              : status === "pending"
+                ? "確認問題をもう一度作る"
+                : "公開の問題が無いノードの確認問題を作る"}
+          </button>
+        </div>
+      )}
+      {asking && !closed && (
         <ConsentPrompt
-          saving={running}
-          error={undefined}
+          saving={running || consentSaving}
+          error={consentError}
           agreeLabel="同意して作る"
           onAgree={agree}
-          onCancel={() => setAsking(false)}
+          onCancel={() => {
+            setAsking(false);
+            setConsentError(undefined);
+          }}
         />
       )}
       {message && (
@@ -287,7 +301,7 @@ function SharePage() {
         </p>
       </section>
 
-      {map.source !== null && (
+      {map.source !== null && consent !== null && (
         <>
           <section className="message">
             <p>
@@ -395,13 +409,18 @@ export const Route = createFileRoute("/_framed/maps/$mapId_/share")({
   // 編集から戻ってきたとき、古い中身で確かめさせない。
   staleTime: 0,
   // 確認画面の中身・マップ（取り込み元と作成時の問題の状態）・生成の同意は1つの結果にまとめる（RULE-005）。
+  // 生成の同意はフォークの確認問題を作るときだけ要るので、取り込んだマップでだけ読む。AI の設定が無い環境で
+  // 同意の口が 503 を返しても、ふつうのマップの共有は止めない（PR #297 のレビュー）。
   loader: async ({ params }) => {
     const retry = takeLoginRetry();
-    const [preview, map, consent] = await Promise.all([
+    const [preview, map] = await Promise.all([
       fetchPublishPreview(params.mapId, undefined, fetch, retry),
       fetchLearningMap(params.mapId, fetch, retry),
-      fetchGenerationConsent(fetch, retry, MAP_GENERATION_CONSENT_PATH),
     ]);
+    const consent =
+      map.source === null
+        ? null
+        : await fetchGenerationConsent(fetch, retry, MAP_GENERATION_CONSENT_PATH);
     return { preview, map, consent };
   },
   component: SharePage,

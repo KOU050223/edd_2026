@@ -498,8 +498,14 @@ export function createLearningMapsRoute(resolve: LearningMapsDepsResolver) {
       if (refused.status === 201) throw new Error("consent check returned a success outcome");
       return c.json(refused.body, refused.status);
     }
-    // まだなら技術レベルを入れて作れるようにする。すでに入っていれば（1回目が失敗した）そのまま頼み直す。
-    if (map.creationChecks === null) {
+    // まだ頼んでいなければ、選んだ技術レベルを入れる（頼む前に止まっていたら入れ直す）。
+    // 一度頼んだあと（全部失敗して頼み直すとき）は、同じレベルでしか頼み直せない。黙って前のレベルで
+    // 作らず、違うレベルなら 409 にする（PR #297 のレビュー）。
+    const state = map.creationChecks;
+    if (state !== null && state.attempts > 0 && state.level !== input.level) {
+      conflict("creation_checks_level_locked");
+    }
+    if (state === null || state.attempts === 0) {
       await deps.maps.enableCreationChecks(userId, mapId, input.level);
     }
     const outcome = await generateCreationChecks(

@@ -807,6 +807,42 @@ describe("POST /v1/learning-maps/:id/fork-checks:generate（#246 の V4-a）", (
     expect(again.status).toBe(409);
   });
 
+  it("頼む前に止まったら選び直したレベルで作り、頼んだあとは違うレベルを受け付けない", async () => {
+    await importedMap();
+    // 1回目は全部失敗する（形式の逸脱）。頼んだ回数は使われ、レベルは intro のまま残る。
+    creationChecksFor = () => "{}";
+    const failed = await send("POST", "/learning-maps/mper00001/fork-checks:generate", {
+      level: "intro",
+      consentVersion: MAP_GENERATION_CONSENT_VERSION,
+    });
+    expect(failed.status).toBe(502);
+    const locked = await send("POST", "/learning-maps/mper00001/fork-checks:generate", {
+      level: "advanced",
+      consentVersion: MAP_GENERATION_CONSENT_VERSION,
+    });
+    expect(locked.status).toBe(409);
+
+    // 頼む前に止まった（まだ回数を使っていない）マップは、レベルを入れ直せる。
+    expect(await maps.enableCreationChecks("user-a", "mper00001", "basic")).toBe(false);
+    await maps.createImported("user-a", {
+      id: "mper00002",
+      content: { title: "空", description: "", nodes: [], edges: [] },
+      objectives: [],
+      source: { mapId: "msrc00002", version: 1, key: null, title: "元2", nodeIds: [] },
+      checks: [],
+      nowIso: NOW.toISOString(),
+      nowMs: NOW.getTime(),
+      maxMaps: MAX_MAPS_PER_USER,
+    });
+    const empty = await send("POST", "/learning-maps/mper00002/fork-checks:generate", {
+      level: "intro",
+      consentVersion: MAP_GENERATION_CONSENT_VERSION,
+    });
+    expect(empty.status).toBe(400);
+    expect(await maps.enableCreationChecks("user-a", "mper00002", "advanced")).toBe(true);
+    expect((await maps.get("user-a", "mper00002"))?.creationChecks?.level).toBe("advanced");
+  });
+
   it("取り込んだマップでなければ作らない", async () => {
     await maps.create("user-a", {
       id: "mown00001",
