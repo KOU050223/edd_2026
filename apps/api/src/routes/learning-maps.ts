@@ -27,14 +27,19 @@ import {
   MAX_LISTED_SHARED_MAPS,
   MAX_OWN_NODES,
   MAX_MAPS_PER_USER,
+  MAX_NODES_PER_MAP,
   generateLearningMapSchema,
+  importSharedMapSchema,
   learningMapContentSchema,
   learningMapVisibilitySchema,
   learningObjectivesInputSchema,
   publishLearningMapSchema,
+  reimportLearningMapSchema,
   restoreLearningMapSchema,
   type GenerateCreationChecksResponse,
   type GenerateLearningMapResponse,
+  type ImportSharedMapResponse,
+  type LearningMapNodeView,
   type LearningMapView,
   type LearningObjectiveSource,
   type LearningObjectiveView,
@@ -49,6 +54,8 @@ import {
   type PublishLearningMapResponse,
   type PutLearningObjectivesResponse,
   type ReferencedConcept,
+  type ReimportLearningMapResponse,
+  type ReimportPreview,
   type SaveLearningMapResponse,
   type SharedMapContentView,
   type SharedMapView,
@@ -57,6 +64,12 @@ import {
 import { newMapId, resolveMapContent } from "../maps/content.js";
 import { generateLearningMap, type MapGenerationDeps } from "../maps/generate.js";
 import { generateCreationChecks, MAX_CREATION_CHECK_ATTEMPTS } from "../maps/creation-checks.js";
+import {
+  importSnapshot,
+  planReimport,
+  removedFromSource,
+  toMapSourceView,
+} from "../maps/import.js";
 import {
   buildSnapshot,
   diffContents,
@@ -74,6 +87,7 @@ import type {
   PersonalCheckRepository,
   StoredLearningMap,
   StoredLearningObjective,
+  StoredMapContent,
   StoredMapVersion,
 } from "../repository/types.js";
 
@@ -175,6 +189,14 @@ function sameKey(given: string | undefined, expected: string | null): boolean {
     diff |= given.charCodeAt(index) ^ expected.charCodeAt(index);
   }
   return diff === 0;
+}
+
+/**
+ * 取り込んだマップ（個人マップ）は、まだ共有へ上げられない。作成者以外の公開（フォーク）は #246 で、
+ * 取り込み元を記録して別の共有マップとして公開する形で作る。
+ */
+function rejectImported(map: StoredLearningMap): void {
+  if (map.source !== null) conflict("imported_map");
 }
 
 function toVersionMeta(version: StoredMapVersion): MapVersionMeta {
@@ -338,6 +360,7 @@ export function createLearningMapsRoute(resolve: LearningMapsDepsResolver) {
       visibility: map.visibility,
       latestVersion: map.latestVersion,
       shareKey: map.shareKey,
+      source: toMapSourceView(map.source),
       createdAt: map.createdAt,
       updatedAt: map.updatedAt,
       nodes: map.nodes.map((node) =>
@@ -690,6 +713,7 @@ export function createLearningMapsRoute(resolve: LearningMapsDepsResolver) {
     const input = await parseBody(c, publishLearningMapSchema);
     const deps = resolve(c.env);
     const { map, latest } = await ownedWithLatest(deps, userId, mapId);
+    rejectImported(map);
     // 確認画面を開いたあとに、別の端末で上げられた。
     if (map.latestVersion !== input.baseVersion) conflict("version_conflict");
     const { snapshot } = await draftOf(deps, userId, map, input.includeChecks);
@@ -746,6 +770,7 @@ export function createLearningMapsRoute(resolve: LearningMapsDepsResolver) {
     const map = await deps.maps.get(userId, mapId);
     if (map === null) notFound();
     const scope = visibility === "private" ? null : visibility;
+    rejectImported(map);
     if (scope !== null && map.latestVersion === null) conflict("not_published");
     // 読んでから書くまでの間に、別の端末でマップが消された。
     if (!(await deps.maps.setShareScope(userId, mapId, scope, shareKeyFor(deps, map, scope)))) {
@@ -865,6 +890,213 @@ export function createLearningMapsRoute(resolve: LearningMapsDepsResolver) {
       checkCount: content.checks.length,
     };
     return c.json(body, 200, { "cache-control": "no-store" });
+  });
+
+  /**
+   * 保存する形の中身を表示の形にする（取り込み直しの差分に使う）。参照のノードは自分の一覧から引く。
+   * 確認問題は `checks` をそのまま載せる。
+   */
+  async function contentViewOfStored(
+    deps: LearningMapsDeps,
+    userId: string,
+    content: StoredMapContent,
+    objectives: readonly StoredLearningObjective[],
+    checks: SharedMapContentView["checks"],
+  ): Promise<SharedMapContentView> {
+    const byConcept = groupObjectivesByConcept(objectives);
+    const references = await resolveReferences(
+      deps,
+      userId,
+      content.nodes.filter((node) => node.kind === "reference").map((node) => node.conceptId),
+    );
+    return {
+      title: content.title,
+      description: content.description,
+      nodes: content.nodes.map((node): LearningMapNodeView =>
+        node.kind === "own"
+          ? { ...node, objectives: (byConcept.get(node.conceptId) ?? []).map(toObjectiveView) }
+          : {
+              kind: "reference",
+              conceptId: node.conceptId,
+              origin: references.get(node.conceptId) ?? null,
+            },
+      ),
+      edges: content.edges.map((edge) => ({ from: edge.from, to: edge.to })),
+      checks,
+    };
+  }
+
+  /** 手元の個人マップの中身を、比べられる形にする。 */
+  async function personalContentView(
+    deps: LearningMapsDeps,
+    userId: string,
+    map: StoredLearningMap,
+  ) {
+    return contentViewOfStored(
+      deps,
+      userId,
+      map,
+      [...map.objectives.values()].flat(),
+      await deps.maps.listImportedChecks(userId, map.id),
+    );
+  }
+
+  /**
+   * 取り込み元の版を読む（#244 の T4）。今読めないか（`latest` が `null`）、版が無ければ 409。
+   * 個人マップは取り込み元の持ち主ではないので、範囲と鍵は repository が `latest` で判定済み。
+   */
+  async function sourceSnapshot(deps: LearningMapsDeps, mapId: string, version: number) {
+    const stored = await deps.maps.getSharedVersion(mapId, version);
+    if (stored === null) conflict("source_unavailable");
+    return snapshotOf(mapId, stored);
+  }
+
+  /** 自分の別のマップにすでにある、自分のノードの Concept ID（取り込むと同じ ID が2つになる）。 */
+  async function conflictingConcepts(
+    deps: LearningMapsDeps,
+    userId: string,
+    content: StoredMapContent,
+    exceptMapId?: string,
+  ): Promise<string[]> {
+    const own = content.nodes.filter((node) => node.kind === "own").map((node) => node.conceptId);
+    const found = await deps.maps.findOwnNodes(userId, own);
+    return found.filter((node) => node.mapId !== exceptMapId).map((node) => node.conceptId);
+  }
+
+  // 共有マップを取り込んで個人マップにする（#244 の T3）。その時点の版を、ID を引き継いで写す。
+  app.post("/shared-maps/:id/import", async (c) => {
+    const userId = c.get("user").userId;
+    const mapId = c.req.param("id");
+    const { key } = await parseBody(c, importSharedMapSchema);
+    const deps = resolve(c.env);
+    const shared = await deps.maps.getShared(mapId);
+    if (shared === null || shared.visibility === "private" || shared.latest === null) notFound();
+    if (shared.ownerUserId === userId) conflict("own_map");
+    // 「リンクだけ」は鍵が合うときだけ（決定 U1）。合わなければマップがあることも隠す。
+    if (shared.visibility === "link" && !sameKey(key, shared.shareKey)) notFound();
+
+    const owned = await deps.maps.listByOwner(userId);
+    if (owned.some((map) => map.source?.mapId === mapId)) conflict("already_imported");
+    if (owned.length >= MAX_MAPS_PER_USER) conflict("learning_map_limit_reached");
+
+    const snapshot = snapshotOf(mapId, shared.latest);
+    const imported = importSnapshot(snapshot);
+    // 同じ ID のノードがすでに自分のマップにある（同じ元から公開された別のマップを取り込んだなど）。
+    // 同じ Concept が2つの表示名を持つと、理解度の画面でどちらを出すか決められない。
+    if ((await conflictingConcepts(deps, userId, imported.content)).length > 0) {
+      conflict("concept_conflict");
+    }
+
+    // learning_maps.owner_user_id は users(id) を参照する。
+    await deps.identity.ensureUser({ userId, nowMs: deps.nowMs() });
+    const personalId = newMapId(deps.newKey);
+    const created = await deps.maps.createImported(userId, {
+      id: personalId,
+      content: imported.content,
+      objectives: imported.objectives,
+      source: {
+        mapId,
+        version: shared.latest.version,
+        key: shared.visibility === "link" ? shared.shareKey : null,
+        title: snapshot.title,
+        nodeIds: imported.nodeIds,
+      },
+      checks: snapshot.checks,
+      nowIso: deps.nowIso(),
+      nowMs: deps.nowMs(),
+      maxMaps: MAX_MAPS_PER_USER,
+    });
+    // 数えてから書くまでの間に、別の画面で取り込んだか、マップを作った。
+    if (!created) conflict("already_imported_or_limit");
+    const map = await deps.maps.get(userId, personalId);
+    if (map === null) throw new Error("imported learning map could not be read back");
+    const body: ImportSharedMapResponse = { map: await toView(deps, userId, map) };
+    return c.json(body, 201);
+  });
+
+  // 取り込み直す前の差分（#244 の T4）。共有の側の新しい版で、個人マップの何が変わるか。
+  app.get("/learning-maps/:id/reimport:preview", async (c) => {
+    const userId = c.get("user").userId;
+    const mapId = c.req.param("id");
+    const deps = resolve(c.env);
+    const map = await deps.maps.get(userId, mapId);
+    if (map === null) notFound();
+    const source = map.source;
+    if (source === null) throw new HTTPException(404, { message: "not an imported map" });
+    if (source.latest === null) conflict("source_unavailable");
+
+    const latest = await sourceSnapshot(deps, source.mapId, source.latest.version);
+    const next = importSnapshot(latest);
+    // 取り込んだ版と比べて、個人マップで直したノードを見分ける。取り込んだ版は元のマップがある限り残る。
+    const importedVersion = await deps.maps.getSharedVersion(source.mapId, source.version);
+    const old =
+      importedVersion === null ? null : importSnapshot(snapshotOf(source.mapId, importedVersion));
+    const [before, after, imported] = await Promise.all([
+      personalContentView(deps, userId, map),
+      contentViewOfStored(deps, userId, next.content, next.objectives, latest.checks),
+      old === null ? null : contentViewOfStored(deps, userId, old.content, old.objectives, []),
+    ]);
+    const diff = diffContents(before, after);
+    // 消えるのは共有の側で消されたノードだけ。個人マップで足したノードは残る。
+    const removable = new Set(removedFromSource(map, source, latest).map((node) => node.conceptId));
+    const overwritten = new Set(diff.changed.map((change) => change.conceptId));
+    const edited =
+      imported === null
+        ? []
+        : diffContents(imported, before).changed.map((change) => change.conceptId);
+    const sourceView = toMapSourceView(source);
+    if (sourceView === null) throw new Error("source view is missing for an imported map");
+    const body: ReimportPreview = {
+      source: sourceView,
+      latest: source.latest,
+      content: after,
+      diff: {
+        ...diff,
+        removed: diff.removed.filter((node) => removable.has(node.conceptId)),
+      },
+      personallyEdited: edited.filter((conceptId) => overwritten.has(conceptId)),
+      revision: map.revision,
+    };
+    return c.json(body, 200, { "cache-control": "no-store" });
+  });
+
+  // 取り込み直す（#244 の T4）。差分で見た版と手元のまま、共有の側の新しい版の中身にする。
+  app.post("/learning-maps/:id/reimport", async (c) => {
+    const userId = c.get("user").userId;
+    const mapId = c.req.param("id");
+    const input = await parseBody(c, reimportLearningMapSchema);
+    const deps = resolve(c.env);
+    const map = await deps.maps.get(userId, mapId);
+    if (map === null) notFound();
+    const source = map.source;
+    if (source === null) throw new HTTPException(404, { message: "not an imported map" });
+    if (source.latest === null) conflict("source_unavailable");
+    // 差分を見たあとに、共有の側で新しい版が上がった。
+    if (source.latest.version !== input.version) conflict("version_conflict");
+    // 差分を見たあとに、別の画面で手元を直した（または取り込み直した）。
+    if (map.revision !== input.revision) conflict("content_changed");
+
+    const latest = await sourceSnapshot(deps, source.mapId, input.version);
+    const plan = planReimport(map, source, latest, new Set(input.keep));
+    if (plan.content.nodes.length > MAX_NODES_PER_MAP) conflict("too_many_nodes");
+    if ((await conflictingConcepts(deps, userId, plan.content, mapId)).length > 0) {
+      conflict("concept_conflict");
+    }
+    const done = await deps.maps.reimport(userId, mapId, {
+      expectedSourceVersion: source.version,
+      expectedRevision: input.revision,
+      source: { version: input.version, nodeIds: plan.nodeIds },
+      content: plan.content,
+      objectives: plan.objectives,
+      checks: latest.checks,
+      nowIso: deps.nowIso(),
+      nowMs: deps.nowMs(),
+    });
+    if (!done) conflict("content_changed");
+    const saved = await deps.maps.get(userId, mapId);
+    if (saved === null) notFound();
+    const body: ReimportLearningMapResponse = { map: await toView(deps, userId, saved) };
+    return c.json(body, 200);
   });
 
   return app;

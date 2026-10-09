@@ -1,4 +1,4 @@
-import { createFileRoute, Link, useNavigate, useRouter } from "@tanstack/react-router";
+import { createFileRoute, Link, redirect, useNavigate, useRouter } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { ApiError, createSubmitGuard, requestJson } from "../../api.js";
 import { toErrorText } from "../../errors.js";
@@ -18,9 +18,19 @@ import {
   linkConcepts,
   summarizeTree,
 } from "../../learning-map.js";
-import { fetchLearningMap, mapDefinitions, type LearningMapView } from "../../learning-maps.js";
+import {
+  fetchLearningMap,
+  findOwnMapOf,
+  hasSourceUpdate,
+  mapDefinitions,
+  type LearningMapView,
+  type MapSourceView,
+} from "../../learning-maps.js";
 import {
   fetchSharedMap,
+  importSharedMap,
+  shareConflictText,
+  ShareConflictError,
   shareLinkOf,
   VISIBILITY_BADGES,
   VISIBILITY_LABELS,
@@ -139,8 +149,86 @@ function ShareLink({ mapId, shareKey }: { mapId: string; shareKey: string }) {
   );
 }
 
+/**
+ * 取り込んだマップの取り込み元（#244 の T3・T4）。新しい版があれば「更新あり」と、
+ * 差分を見て取り込み直す画面への入口を出す。
+ */
+function SourceStatus({ mapId, source }: { mapId: string; source: MapSourceView }) {
+  return (
+    <section className="message">
+      <p>
+        共有マップ「{source.title}」（版 {source.version}）から取り込んだ、自分だけのマップです。
+        自由に直せます。直しても元のマップは変わりません。
+      </p>
+      {hasSourceUpdate(source) ? (
+        <p>
+          <strong>更新あり</strong>（版 {source.latestVersion}）。{" "}
+          <Link to="/maps/$mapId/reimport" params={{ mapId }} className="link">
+            差分を見て取り込み直す
+          </Link>
+        </p>
+      ) : (
+        source.latestVersion === null && (
+          <p className="muted">
+            取り込み元は今は読めません（削除・共有の停止・リンクの変更）。このマップはそのまま使えます。
+          </p>
+        )
+      )}
+    </section>
+  );
+}
+
+/** 持ち主以外に、共有マップを自分のマップへ取り込む入口を出す（#244 の T3）。 */
+function ImportPanel({ mapId, shareKey }: { mapId: string; shareKey: string | undefined }) {
+  const navigate = useNavigate();
+  const guard = useRef(createSubmitGuard());
+  const [running, setRunning] = useState(false);
+  const [error, setError] = useState<string>();
+
+  const run = () => {
+    // 送信中は入口で弾く（RULE-007）。
+    if (guard.current.isRunning("import")) return;
+    setError(undefined);
+    setRunning(true);
+    void guard.current
+      .run("import", async () => {
+        try {
+          const { map } = await importSharedMap(mapId, shareKey);
+          await navigate({ to: "/maps/$mapId", params: { mapId: map.id } });
+        } catch (value: unknown) {
+          if (value instanceof ApiError && value.kind === "session_expired") {
+            window.location.href = "/login";
+            return;
+          }
+          setError(
+            value instanceof ShareConflictError ? shareConflictText(value) : toErrorText(value),
+          );
+        }
+      })
+      .finally(() => setRunning(false));
+  };
+
+  return (
+    <div className="actions">
+      <button type="button" disabled={running} onClick={run}>
+        {running ? "取り込んでいます…" : "自分のマップに取り込む"}
+      </button>
+      <span className="muted">
+        今の版を自分だけのマップとして写します。取り込んだあとに作成者が更新しても、取り込み直すまで変わりません。
+      </span>
+      {error && (
+        <p className="error-text" role="alert">
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
+
 /** 持ち主に見せる共有の状態（#244）。共有の設定と版の履歴への入口。 */
 function SharingStatus({ map }: { map: LearningMapView }) {
+  // 取り込んだマップはまだ共有へ上げられない（作成者以外の公開は #246）。
+  if (map.source !== null) return null;
   return (
     <>
       <p className="share-status">
@@ -165,7 +253,13 @@ function SharingStatus({ map }: { map: LearningMapView }) {
 }
 
 /** 持ち主以外に見せる、共有の側の版の説明（#244）。 */
-function SharedNotice({ map }: { map: SharedMapView }) {
+function SharedNotice({
+  map,
+  shareKey: key,
+}: {
+  map: SharedMapView;
+  shareKey: string | undefined;
+}) {
   return (
     <section className="message">
       <p>
@@ -173,6 +267,7 @@ function SharedNotice({ map }: { map: SharedMapView }) {
         {new Date(map.publishedAt).toLocaleDateString("ja-JP")}）を見ています。
         読むことはできますが、編集はできません。
       </p>
+      {map.isOwner || <ImportPanel mapId={map.id} shareKey={key} />}
     </section>
   );
 }
@@ -266,9 +361,12 @@ function LearningMapPage() {
       </p>
       {map.description && <p className="muted">{map.description}</p>}
       {own ? (
-        <SharingStatus map={own} />
+        <>
+          {own.source !== null && <SourceStatus mapId={mapId} source={own.source} />}
+          <SharingStatus map={own} />
+        </>
       ) : (
-        loaded.kind === "shared" && <SharedNotice map={loaded.map} />
+        loaded.kind === "shared" && <SharedNotice map={loaded.map} shareKey={key} />
       )}
       {own?.creationChecks !== undefined && own.creationChecks.status !== "done" && (
         <CreationChecksPanel mapId={mapId} status={own.creationChecks.status} />
@@ -353,7 +451,7 @@ function LearningMapPage() {
  */
 async function loadMap(
   mapId: string,
-  key: string | undefined,
+  search: { concept?: string; key?: string },
   retry: boolean | number,
 ): Promise<{ kind: "own"; map: LearningMapView } | { kind: "shared"; map: SharedMapView }> {
   try {
@@ -361,7 +459,20 @@ async function loadMap(
   } catch (error: unknown) {
     if (!(error instanceof ApiError && error.kind === "not_found")) throw error;
   }
-  return { kind: "shared", map: await fetchSharedMap(mapId, key, fetch, retry) };
+  // 取り込んだマップのノードは元のマップの ID を前半に持つ（#244 で ID を引き継ぐ）。別の画面から
+  // そのノードを選ぶと元のマップの ID でここへ来るので、自分のノードを持つマップがあればそちらへ移る。
+  if (search.concept !== undefined) {
+    const own = await findOwnMapOf(search.concept, fetch, retry);
+    if (own !== undefined && own !== mapId) {
+      // TanStack Router の遷移は throw で行う。
+      throw redirect({
+        to: "/maps/$mapId",
+        params: { mapId: own },
+        search: { concept: search.concept },
+      });
+    }
+  }
+  return { kind: "shared", map: await fetchSharedMap(mapId, search.key, fetch, retry) };
 }
 
 export const Route = createFileRoute("/_framed/maps/$mapId")({
@@ -374,10 +485,13 @@ export const Route = createFileRoute("/_framed/maps/$mapId")({
   // 編集や確認問題から戻ってきたとき、古い中身を見せない。
   staleTime: 0,
   // マップと習熟度は1つの結果にまとめる。片方だけ古い組み合わせを出さない（RULE-005）。
-  loader: async ({ params, deps }) => {
+  // `concept` は依存に入れない（ノードを選ぶたびに読み直さない）。取り込んだノードの行き先を
+  // 決めるのに、開いたときの値だけを使う。
+  loader: async ({ params, deps, location }) => {
     const retry = takeLoginRetry();
+    const { concept } = parseConceptSearch(location.search as Record<string, unknown>);
     const [loaded, profile, overrides] = await Promise.all([
-      loadMap(params.mapId, deps.key, retry),
+      loadMap(params.mapId, { key: deps.key, concept }, retry),
       requestJson<MapProfile>("/api/v1/learning-profile", fetch, retry),
       requestJson<MasteryOverrides>("/api/v1/mastery-overrides", fetch, retry),
     ]);

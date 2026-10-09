@@ -5,7 +5,10 @@ import {
   describeSummary,
   fetchPublishPreview,
   publishLearningMap,
+  fetchReimportPreview,
   fetchSharedMap,
+  importSharedMap,
+  reimportLearningMap,
   restoreMapVersion,
   setMapVisibility,
   shareLinkOf,
@@ -107,4 +110,34 @@ test("「リンクだけ」のマップは鍵を付けて読み、リンクに�
   expect(shareLinkOf("https://example.test", "mrust0001", "abc")).toBe(
     "https://example.test/maps/mrust0001?key=abc",
   );
+});
+
+test("取り込みは鍵を本文で送り、取り込み直しは見た版・回数・残すノードを送る", async () => {
+  const imported = respond(201, { map: {} });
+  await importSharedMap("mrust0001", "abc", imported.fetcher);
+  expect(imported.calls[0]!.url).toBe("/api/v1/shared-maps/mrust0001/import");
+  expect(JSON.parse(imported.calls[0]!.init?.body as string)).toEqual({ key: "abc" });
+  const publicMap = respond(201, { map: {} });
+  await importSharedMap("mrust0001", undefined, publicMap.fetcher);
+  expect(JSON.parse(publicMap.calls[0]!.init?.body as string)).toEqual({});
+
+  const preview = respond(200, {});
+  await fetchReimportPreview("mper00001", preview.fetcher);
+  expect(preview.calls[0]!.url).toBe("/api/v1/learning-maps/mper00001/reimport:preview");
+
+  const reimport = respond(200, { map: {} });
+  await reimportLearningMap(
+    "mper00001",
+    { version: 2, revision: 5, keep: ["mrust0001.borrow01"] },
+    reimport.fetcher,
+  );
+  expect(reimport.calls[0]!.url).toBe("/api/v1/learning-maps/mper00001/reimport");
+  expect(JSON.parse(reimport.calls[0]!.init?.body as string)).toEqual({
+    version: 2,
+    revision: 5,
+    keep: ["mrust0001.borrow01"],
+  });
+  await expect(
+    importSharedMap("m1", undefined, respond(409, { error: "concept_conflict" }).fetcher),
+  ).rejects.toEqual(new ShareConflictError("concept_conflict"));
 });

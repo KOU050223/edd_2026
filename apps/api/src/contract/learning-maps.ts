@@ -173,6 +173,20 @@ export interface LearningMapEdge {
   to: string;
 }
 
+/** 取り込み元（#244 の T3・T4）。 */
+export interface MapSourceView {
+  mapId: string;
+  /** 取り込んだ時点の元の題名。 */
+  title: string;
+  /** 取り込んだ（取り込み直した）版。 */
+  version: number;
+  /**
+   * 今読める元のいちばん新しい版。これが `version` より新しければ「更新あり」。
+   * 元が消えた・共有をやめた・リンクの鍵を作り直したなら `null`（もう取り込み直せない）。
+   */
+  latestVersion: number | null;
+}
+
 /** 一覧の1件。ノードと線は含めない。 */
 export interface LearningMapSummary {
   id: string;
@@ -181,6 +195,8 @@ export interface LearningMapSummary {
   visibility: LearningMapVisibility;
   /** 共有の側のいちばん新しい版の番号。まだ一度も上げていなければ `null`。 */
   latestVersion: number | null;
+  /** 取り込んだマップ（個人マップ）なら取り込み元（#244 の T3）。そうでなければ `null`。 */
+  source: MapSourceView | null;
   nodeCount: number;
   createdAt: string;
   updatedAt: string;
@@ -479,4 +495,51 @@ export interface SharedMapView {
   nodes: LearningMapNodeView[];
   edges: LearningMapEdge[];
   checkCount: number;
+}
+
+/** `POST /v1/shared-maps/:id/import` が受け取るもの。「リンクだけ」のマップはリンクの鍵が要る（U1）。 */
+export const importSharedMapSchema = v.strictObject({
+  key: v.optional(v.pipe(v.string(), v.minLength(1), v.maxLength(128))),
+});
+
+/** `POST /v1/shared-maps/:id/import` の応答。作った個人マップ。 */
+export interface ImportSharedMapResponse {
+  map: LearningMapView;
+}
+
+/**
+ * `GET /v1/learning-maps/:id/reimport:preview` の応答（#244 の T4）。
+ *
+ * `diff` は今の個人マップから、取り込み直したあとへの差分。`removed` には共有の側で消されたノード
+ * だけが入る（既定は消す。`keep` に入れると残せる）。個人マップで足したノードはそのまま残るので入らない。
+ * `changed` のノードは共有の側の中身で上書きされる。そのうち個人マップで直していたものを
+ * `personallyEdited` に挙げる（直した分は消える）。
+ */
+export interface ReimportPreview {
+  source: MapSourceView;
+  latest: { version: number; publishedAt: string };
+  /** 新しい版の中身（個人マップで足したノードと、残すノードは含まない）。 */
+  content: SharedMapContentView;
+  diff: LearningMapDiff;
+  personallyEdited: string[];
+  /** 読んだときの手元の書き換えの回数。取り込み直すときに添える。 */
+  revision: number;
+}
+
+/** `POST /v1/learning-maps/:id/reimport` が受け取るもの。 */
+export const reimportLearningMapSchema = v.strictObject({
+  /** 差分で見た共有の側の版。 */
+  version: v.pipe(v.number(), v.integer(), v.minValue(1)),
+  /** 差分を見たときの手元の書き換えの回数。 */
+  revision: v.pipe(v.number(), v.integer(), v.minValue(0)),
+  /** 共有の側で消されたノードのうち、残すもの。 */
+  keep: v.pipe(
+    v.array(v.pipe(v.string(), v.regex(CONCEPT_ID_PATTERN))),
+    v.maxLength(MAX_NODES_PER_MAP),
+  ),
+});
+
+/** `POST /v1/learning-maps/:id/reimport` の応答。取り込み直したあとの個人マップ。 */
+export interface ReimportLearningMapResponse {
+  map: LearningMapView;
 }

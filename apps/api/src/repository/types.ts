@@ -645,12 +645,41 @@ export interface StoredLearningMap extends StoredMapContent {
   revision: number;
   /** 「リンクだけ」の共有の鍵（0019、決定 U1）。範囲が `link` のときだけ持つ。 */
   shareKey: string | null;
+  /** 取り込んだマップ（個人マップ）の取り込み元（0020、#244 の T3）。取り込んだマップでなければ `null`。 */
+  source: StoredMapSource | null;
   createdAt: string;
   updatedAt: string;
   /** Concept ID → 項目（保存した順）。項目の無いノードは含まない。 */
   objectives: Map<string, StoredLearningObjective[]>;
   /** 作成時の確認問題の状態（#247）。AI で作るときに頼まなかったマップは `null`。 */
   creationChecks: StoredCreationChecks | null;
+}
+
+/** 取り込み元（migrations/0020_learning_map_imports.sql）。 */
+export interface StoredMapSource {
+  mapId: string;
+  /** 取り込んだ（取り込み直した）版。 */
+  version: number;
+  /** 取り込んだときの「リンクだけ」の鍵。全員に共有されたマップから取り込んだなら `null`。 */
+  key: string | null;
+  /** 取り込んだ時点の元の題名。 */
+  title: string;
+  /** 取り込んだ版のノードの Concept ID。 */
+  nodeIds: string[];
+  /**
+   * 今読める元のいちばん新しい版。元が全員に共有されているか、取り込んだときの鍵で「リンクだけ」の
+   * 共有が読めるときだけ持つ。元が消えた・共有をやめた・鍵を作り直したなら `null`。
+   */
+  latest: { version: number; publishedAt: string } | null;
+}
+
+/** 取り込みで写す元の情報。 */
+export interface MapSourceInput {
+  mapId: string;
+  version: number;
+  key: string | null;
+  title: string;
+  nodeIds: readonly string[];
 }
 
 /** 作成時の確認問題の状態（migrations/0015_map_creation_checks.sql）。 */
@@ -841,6 +870,60 @@ export interface LearningMapRepository {
       nowMs: number;
     },
   ): Promise<boolean>;
+
+  /**
+   * 共有マップを取り込んで、新しいマップ（個人マップ）を作る（#244 の T3）。
+   *
+   * 1人のマップ数が `maxMaps` に達しているか、同じ共有マップをすでに取り込んでいれば
+   * 何も書かず `false` を返す。数える・確かめることと書くことを1つの操作にまとめる。
+   * ノードと項目は渡した ID のまま入れる。`checks` は版の公開の確認問題（T6）で、
+   * imported_map_checks に写す。
+   */
+  createImported(
+    ownerUserId: string,
+    params: {
+      id: string;
+      content: StoredMapContent;
+      objectives: readonly StoredLearningObjective[];
+      source: MapSourceInput;
+      checks: readonly PersonalConceptCheck[];
+      nowIso: string;
+      nowMs: number;
+      maxMaps: number;
+    },
+  ): Promise<boolean>;
+
+  /**
+   * 取り込み直す（#244 の T4）。手元のマップを `content` と `objectives`（参照ではないノードの項目の全部）で
+   * 置き換え、取り込み元の版・ノードと公開の確認問題を新しい版のものにする。消えるノード・項目を狙った
+   * 自分の確認問題は消える（{@link restoreVersion} と同じ扱い）。学習イベントは消さない。
+   *
+   * 取り込んだ版が `expectedSourceVersion` で、手元の書き換えの回数が `expectedRevision` のときだけ書く。
+   * 違えば何も書かず `false`（差分を見たあとに、別の画面で取り込み直した・手元を直した）。
+   */
+  reimport(
+    ownerUserId: string,
+    mapId: string,
+    params: {
+      expectedSourceVersion: number;
+      expectedRevision: number;
+      source: { version: number; nodeIds: readonly string[] };
+      content: StoredMapContent;
+      objectives: readonly StoredLearningObjective[];
+      checks: readonly PersonalConceptCheck[];
+      nowIso: string;
+      nowMs: number;
+    },
+  ): Promise<boolean>;
+
+  /** 自分の取り込んだマップの公開の確認問題（T6）。Concept ID・狙いの順。自分のマップでなければ空。 */
+  listImportedChecks(ownerUserId: string, mapId: string): Promise<PersonalConceptCheck[]>;
+
+  /**
+   * 共有マップの版1つを、持ち主に限らず読む。読んでよいか（範囲・鍵）は呼び出し側が確かめる。
+   * 取り込み直しで、取り込んだ版と今の個人マップを比べるのに使う。
+   */
+  getSharedVersion(mapId: string, version: number): Promise<StoredMapVersion | null>;
 
   /** 持ち主に限らずマップを読む（共有の側の表示、#244）。マップが無ければ `null`。 */
   getShared(mapId: string): Promise<StoredSharedMap | null>;

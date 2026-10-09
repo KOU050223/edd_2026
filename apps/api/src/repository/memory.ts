@@ -44,10 +44,13 @@ import type {
   CheckOrigin,
   StoredLearningObjective,
   StoredMapContent,
+  MapSourceInput,
+  StoredMapSource,
   StoredMapVersion,
   StoredOwnMapNode,
   StoredSharedMap,
 } from "./types.js";
+import { toMapSourceView } from "../maps/import.js";
 import type {
   LearningMapSummary,
   LearningObjectiveSource,
@@ -115,6 +118,8 @@ export interface InMemoryLearningMap extends StoredLearningMap {
   updatedAtMs: number;
   /** 共有の版（#244）。古い版から。D1 の learning_map_versions に対応する。 */
   versions: (StoredMapVersion & { createdAtMs: number })[];
+  /** 取り込んだ版の公開の確認問題（0020 の imported_map_checks）。 */
+  importedChecks: PersonalConceptCheck[];
 }
 
 export function createInMemoryRepositoryStore(): InMemoryRepositoryStore {
@@ -820,7 +825,9 @@ export class InMemoryLearningMapRepository implements LearningMapRepository {
       latestVersion: null,
       revision: 0,
       shareKey: null,
+      source: null,
       versions: [],
+      importedChecks: [],
       createdAt: params.nowIso,
       updatedAt: params.nowIso,
       updatedAtMs: params.nowMs,
@@ -883,6 +890,7 @@ export class InMemoryLearningMapRepository implements LearningMapRepository {
         description: map.description,
         visibility: map.visibility,
         latestVersion: map.latestVersion,
+        source: toMapSourceView(this.sourceOf(map)),
         nodeCount: map.nodes.length,
         createdAt: map.createdAt,
         updatedAt: map.updatedAt,
@@ -902,6 +910,7 @@ export class InMemoryLearningMapRepository implements LearningMapRepository {
       latestVersion: copy.latestVersion,
       revision: copy.revision,
       shareKey: copy.shareKey,
+      source: this.sourceOf(copy),
       createdAt: copy.createdAt,
       updatedAt: copy.updatedAt,
       nodes: copy.nodes,
@@ -1046,24 +1055,7 @@ export class InMemoryLearningMapRepository implements LearningMapRepository {
     }
     await this.replace(ownerUserId, mapId, params.content, params);
     // 項目を全部置き換える。外す項目を狙った確認問題は消す（replaceObjectives と同じ）。
-    const keptIds = new Set(params.objectives.map((objective) => objective.id));
-    const ownIds = new Set(
-      params.content.nodes.filter((node) => node.kind === "own").map((node) => node.conceptId),
-    );
-    this.dropChecks(
-      ownerUserId,
-      (check) =>
-        ownIds.has(check.conceptId) &&
-        check.objectiveId !== undefined &&
-        !keptIds.has(check.objectiveId),
-    );
-    map.objectives = new Map();
-    for (const objective of params.objectives) {
-      map.objectives.set(objective.conceptId, [
-        ...(map.objectives.get(objective.conceptId) ?? []),
-        { ...objective },
-      ]);
-    }
+    this.replaceAllObjectives(ownerUserId, map, params.content, params.objectives);
     const version = params.expectedLatest + 1;
     map.versions.push({
       ...structuredClone(from),
@@ -1076,6 +1068,142 @@ export class InMemoryLearningMapRepository implements LearningMapRepository {
     });
     map.latestVersion = version;
     return true;
+  }
+
+  createImported(
+    ownerUserId: string,
+    params: {
+      id: string;
+      content: StoredMapContent;
+      objectives: readonly StoredLearningObjective[];
+      source: MapSourceInput;
+      checks: readonly PersonalConceptCheck[];
+      nowIso: string;
+      nowMs: number;
+      maxMaps: number;
+    },
+  ): Promise<boolean> {
+    const owned = this.ownedMaps(ownerUserId);
+    // 同じ共有マップは2回取り込めない（D1 の一意な索引と同じ）。
+    if (
+      owned.length >= params.maxMaps ||
+      owned.some((map) => map.source?.mapId === params.source.mapId)
+    ) {
+      return Promise.resolve(false);
+    }
+    this.store.learningMaps.set(params.id, {
+      ...structuredClone(params.content),
+      id: params.id,
+      ownerUserId,
+      visibility: "private",
+      latestVersion: null,
+      revision: 0,
+      shareKey: null,
+      source: {
+        ...structuredClone(params.source),
+        nodeIds: [...params.source.nodeIds],
+        latest: null,
+      },
+      versions: [],
+      importedChecks: structuredClone([...params.checks]),
+      createdAt: params.nowIso,
+      updatedAt: params.nowIso,
+      updatedAtMs: params.nowMs,
+      objectives: groupObjectives(params.objectives),
+      creationChecks: null,
+    });
+    return Promise.resolve(true);
+  }
+
+  async reimport(
+    ownerUserId: string,
+    mapId: string,
+    params: {
+      expectedSourceVersion: number;
+      expectedRevision: number;
+      source: { version: number; nodeIds: readonly string[] };
+      content: StoredMapContent;
+      objectives: readonly StoredLearningObjective[];
+      checks: readonly PersonalConceptCheck[];
+      nowIso: string;
+      nowMs: number;
+    },
+  ): Promise<boolean> {
+    const map = this.owned(ownerUserId, mapId);
+    if (
+      map?.source == null ||
+      map.source.version !== params.expectedSourceVersion ||
+      map.revision !== params.expectedRevision
+    ) {
+      return false;
+    }
+    await this.replace(ownerUserId, mapId, params.content, params);
+    this.replaceAllObjectives(ownerUserId, map, params.content, params.objectives);
+    map.source.version = params.source.version;
+    map.source.nodeIds = [...params.source.nodeIds];
+    map.importedChecks = structuredClone([...params.checks]);
+    return true;
+  }
+
+  listImportedChecks(ownerUserId: string, mapId: string): Promise<PersonalConceptCheck[]> {
+    const checks = this.owned(ownerUserId, mapId)?.importedChecks ?? [];
+    // D1 の ORDER BY concept_id, target と一致させる。
+    return Promise.resolve(
+      structuredClone(checks).sort((a, b) => {
+        const left = `${a.conceptId}\n${checkTargetOf(a)}`;
+        const right = `${b.conceptId}\n${checkTargetOf(b)}`;
+        return left < right ? -1 : left > right ? 1 : 0;
+      }),
+    );
+  }
+
+  getSharedVersion(mapId: string, version: number): Promise<StoredMapVersion | null> {
+    const found = this.store.learningMaps
+      .get(mapId)
+      ?.versions.find((candidate) => candidate.version === version);
+    return Promise.resolve(found === undefined ? null : toStoredVersion(found));
+  }
+
+  /**
+   * 取り込み元に、今読めるいちばん新しい版を付ける（D1 の SOURCE_COLUMNS と同じ判定）。
+   * 元が全員に共有されているか、取り込んだときの鍵で「リンクだけ」の共有が読めるときだけ。
+   */
+  private sourceOf(map: InMemoryLearningMap): StoredMapSource | null {
+    if (map.source === null) return null;
+    const origin = this.store.learningMaps.get(map.source.mapId);
+    const latest = origin?.versions.at(-1);
+    const readable =
+      origin !== undefined &&
+      (origin.visibility === "public" ||
+        (origin.visibility === "link" && origin.shareKey === map.source.key));
+    return {
+      ...structuredClone(map.source),
+      latest:
+        readable && latest !== undefined
+          ? { version: latest.version, publishedAt: latest.createdAt }
+          : null,
+    };
+  }
+
+  /** 参照ではないノードの項目を全部置き換え、消える項目を狙った確認問題を消す（D1 と同じ）。 */
+  private replaceAllObjectives(
+    ownerUserId: string,
+    map: InMemoryLearningMap,
+    content: StoredMapContent,
+    objectives: readonly StoredLearningObjective[],
+  ): void {
+    const keptIds = new Set(objectives.map((objective) => objective.id));
+    const ownIds = new Set(
+      content.nodes.filter((node) => node.kind === "own").map((node) => node.conceptId),
+    );
+    this.dropChecks(
+      ownerUserId,
+      (check) =>
+        ownIds.has(check.conceptId) &&
+        check.objectiveId !== undefined &&
+        !keptIds.has(check.objectiveId),
+    );
+    map.objectives = groupObjectives(objectives);
   }
 
   getShared(mapId: string): Promise<StoredSharedMap | null> {
@@ -1293,4 +1421,18 @@ function toVersionMeta(version: StoredMapVersion): MapVersionMeta {
 function toStoredVersion(version: StoredMapVersion): StoredMapVersion {
   const copy = structuredClone(version);
   return { ...toVersionMeta(copy), content: copy.content, contentHash: copy.contentHash };
+}
+
+/** 項目を Concept ID ごとにまとめる（並びは渡した順）。 */
+function groupObjectives(
+  objectives: readonly StoredLearningObjective[],
+): Map<string, StoredLearningObjective[]> {
+  const grouped = new Map<string, StoredLearningObjective[]>();
+  for (const objective of objectives) {
+    grouped.set(objective.conceptId, [
+      ...(grouped.get(objective.conceptId) ?? []),
+      { ...objective },
+    ]);
+  }
+  return grouped;
 }

@@ -50,7 +50,12 @@ import {
   type MapProfile,
 } from "../../learning-map-view.js";
 import { objectiveProgress, type ObjectiveProgress } from "../../learning-map.js";
-import { fetchLearningMap, isMapId, mapDefinitions, mapIdOfConcept } from "../../learning-maps.js";
+import {
+  fetchOwnMapContaining,
+  isMapId,
+  mapDefinitions,
+  mapIdOfConcept,
+} from "../../learning-maps.js";
 import type { MasteryOverrides } from "../../overrides.js";
 import { takeLoginRetry } from "../../session.js";
 
@@ -854,8 +859,9 @@ export const Route = createFileRoute("/_framed/check/$conceptId")({
       requestJson<MapProfile>("/api/v1/learning-profile", fetch, retry),
       requestJson<MasteryOverrides>("/api/v1/mastery-overrides", fetch, retry),
       fetchGenerationConsent(fetch, retry),
-      // 手で作ったノードは、そのマップから定義を引く（#242）。他人のマップは 404 になる。
-      mapId === undefined ? undefined : fetchLearningMap(mapId, fetch, retry),
+      // 手で作ったノードは、そのマップから定義を引く（#242）。取り込んだマップのノードは ID の前半が
+      // 元のマップなので、自分のノードを持つマップを探して引く（#244）。どちらにも無ければ 404。
+      mapId === undefined ? undefined : fetchOwnMapContaining(params.conceptId, fetch, retry),
       // 固定の Concept の項目は API の表から読む（#245）。
       mapId === undefined ? fetchFixedMaps(fetch, retry) : undefined,
     ]);
@@ -877,7 +883,7 @@ export const Route = createFileRoute("/_framed/check/$conceptId")({
       areaName = languageLabel[definition.language] ?? definition.language;
     } else {
       const defined = mapDefinitions(map);
-      // ID のマップの ID 部分から引いたので、ここに無いならノードが消えている。
+      // そのノードを持つマップとして引いたので、ここに無いならノードが消えている。
       if (!defined.concepts.some((candidate) => candidate.id === params.conceptId)) {
         throw new ApiError("not_found");
       }

@@ -12,6 +12,8 @@ import type { PersonalConceptCheck } from "@gakushu-sochi/domain";
 import { ApiError, requestJson, writeErrorOf } from "./api.js";
 import {
   LEARNING_MAPS_PATH,
+  type LearningMapView,
+  type MapSourceView,
   type LearningMapNodeView,
   type LearningMapVisibility,
   type ShareScope,
@@ -144,6 +146,21 @@ export function shareConflictText(error: ShareConflictError): string {
       return "まだ共有へ上げていません。先に中身を確かめて共有してください。";
     case "already_latest":
       return "いちばん新しい版は復元できません。";
+    case "own_map":
+      return "自分のマップは取り込めません。";
+    case "already_imported":
+    case "already_imported_or_limit":
+      return "このマップはもう取り込んでいます（または自分のマップが上限に達しています）。自分のマップの一覧から開いてください。";
+    case "learning_map_limit_reached":
+      return "自分のマップが上限に達しています。使っていないマップを消してから取り込んでください。";
+    case "concept_conflict":
+      return "同じノードを持つマップをすでに取り込んでいるので、取り込めません。";
+    case "imported_map":
+      return "取り込んだマップはまだ共有へ上げられません。";
+    case "source_unavailable":
+      return "取り込み元のマップが読めなくなりました（削除・共有の停止・リンクの変更）。今の個人マップはそのまま使えます。";
+    case "too_many_nodes":
+      return "残すノードが多すぎて、マップのノード数の上限を超えます。残すノードを減らしてください。";
     default:
       return `共有の操作を受け付けられませんでした（${error.code}）。`;
   }
@@ -335,4 +352,51 @@ export function isEmptyDiff(diff: LearningMapDiff): boolean {
     diff.checks.added.length === 0 &&
     diff.checks.removed.length === 0
   );
+}
+
+/** 共有マップを取り込んで個人マップを作る（#244 の T3）。「リンクだけ」はリンクの鍵を添える。 */
+export function importSharedMap(
+  mapId: string,
+  key: string | undefined,
+  fetcher: typeof fetch = fetch,
+  timeoutMs = 10_000,
+): Promise<{ map: LearningMapView }> {
+  return sendShareRequest(
+    "POST",
+    `${SHARED_MAPS_PATH}/${encodeURIComponent(mapId)}/import`,
+    key === undefined ? {} : { key },
+    fetcher,
+    timeoutMs,
+  );
+}
+
+/** 取り込み直す前の差分（#244 の T4）。 */
+export interface ReimportPreview {
+  source: MapSourceView;
+  latest: { version: number; publishedAt: string };
+  /** 新しい版の中身（自分で足したノードと、残すノードは含まない）。 */
+  content: SharedMapContentView;
+  /** `removed` は共有の側で消されたノードだけ（既定は消す）。`changed` は共有の側の中身で上書きされる。 */
+  diff: LearningMapDiff;
+  /** 上書きされるノードのうち、自分で直していたもの。 */
+  personallyEdited: string[];
+  revision: number;
+}
+
+export function fetchReimportPreview(
+  mapId: string,
+  fetcher: typeof fetch = fetch,
+  retry: boolean | number = false,
+): Promise<ReimportPreview> {
+  return requestJson(`${mapPath(mapId)}/reimport:preview`, fetcher, retry);
+}
+
+/** 取り込み直す。`keep` は共有の側で消されたノードのうち残すもの。 */
+export function reimportLearningMap(
+  mapId: string,
+  input: { version: number; revision: number; keep: string[] },
+  fetcher: typeof fetch = fetch,
+  timeoutMs = 10_000,
+): Promise<{ map: LearningMapView }> {
+  return sendShareRequest("POST", `${mapPath(mapId)}/reimport`, input, fetcher, timeoutMs);
 }
