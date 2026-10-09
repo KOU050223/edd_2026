@@ -3,7 +3,7 @@ import { CONCEPTS } from "@gakushu-sochi/domain";
 import { cors } from "hono/cors";
 import { HTTPException } from "hono/http-exception";
 import { requireAuth, type AuthVariables } from "./auth/middleware.js";
-import { rateLimit } from "./auth/rate-limit.js";
+import { rateLimit, useMapRateLimit } from "./auth/rate-limit.js";
 import {
   D1AiUsageRepository,
   D1UserPlanRepository,
@@ -173,22 +173,8 @@ app.use(
   "/v1/conversations*",
   rateLimit((env) => env.PROFILE_RATE_LIMITER),
 );
-// 学習マップ（#242）。一覧・表示は画面を開くたび、保存は利用者の操作ごとに1回で、
-// 頻度の性質は Profile と同じなので同じ上限を使う。
-app.use(
-  "/v1/learning-maps*",
-  rateLimit((env) => env.PROFILE_RATE_LIMITER),
-);
-// 共有マップ（#244）。一覧・表示は画面を開くたびで、学習マップと同じ上限を使う。
-app.use(
-  "/v1/shared-maps*",
-  rateLimit((env) => env.PROFILE_RATE_LIMITER),
-);
-// 言語別マップの項目の作り直し（#245）。使うのは作成者だけで、頻度は学習マップの編集と同じ。
-app.use(
-  "/v1/fixed-maps*",
-  rateLimit((env) => env.PROFILE_RATE_LIMITER),
-);
+// 学習マップ・共有マップ・言語別マップは、Profile と別の枠で数える（#299）。
+useMapRateLimit(app);
 
 app.route(
   "/v1",

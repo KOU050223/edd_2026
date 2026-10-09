@@ -1,4 +1,4 @@
-import { createFileRoute, Link, useNavigate, useRouter } from "@tanstack/react-router";
+import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
 import { useRef, useState } from "react";
 import { ApiError, createSubmitGuard } from "../../api.js";
 import { toErrorText } from "../../errors.js";
@@ -11,6 +11,7 @@ import {
   shareConflictText,
   ShareConflictError,
 } from "../../map-sharing.js";
+import { useOpenMapAfterWrite } from "../../learning-map-view.js";
 import { takeLoginRetry } from "../../session.js";
 
 function failureText(value: unknown): string | undefined {
@@ -31,7 +32,7 @@ function failureText(value: unknown): string | undefined {
 function ReimportPage() {
   const { mapId } = Route.useParams();
   const preview = Route.useLoaderData();
-  const navigate = useNavigate();
+  const openMap = useOpenMapAfterWrite();
   const router = useRouter();
   const [keep, setKeep] = useState<ReadonlySet<string>>(new Set());
   const [busy, setBusy] = useState(false);
@@ -58,7 +59,7 @@ function ReimportPage() {
             revision: preview.revision,
             keep: [...keep],
           });
-          await navigate({ to: "/maps/$mapId", params: { mapId } });
+          await openMap(mapId);
         } catch (value: unknown) {
           setError(failureText(value));
           // 版が上がった・手元が変わったなら、今の差分を見せ直す（確かめていない差分で取り込み直させない）。

@@ -361,9 +361,14 @@ SELECT strftime('%Y-%m-%d', occurred_at_ms / 1000, 'unixepoch') AS date,
 **Learning Map 画面と推移画面の合計で 30 回 / 60 秒**になる。
 画面を往復すると1回の遷移で2枠を消費する。それぞれ独立に 30 回ではない。
 バインディングを増やさない側に倒した判断だが、実運用で足りなくなったら
-`wrangler.jsonc` の `ratelimits` へ `ACTIVITY_RATE_LIMITER`（`namespace_id: 1004`。
-1003 は `MASTERY_OVERRIDE_RATE_LIMITER` が使用中）を足して分離する。
+`wrangler.jsonc` の `ratelimits` へ `ACTIVITY_RATE_LIMITER`（`namespace_id: 1005`。
+1003 は `MASTERY_OVERRIDE_RATE_LIMITER`、1004 は `MAP_RATE_LIMITER` が使用中）を足して分離する。
 そのときは `apps/api/src/app.ts` の `app.use` も1行増える。
+
+学習マップ・共有マップ・言語別マップ（`/v1/learning-maps*`・`/v1/shared-maps*`・`/v1/fixed-maps*`・
+`/v1/map-generation-consent`）は、この枠で実際に足りなくなったので `MAP_RATE_LIMITER`
+（`namespace_id: 1004`、60 回 / 60 秒）へ分けた（#299）。共有・取り込みの操作は画面を何度も行き来し、
+1 画面で 2〜4 回使うので、30 回に届いていた。
 
 ## 画面
 
