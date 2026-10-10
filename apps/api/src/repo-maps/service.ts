@@ -11,6 +11,7 @@ import {
   REPO_MAP_DRAFT_TTL_DAYS,
   REPO_MAP_LIMITS,
   type CreateRepoMapDraftInput,
+  INSPECT_FILE_LIST_MAX,
   type InspectRepoResponse,
   type RepoMapDraftView,
   type RepoMapMaterialView,
@@ -324,8 +325,28 @@ export async function inspectRepo(
     repo: source.repo,
     monorepo: detectMonorepo(source.entries),
     folders: topFolders(source.entries),
+    ...inspectFiles(analysis),
     scan: scanOf(analysis),
     usage: usageView(usage, plan),
+  };
+}
+
+const INSPECT_KIND_ORDER = { glossary: 0, doc: 1, schema: 2, code: 3 } as const;
+
+/** 下見の木から、参考ファイルとして選べる一覧を作る（用語集・文書・データの形・コードの順、浅い順）。 */
+function inspectFiles(analysis: Analysis): Pick<InspectRepoResponse, "files" | "filesTruncated"> {
+  const all = analysis.kept
+    .filter((f): f is typeof f & { cls: keyof typeof INSPECT_KIND_ORDER } => f.cls !== "other")
+    .map((f) => ({ path: f.path, kind: f.cls }))
+    .sort(
+      (a, b) =>
+        INSPECT_KIND_ORDER[a.kind] - INSPECT_KIND_ORDER[b.kind] ||
+        a.path.split("/").length - b.path.split("/").length ||
+        a.path.localeCompare(b.path),
+    );
+  return {
+    files: all.slice(0, INSPECT_FILE_LIST_MAX),
+    filesTruncated: all.length > INSPECT_FILE_LIST_MAX,
   };
 }
 

@@ -4,14 +4,15 @@ import { createSubmitGuard } from "../../api.js";
 import { fetchGenerationConsent } from "../../check.js";
 import { ConsentPrompt } from "../../map-consent.js";
 import { MAP_GENERATION_CONSENT_PATH } from "../../map-generation.js";
+import { CandidateRow, MaterialGroups } from "../../repo-map-lists.js";
 import {
-  EvidenceLink,
   isConsentRequired,
   redirectIfSessionExpired,
   repoMapErrorText,
   useConsentFlow,
 } from "../../repo-map-ui.js";
 import {
+  arrangeCandidates,
   buildConfirmRequest,
   buildRepoMapCandidates,
   confirmRepoMapDraft,
@@ -22,6 +23,7 @@ import {
   REPO_MAP_LIMITS,
   runSummarize,
   validateConfirm,
+  type CandidateSort,
   type RepoMapCandidate,
   type RepoMapDraft,
 } from "../../repo-maps.js";
@@ -63,6 +65,9 @@ function RepoMapDraftPage({ loaded }: { loaded: ReturnType<typeof Route.useLoade
   const [edits, setEdits] = useState<Record<string, { name?: string; description?: string }>>({});
   const [title, setTitle] = useState("");
   const [excluded, setExcluded] = useState<ReadonlySet<string>>(new Set());
+  const [editing, setEditing] = useState<ReadonlySet<string>>(new Set());
+  const [query, setQuery] = useState("");
+  const [sort, setSort] = useState<CandidateSort>("default");
 
   const step = nextStep(draft);
   const busy = phase !== "idle";
@@ -181,7 +186,13 @@ function RepoMapDraftPage({ loaded }: { loaded: ReturnType<typeof Route.useLoade
   const edit = (id: string, patch: { name?: string; description?: string }) =>
     setEdits((current) => ({ ...current, [id]: { ...current[id], ...patch } }));
 
+  const visible = arrangeCandidates(candidates, {
+    query,
+    sort,
+    names: Object.fromEntries(Object.entries(edits).map(([id, e]) => [id, e?.name])),
+  });
   const materials = draft.summary?.materials ?? [];
+  const unread = draft.targets.files.filter((f) => !materials.some((m) => m.ref === f));
   const schemaFiles = draft.summary?.schema ?? [];
 
   return (
@@ -284,76 +295,72 @@ function RepoMapDraftPage({ loaded }: { loaded: ReturnType<typeof Route.useLoade
                   個まで）。根拠のリンクは、読んだ時点（{draft.repo.commitSha.slice(0, 7)}
                   ）で固定されています。
                 </p>
+                <div className="repo-toolbar">
+                  <span role="status">
+                    選択中 <strong>{selected.size}</strong> / {MAX_NODES}
+                    {selected.size > MAX_NODES && (
+                      <span className="error-text">（{MAX_NODES} 個までです）</span>
+                    )}
+                  </span>
+                  <input
+                    type="search"
+                    value={query}
+                    placeholder="名前・説明で絞り込む"
+                    aria-label="候補を絞り込む"
+                    onChange={(event) => setQuery(event.target.value)}
+                  />
+                  <select
+                    value={sort}
+                    aria-label="並び順"
+                    onChange={(event) => setSort(event.target.value as CandidateSort)}
+                  >
+                    <option value="default">AI の並び</option>
+                    <option value="evidence">根拠が多い順</option>
+                  </select>
+                  <button
+                    type="button"
+                    className="secondary"
+                    disabled={locked}
+                    onClick={() =>
+                      setSelected(
+                        new Set([...selected, ...visible.map((c) => c.id)].slice(0, MAX_NODES)),
+                      )
+                    }
+                  >
+                    表示中を選ぶ
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary"
+                    disabled={locked}
+                    onClick={() =>
+                      setSelected(
+                        new Set([...selected].filter((id) => !visible.some((c) => c.id === id))),
+                      )
+                    }
+                  >
+                    表示中を外す
+                  </button>
+                </div>
                 <ul className="repo-candidates">
-                  {candidates.map((candidate) => {
-                    const edit1 = edits[candidate.id];
-                    return (
-                      <li key={candidate.id} className="repo-candidate">
-                        <label className="check-consent-remember">
-                          <input
-                            type="checkbox"
-                            checked={selected.has(candidate.id)}
-                            disabled={locked}
-                            onChange={() => toggle(selected, candidate.id, setSelected)}
-                          />
-                          <strong>{edit1?.name ?? candidate.name}</strong>
-                          {candidate.original !== "" && candidate.original !== candidate.name && (
-                            <code>{candidate.original}</code>
-                          )}
-                        </label>
-                        {candidate.schemaOnly ? (
-                          <p className="muted">
-                            機械で足した、データの形に現れる名前です（AI
-                            の候補には選ばれませんでした）。
-                          </p>
-                        ) : (
-                          candidate.fromSchema && (
-                            <p className="muted">データの形（テーブル・モデル）にも現れます。</p>
-                          )
-                        )}
-                        {selected.has(candidate.id) && (
-                          <div className="repo-candidate-edit">
-                            <label>
-                              表示名
-                              <input
-                                value={edit1?.name ?? candidate.name}
-                                maxLength={REPO_MAP_LIMITS.name}
-                                disabled={locked}
-                                onChange={(event) =>
-                                  edit(candidate.id, { name: event.target.value })
-                                }
-                              />
-                            </label>
-                            <label>
-                              説明
-                              <textarea
-                                rows={2}
-                                value={edit1?.description ?? candidate.description}
-                                maxLength={REPO_MAP_LIMITS.description}
-                                disabled={locked}
-                                onChange={(event) =>
-                                  edit(candidate.id, { description: event.target.value })
-                                }
-                              />
-                            </label>
-                          </div>
-                        )}
-                        <p className="muted">
-                          根拠:{" "}
-                          {candidate.evidence.map((e, i) => (
-                            <span key={e.id}>
-                              {i > 0 && "、"}
-                              <EvidenceLink kind={e.kind} label={e.ref} url={e.url} />
-                            </span>
-                          ))}
-                        </p>
-                      </li>
-                    );
-                  })}
+                  {visible.map((candidate) => (
+                    <CandidateRow
+                      key={candidate.id}
+                      candidate={candidate}
+                      checked={selected.has(candidate.id)}
+                      editing={editing.has(candidate.id)}
+                      edit={edits[candidate.id]}
+                      disabled={locked}
+                      onToggle={() => toggle(selected, candidate.id, setSelected)}
+                      onToggleEditing={() => toggle(editing, candidate.id, setEditing)}
+                      onEdit={(patch) => edit(candidate.id, patch)}
+                    />
+                  ))}
                 </ul>
+                {visible.length === 0 && <p className="muted">一致する候補がありません。</p>}
               </section>
 
-              <section className="map-create" aria-label="マップを作る">
+              <section className="map-create repo-confirm-bar" aria-label="マップを作る">
                 <label>
                   マップの題名（空ならリポジトリ名から付けます）
                   <input
@@ -401,42 +408,22 @@ function RepoMapDraftPage({ loaded }: { loaded: ReturnType<typeof Route.useLoade
                   候補がずれているときは、無関係な材料を外して、候補だけを作り直せます（1 日 5
                   回まで。今月の枠は使いません）。
                 </p>
-                <ul>
-                  {materials.map((m) => (
-                    <li key={m.id}>
-                      <label className="check-consent-remember">
-                        <input
-                          type="checkbox"
-                          checked={excluded.has(m.id)}
-                          disabled={locked}
-                          onChange={() => toggle(excluded, m.id, setExcluded)}
-                        />
-                        外す
-                      </label>{" "}
-                      <EvidenceLink kind={m.kind} label={m.ref} url={m.url} />
-                      {m.pinned && <span className="muted">（指定）</span>}
-                      <span className="muted"> — {m.text}</span>
-                    </li>
-                  ))}
-                  {schemaFiles.map((f, i) => {
-                    const id = `S${String(i + 1)}`;
-                    return (
-                      <li key={id}>
-                        <label className="check-consent-remember">
-                          <input
-                            type="checkbox"
-                            checked={excluded.has(id)}
-                            disabled={locked}
-                            onChange={() => toggle(excluded, id, setExcluded)}
-                          />
-                          外す
-                        </label>{" "}
-                        <EvidenceLink kind="schema" label={f.path} url={f.url} />
-                        <span className="muted"> — {f.names.slice(0, 8).join("、")}</span>
-                      </li>
-                    );
-                  })}
-                </ul>
+                {draft.targets.files.length > 0 && (
+                  <p>
+                    指定したファイル {draft.targets.files.length} 件・読んだ{" "}
+                    {draft.targets.files.length - unread.length} 件
+                    {unread.length > 0 && (
+                      <span className="muted">（要約に入らなかった: {unread.join("、")}）</span>
+                    )}
+                  </p>
+                )}
+                <MaterialGroups
+                  materials={materials}
+                  schemaFiles={schemaFiles}
+                  excluded={excluded}
+                  disabled={locked}
+                  onToggle={(id) => toggle(excluded, id, setExcluded)}
+                />
                 {draft.summary && draft.summary.skipped.length > 0 && (
                   <p className="muted">
                     読まなかったもの:{" "}

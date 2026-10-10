@@ -190,6 +190,13 @@ describe("POST /v1/repo-maps:inspect", () => {
     expect(body.folders).toEqual(["apps", "apps/api", "apps/web", "packages", "packages/domain"]);
     expect(body.scan.dropped).toEqual({ dependency_dir: 1, binary: 1 });
     expect(body.usage).toMatchObject({ monthlyDrafts: 0, monthlyDraftsLimit: 3 });
+    // 参考ファイルを選ぶための一覧。捨てるファイル（依存・バイナリ）は入らない。
+    expect(body.files.length).toBeGreaterThan(0);
+    expect(body.filesTruncated).toBe(false);
+    expect(body.files.map((f) => f.path)).not.toContain("node_modules/x/index.js");
+    for (const file of body.files) {
+      expect(["glossary", "doc", "schema", "code"]).toContain(file.kind);
+    }
 
     const list = (await (
       await call("GET", "/v1/repo-map-drafts")

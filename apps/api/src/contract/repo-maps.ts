@@ -126,8 +126,23 @@ export interface InspectRepoResponse {
   monorepo: RepoMapWorkspaceFolder[] | null;
   /** 深さ 2 までのフォルダ（対象のフォルダの候補）。 */
   folders: string[];
+  /**
+   * 「参考にしてほしいファイル」を選ぶための、読めるファイルの一覧（用語集・文書・データの形・コード。
+   * {@link INSPECT_FILE_LIST_MAX} 件まで）。下見の木から作る（GitHub の追加呼び出しは無い）。
+   */
+  files: InspectFileView[];
+  /** `files` が上限で切れたか。切れていても、手で書いたパスは確かめる（下書きの作成で）。 */
+  filesTruncated: boolean;
   scan: RepoMapScan;
   usage: RepoMapUsageView;
+}
+
+/** 下見で出すファイルの一覧の上限。 */
+export const INSPECT_FILE_LIST_MAX = 300;
+
+export interface InspectFileView {
+  path: string;
+  kind: "glossary" | "doc" | "schema" | "code";
 }
 
 /** 要約した材料 1 件。`id`（E1…）が候補の根拠の参照になる。 */

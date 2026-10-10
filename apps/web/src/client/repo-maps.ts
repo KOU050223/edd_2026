@@ -57,10 +57,19 @@ export interface RepoMapScan {
   dropped: Partial<Record<string, number>>;
 }
 
+/** 下見が返す、参考ファイルとして選べるファイル。 */
+export interface RepoMapFileOption {
+  path: string;
+  kind: "glossary" | "doc" | "schema" | "code";
+}
+
 export interface InspectRepoResult {
   repo: RepoMapRepoInfo;
   monorepo: RepoMapWorkspaceFolder[] | null;
   folders: string[];
+  /** 参考ファイルの候補（古い API では無い）。 */
+  files?: RepoMapFileOption[];
+  filesTruncated?: boolean;
   scan: RepoMapScan;
   usage: RepoMapUsage;
 }
@@ -415,16 +424,145 @@ export function defaultFolderSelection(monorepo: RepoMapWorkspaceFolder[] | null
   return monorepo.filter((f) => f.shared).map((f) => f.path);
 }
 
+/**
+ * 手で書かれたパスを、リポジトリの中のパスに揃える。先頭の `/`・`./`、GitHub の
+ * `https://github.com/owner/repo/blob/ブランチ/` の接頭辞、`#L10` などの行の指定を取る。
+ */
+export function normalizeHintPath(raw: string): string {
+  let path = raw.trim();
+  path = path.replace(/^https?:\/\/github\.com\/[^/]+\/[^/]+\/(?:blob|tree)\/[^/]+\//, "");
+  path = path.replace(/[#?].*$/, "");
+  path = path.replace(/^(?:\.\/|\/)+/, "");
+  return path;
+}
+
 /** 入力欄の文字列を、ファイルのパスの一覧にする。空行は除き、重複は 1 つにする。 */
 export function parseHintFiles(text: string): string[] {
   return [
     ...new Set(
       text
         .split("\n")
-        .map((line) => line.trim())
+        .map(normalizeHintPath)
         .filter((line) => line !== ""),
     ),
   ];
+}
+
+export interface HintFileCheck {
+  path: string;
+  /** 下見の一覧にあるか。一覧が切れているときは確かめられない（`unknown`）。 */
+  state: "found" | "missing" | "unknown";
+  /** `missing` のとき、名前が近いファイル（大文字小文字違い、または同じファイル名）。 */
+  suggestion?: string;
+}
+
+/**
+ * 指定したファイルが、下見の一覧にあるかを照合する。無いものは、近い名前を添える。
+ * 一覧が上限で切れていれば、無いものも「確かめられない」にする（作成時に API が確かめる）。
+ */
+export function checkHintFiles(
+  paths: readonly string[],
+  known: readonly string[],
+  truncated: boolean,
+): HintFileCheck[] {
+  const set = new Set(known);
+  return paths.map((path): HintFileCheck => {
+    if (set.has(path)) return { path, state: "found" };
+    if (truncated) return { path, state: "unknown" };
+    const lower = path.toLowerCase();
+    const base = lower.split("/").pop() ?? lower;
+    const near =
+      known.find((k) => k.toLowerCase() === lower) ??
+      known.find((k) => (k.toLowerCase().split("/").pop() ?? "") === base);
+    return near === undefined
+      ? { path, state: "missing" }
+      : { path, state: "missing", suggestion: near };
+  });
+}
+
+/** 一覧から選べる候補を、検索語で絞る（パスの部分一致、大文字小文字を区別しない）。 */
+export function filterFileOptions(
+  options: readonly RepoMapFileOption[],
+  query: string,
+  limit = 50,
+): RepoMapFileOption[] {
+  const q = query.trim().toLowerCase();
+  const hits = q === "" ? options : options.filter((o) => o.path.toLowerCase().includes(q));
+  return hits.slice(0, limit);
+}
+
+export const FILE_KIND_LABELS: Record<RepoMapFileOption["kind"], string> = {
+  glossary: "用語集",
+  doc: "文書",
+  schema: "データの形",
+  code: "コード",
+};
+
+/** 根拠・材料を並べる順（用語集 → 文書 → データの形 → コード → Issue）。 */
+export const EVIDENCE_ORDER: readonly RepoMapEvidenceKind[] = [
+  "glossary",
+  "doc",
+  "schema",
+  "code",
+  "issue",
+];
+
+/** 種類ごとの件数を「文書 1・コード 5・Issue 3」の形にする（0 件の種類は出さない）。 */
+export function evidenceCounts(items: readonly { kind: RepoMapEvidenceKind }[]): string {
+  const counts = new Map<RepoMapEvidenceKind, number>();
+  for (const item of items) counts.set(item.kind, (counts.get(item.kind) ?? 0) + 1);
+  return EVIDENCE_ORDER.filter((kind) => counts.has(kind))
+    .map((kind) => `${EVIDENCE_KIND_LABELS[kind]} ${String(counts.get(kind))}`)
+    .join("・");
+}
+
+/** 種類ごとのグループにする（`EVIDENCE_ORDER` の順。空のグループは作らない）。 */
+export function groupByEvidenceKind<T extends { kind: RepoMapEvidenceKind }>(
+  items: readonly T[],
+): { kind: RepoMapEvidenceKind; items: T[] }[] {
+  return EVIDENCE_ORDER.map((kind) => ({
+    kind,
+    items: items.filter((i) => i.kind === kind),
+  })).filter((group) => group.items.length > 0);
+}
+
+/** パスを「フォルダ」と「ファイル名」に分ける。長いパスの接頭辞を見出しに回すために使う。 */
+export function splitPath(path: string): { dir: string; base: string } {
+  const index = path.lastIndexOf("/");
+  return index < 0
+    ? { dir: "", base: path }
+    : { dir: path.slice(0, index), base: path.slice(index + 1) };
+}
+
+export type CandidateSort = "default" | "evidence";
+
+/**
+ * 候補の一覧に出す順と絞り込み。`default` は AI が返した順のまま。
+ * `evidence` は根拠が多い順（同数は元の順）。検索語は表示名・原文・説明に部分一致で効く。
+ */
+export function arrangeCandidates(
+  candidates: readonly RepoMapCandidate[],
+  options: {
+    query: string;
+    sort: CandidateSort;
+    names: Readonly<Record<string, string | undefined>>;
+  },
+): RepoMapCandidate[] {
+  const q = options.query.trim().toLowerCase();
+  const matched =
+    q === ""
+      ? [...candidates]
+      : candidates.filter((c) =>
+          [options.names[c.id] ?? c.name, c.original, c.description].some((t) =>
+            t.toLowerCase().includes(q),
+          ),
+        );
+  if (options.sort === "default") return matched;
+  const order = new Map(candidates.map((c, i) => [c.id, i]));
+  return matched.sort(
+    (a, b) =>
+      b.evidence.length - a.evidence.length || (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0),
+  );
 }
 
 /**
