@@ -2259,3 +2259,245 @@ button.kind-chip.active {
   border-radius: 6px;
   padding: 2px 4px;
 }
+
+/* 作成の手順（左上）と、用語を選ぶ画面の種類ごとの列（#322 案 H 改） */
+.wizard-steps {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 1.25rem;
+  list-style: none;
+  margin: 0 0 0.75rem;
+  padding: 0;
+  font-size: 0.85rem;
+}
+.wizard-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: #94a3b8;
+}
+.wizard-step.current {
+  color: #0f766e;
+  font-weight: 700;
+}
+.wizard-step.done {
+  color: #0f766e;
+}
+.wizard-step-mark {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid #cbd5e1;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+.wizard-step.current .wizard-step-mark {
+  background: #0f766e;
+  border-color: #0f766e;
+  color: #fff;
+}
+.wizard-step.done .wizard-step-mark {
+  background: #10b981;
+  border-color: #10b981;
+  color: #fff;
+}
+
+.kind-board {
+  display: grid;
+  grid-template-columns: 170px minmax(0, 1fr) 290px;
+  gap: 8px;
+  align-items: stretch;
+}
+.kind-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  align-self: start;
+  background: #fff;
+  border-radius: 12px;
+  padding: 6px;
+}
+.kind-nav button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  box-sizing: border-box;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 0.85rem;
+  text-align: left;
+  cursor: pointer;
+}
+.kind-nav button.active {
+  background: #ecfdf5;
+  font-weight: 700;
+}
+.kind-nav em {
+  margin-left: auto;
+  font-style: normal;
+  font-size: 0.75rem;
+  color: #64748b;
+}
+.kind-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  background: var(--kind-bar, #94a3b8);
+}
+.kind-columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 6px;
+  align-items: stretch;
+  background: #eef2f7;
+  border-radius: 12px;
+  padding: 6px;
+}
+.kind-column {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 8px;
+  min-width: 0;
+}
+.kind-column.over {
+  outline: 2px dashed #0f766e;
+  background: #f0fdfa;
+}
+.kind-column h3 {
+  display: flex;
+  align-items: center;
+  margin: 0 0 3px;
+  padding: 2px 2px 6px;
+  border-bottom: 3px solid var(--kind-bar, #94a3b8);
+  font-size: 0.8rem;
+}
+.kind-column h3 span {
+  margin-left: auto;
+  font-size: 0.7rem;
+  font-weight: 400;
+  color: #64748b;
+}
+.kind-column ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.kind-empty {
+  margin: 0;
+  font-size: 0.7rem;
+  color: #94a3b8;
+}
+.kind-card {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  border: 1.5px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 5px 7px;
+  font-size: 0.75rem;
+  line-height: 1.35;
+  cursor: grab;
+}
+.kind-card.on {
+  border-color: #0f766e;
+  background: #f0fdfa;
+}
+.kind-card.cur {
+  outline: 2.5px solid #0f172a;
+  outline-offset: 1px;
+}
+.kind-card-body {
+  display: block;
+  min-width: 0;
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.kind-card-body i {
+  display: block;
+  font-style: normal;
+  font-size: 0.65rem;
+  color: #64748b;
+}
+.kind-hint {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: 0.75rem;
+}
+.kind-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  align-self: start;
+  background: #fff;
+  border-top: 5px solid var(--kind-bar, #94a3b8);
+  border-radius: 12px;
+  padding: 14px 16px;
+}
+.kind-detail h3 {
+  margin: 0;
+}
+.kind-detail h4 {
+  margin: 0.5rem 0 0;
+  font-size: 0.85rem;
+}
+.kind-detail ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 0.85rem;
+  line-height: 1.8;
+}
+.kind-detail label {
+  display: block;
+  font-size: 0.8rem;
+  color: #64748b;
+}
+.kind-detail input,
+.kind-detail textarea,
+.kind-detail select {
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 3px;
+}
+.kind-detail .kind-label {
+  align-self: flex-start;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: var(--kind-bg, #e2e8f0);
+  color: var(--kind-fg, #334155);
+  font-size: 0.7rem;
+  font-weight: 600;
+  line-height: 1.5rem;
+}
+@media (max-width: 1000px) {
+  .kind-board {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .kind-nav {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+  .kind-nav button {
+    width: auto;
+  }
+}

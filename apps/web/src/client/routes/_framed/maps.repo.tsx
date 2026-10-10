@@ -2,6 +2,7 @@ import { createFileRoute, Link, useNavigate, useRouter } from "@tanstack/react-r
 import { useRef, useState } from "react";
 import { createSubmitGuard } from "../../api.js";
 import { fetchGenerationConsent } from "../../check.js";
+import { WizardSteps } from "../../repo-map-board.js";
 import { fetchLearningMaps, MAP_LIMITS } from "../../learning-maps.js";
 import { ConsentPrompt } from "../../map-consent.js";
 import { MAP_GENERATION_CONSENT_PATH } from "../../map-generation.js";
@@ -146,6 +147,7 @@ function RepoMapStartPage() {
 
   return (
     <>
+      <WizardSteps current={1} />
       <p className="map-head">
         <Link to="/maps" className="link">
           ← 自分のマップ

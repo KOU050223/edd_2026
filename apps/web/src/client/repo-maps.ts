@@ -786,3 +786,55 @@ export function nodeKindsOf(
   }
   return kinds;
 }
+
+/** 作成の手順（左上に出す）。`current` は 1 始まり。5 は「全部済み」。 */
+export const WIZARD_STEP_LABELS = [
+  "リポジトリを選ぶ",
+  "材料を読む",
+  "用語を選ぶ",
+  "マップができる",
+] as const;
+
+export interface WizardStep {
+  label: string;
+  state: "done" | "current" | "todo";
+}
+
+export function wizardSteps(current: 1 | 2 | 3 | 4 | 5): WizardStep[] {
+  return WIZARD_STEP_LABELS.map((label, index) => ({
+    label,
+    state: index + 1 < current ? "done" : index + 1 === current ? "current" : "todo",
+  }));
+}
+
+/** 下書きの段から、手順のどこにいるか。確定済みは全部済み。 */
+export function wizardStepOf(step: RepoMapNextStep): 2 | 3 | 5 {
+  if (step.kind === "confirmed") return 5;
+  return step.kind === "choose" ? 3 : 2;
+}
+
+export interface KindColumn<T> {
+  /** `null` は「種類なし」の列。 */
+  kind: RepoMapNodeKind | null;
+  items: T[];
+}
+
+/**
+ * 候補を種類ごとの列にする。種類の 5 列は、空でも必ず出す（ドロップ先になる）。
+ * 「種類なし」の列は、中身があるときだけ末尾に出す。列の中は、渡された順のまま。
+ */
+export function groupByKind<T>(
+  items: readonly T[],
+  kindOf: (item: T) => RepoMapNodeKind | null,
+): KindColumn<T>[] {
+  const columns: KindColumn<T>[] = REPO_MAP_NODE_KINDS.map((kind) => ({ kind, items: [] }));
+  const none: KindColumn<T> = { kind: null, items: [] };
+  for (const item of items) {
+    const kind = kindOf(item);
+    (columns.find((c) => c.kind === kind) ?? none).items.push(item);
+  }
+  return none.items.length > 0 ? [...columns, none] : columns;
+}
+
+/** ドラッグで運んでいる候補の ID を、dataTransfer に載せる／取り出すときの型名。 */
+export const CANDIDATE_DRAG_TYPE = "application/x-repo-map-candidate";

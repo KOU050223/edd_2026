@@ -4,6 +4,7 @@ import { createSubmitGuard } from "../../api.js";
 import { fetchGenerationConsent } from "../../check.js";
 import { ConsentPrompt } from "../../map-consent.js";
 import { MAP_GENERATION_CONSENT_PATH } from "../../map-generation.js";
+import { KindBoard, WizardSteps } from "../../repo-map-board.js";
 import { CandidateRow, MaterialGroups } from "../../repo-map-lists.js";
 import {
   isConsentRequired,
@@ -27,6 +28,7 @@ import {
   type RepoMapCandidate,
   type RepoMapDraft,
   type RepoMapNodeKind,
+  wizardStepOf,
 } from "../../repo-maps.js";
 import { takeLoginRetry } from "../../session.js";
 
@@ -203,8 +205,12 @@ function RepoMapDraftPage({ loaded }: { loaded: ReturnType<typeof Route.useLoade
     (f) => !materials.some((m) => m.ref === f) && !schemaFiles.some((s) => s.path === f),
   );
 
+  // 種類を持つ候補なら、種類ごとの列で見せる。種類に未対応の API・古い下書きは、これまでの一覧のまま。
+  const hasKinds = candidates.some((c) => c.kind !== undefined);
+
   return (
     <>
+      <WizardSteps current={wizardStepOf(step)} />
       <p className="map-head">
         <Link to="/maps/repo" className="link">
           ← リポジトリからマップを作る
@@ -350,22 +356,37 @@ function RepoMapDraftPage({ loaded }: { loaded: ReturnType<typeof Route.useLoade
                     表示中を外す
                   </button>
                 </div>
-                <ul className="repo-candidates">
-                  {visible.map((candidate) => (
-                    <CandidateRow
-                      key={candidate.id}
-                      candidate={candidate}
-                      checked={selected.has(candidate.id)}
-                      editing={editing.has(candidate.id)}
-                      edit={edits[candidate.id]}
-                      disabled={locked}
-                      onToggle={() => toggle(selected, candidate.id, setSelected)}
-                      onToggleEditing={() => toggle(editing, candidate.id, setEditing)}
-                      onEdit={(patch) => edit(candidate.id, patch)}
-                    />
-                  ))}
-                </ul>
-                {visible.length === 0 && <p className="muted">一致する候補がありません。</p>}
+                {hasKinds ? (
+                  <KindBoard
+                    candidates={visible}
+                    all={candidates}
+                    selected={selected}
+                    edits={edits}
+                    disabled={locked}
+                    max={MAX_NODES}
+                    onToggle={(id) => toggle(selected, id, setSelected)}
+                    onEdit={edit}
+                  />
+                ) : (
+                  <ul className="repo-candidates">
+                    {visible.map((candidate) => (
+                      <CandidateRow
+                        key={candidate.id}
+                        candidate={candidate}
+                        checked={selected.has(candidate.id)}
+                        editing={editing.has(candidate.id)}
+                        edit={edits[candidate.id]}
+                        disabled={locked}
+                        onToggle={() => toggle(selected, candidate.id, setSelected)}
+                        onToggleEditing={() => toggle(editing, candidate.id, setEditing)}
+                        onEdit={(patch) => edit(candidate.id, patch)}
+                      />
+                    ))}
+                  </ul>
+                )}
+                {!hasKinds && visible.length === 0 && (
+                  <p className="muted">一致する候補がありません。</p>
+                )}
               </section>
 
               <section className="map-create repo-confirm-bar" aria-label="マップを作る">

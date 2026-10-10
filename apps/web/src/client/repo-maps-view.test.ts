@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  groupByKind,
+  wizardStepOf,
+  wizardSteps,
   arrangeCandidates,
   asNodeKind,
   buildConfirmRequest,
@@ -189,5 +192,38 @@ describe("ノードの種類（#322）", () => {
     expect(request.accepted).toEqual([{ id: "C1" }, { id: "C2", kind: "state" }, { id: "C3" }]);
     const cleared = buildConfirmRequest([base], new Set(["C1"]), { C1: { kind: null } }, "");
     expect(cleared.accepted).toEqual([{ id: "C1", kind: null }]);
+  });
+});
+
+describe("作成の手順と種類の列（#322）", () => {
+  it("手順は、いまの段より前を済み・いまを現在・後ろを未にする", () => {
+    expect(wizardSteps(3).map((s) => s.state)).toEqual(["done", "done", "current", "todo"]);
+    expect(wizardSteps(5).every((s) => s.state === "done")).toBe(true);
+  });
+
+  it("下書きの段を手順に直す", () => {
+    expect(wizardStepOf({ kind: "summarize", resume: false })).toBe(2);
+    expect(wizardStepOf({ kind: "candidates" })).toBe(2);
+    expect(wizardStepOf({ kind: "choose" })).toBe(3);
+    expect(wizardStepOf({ kind: "confirmed", mapId: "m" })).toBe(5);
+  });
+
+  it("種類ごとの列にする。5 列は空でも出し、種類なしは中身があるときだけ末尾に出す", () => {
+    const items = [
+      { id: "a", kind: "state" as const },
+      { id: "b", kind: null },
+      { id: "c", kind: "state" as const },
+    ];
+    const columns = groupByKind(items, (i) => i.kind);
+    expect(columns.map((c) => c.kind)).toEqual([
+      "core",
+      "event",
+      "state",
+      "record",
+      "system",
+      null,
+    ]);
+    expect(columns[2]?.items.map((i) => i.id)).toEqual(["a", "c"]);
+    expect(groupByKind([], () => null)).toHaveLength(5);
   });
 });
