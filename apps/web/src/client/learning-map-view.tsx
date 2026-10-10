@@ -577,6 +577,8 @@ function ConceptLinksList({
   );
 }
 
+type DetailTab = "learn" | "links" | "evidence";
+
 /** 選んだ Concept の詳細。Evidence・前提・次の Concept・理解度の修正をまとめる。 */
 export function ConceptDetail({
   concept,
@@ -623,123 +625,203 @@ export function ConceptDetail({
   /** ノードの種類（#322）。 */
   kind?: RepoMapNodeKind;
 }) {
+  const [tabState, setTabState] = useState<{ id: string; tab: DetailTab }>({
+    id: concept.conceptId,
+    tab: "learn",
+  });
   // 手動修正は status だけを変えるので、項目の割合は自動算出のまま見せる。
   const objectives = objectiveProgress(definedObjectives, {
     status: concept.derived.status,
     objectives: concept.objectives,
   });
+  const tabs: { id: DetailTab; label: string }[] = [
+    { id: "learn", label: "学ぶこと" },
+    { id: "links", label: "つながり" },
+    ...(evidence ? [{ id: "evidence" as const, label: "根拠" }] : []),
+  ];
+  // 別のノードを開いたら、先頭の「学ぶこと」から見せる。
+  const tab: DetailTab =
+    tabState.id === concept.conceptId && tabs.some((t) => t.id === tabState.tab)
+      ? tabState.tab
+      : "learn";
+  const ringLength = 2 * Math.PI * 31;
+  const ringValue = concept.score === null ? 0 : Math.max(0, Math.min(1, concept.score));
   return (
-    <aside className="detail" aria-label="Concept の詳細" ref={panel}>
-      <header className="detail-head">
-        <h2>{nameOf(concept)}</h2>
-        <p className="detail-status">
-          {isCurrent && <em className="badge">現在地</em>}
-          <span className={`status ${concept.status}`}>{statusLabel[concept.status]}</span>
-          {concept.manual && <em className="manual">手動</em>}
+    <aside
+      className={`detail detail-hero-panel${kind === undefined ? "" : ` kind-${kind}`}`}
+      aria-label="Concept の詳細"
+      ref={panel}
+    >
+      <div className="detail-hero">
+        <div className="detail-hero-text">
           {kind !== undefined && (
-            <span className={`kind-chip kind-${kind}`}>{REPO_MAP_NODE_KIND_LABELS[kind]}</span>
+            <span className="detail-hero-kind">{REPO_MAP_NODE_KIND_LABELS[kind]}</span>
           )}
-        </p>
-      </header>
-      {note && <p className="muted">{note}</p>}
-      {summary && <p className="detail-summary">{summary}</p>}
+          <h2>{nameOf(concept)}</h2>
+          <p className="detail-status">
+            {isCurrent && <em className="badge">現在地</em>}
+            <span className={`status ${concept.status}`}>{statusLabel[concept.status]}</span>
+            {concept.manual && <em className="manual">手動</em>}
+          </p>
+        </div>
+        <div
+          className="detail-ring"
+          role="img"
+          aria-label={`理解度 ${concept.score === null ? "未確認" : percent(concept.score)}`}
+        >
+          <svg width="76" height="76" viewBox="0 0 76 76" aria-hidden="true">
+            <circle cx="38" cy="38" r="31" fill="#fff" stroke="#e2e8f0" strokeWidth="7" />
+            <circle
+              cx="38"
+              cy="38"
+              r="31"
+              fill="none"
+              stroke="#10b981"
+              strokeWidth="7"
+              strokeLinecap="round"
+              strokeDasharray={`${String(ringValue * ringLength)} ${String(ringLength)}`}
+              transform="rotate(-90 38 38)"
+            />
+          </svg>
+          <div className="detail-ring-label">
+            <b>{concept.score === null ? "—" : percent(concept.score)}</b>
+            <span>理解度</span>
+          </div>
+        </div>
+      </div>
 
-      <section className="detail-block" aria-label="学ぶこと">
-        <h3 className="detail-block-title">学ぶこと</h3>
-        {objectives.length > 0 ? (
-          <>
-            {objectivesNote && <p className="muted">（{objectivesNote}）</p>}
-            <ul className="detail-objective-list">
-              {objectives.map((objective) => (
-                <li key={objective.id}>
-                  <span>{objective.label}</span>
-                  <span
-                    className={`detail-objective-value${objective.value === null ? " none" : ""}`}
-                  >
-                    {objective.value === null ? "未確認" : percent(objective.value)}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </>
-        ) : (
-          <p className="muted">このノードの「理解すること」はまだありません。</p>
-        )}
-      </section>
-
-      <section className="detail-block" aria-label="確かめる">
-        <h3 className="detail-block-title">確かめる</h3>
-        <dl>
-          <dt>理解度</dt>
-          <dd>{concept.score === null ? "未確認" : percent(concept.score)}</dd>
-          <dt>自力解決</dt>
-          <dd>{concept.evidence.solvedIndependentlyCount} 回</dd>
-          <dt>手動修正</dt>
-          <dd>
-            {concept.manual
-              ? `あり（自動算出では ${statusLabel[concept.derived.status]}・${percent(
-                  concept.derived.status === "unobserved" ? null : concept.derived.score,
-                )}）`
-              : "なし"}
-          </dd>
-        </dl>
-        {concept.status === "unobserved" && !concept.manual && (
-          <p className="muted">まだ判断材料がありません。0% という意味ではありません。</p>
-        )}
-        {concept.familiarity && (
-          <>
-            <h4>過去の学習履歴から</h4>
-            <p className="muted">
-              {describeFamiliarity(concept.familiarity)}
-              {concept.familiarity.observationCount > 0 &&
-                `（観測 ${concept.familiarity.observationCount} 件）`}
-            </p>
-            {concept.derived.status === "unobserved" && (
-              <p className="muted">
-                過去に触れた形跡はありますが、学習の記録では確認されていません。
-              </p>
-            )}
-          </>
-        )}
-        {loggedIn && (
-          <>
-            <p className="muted">
-              概要問題と実践問題の2問に両方正解すると、理解の確認として記録します。
-            </p>
-            {/* 先読みしない。この loader は問題が無ければ AI に生成させるので、
-                ポインタを乗せただけで生成を走らせないようにする。 */}
-            <Link
-              to="/check/$conceptId"
-              params={{ conceptId: concept.conceptId }}
-              search={fromMapId === undefined ? {} : { from: fromMapId }}
-              preload={false}
-              className="check-link"
+      <div className="detail-intro">
+        {note && <p className="muted">{note}</p>}
+        {summary && <p className="detail-summary">{summary}</p>}
+        <div className="detail-tabs" role="tablist" aria-label="詳細の項目">
+          {tabs.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              role="tab"
+              aria-selected={tab === t.id}
+              className={tab === t.id ? "active" : undefined}
+              onClick={() => setTabState({ id: concept.conceptId, tab: t.id })}
             >
-              確認問題を解く
-            </Link>
-            <MasteryPicker concept={concept} pending={pending} onChange={onChange} />
+              {t.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="detail-body" role="tabpanel">
+        {tab === "learn" && (
+          <>
+            <section className="detail-block" aria-label="学ぶこと">
+              <h3 className="detail-block-title">学ぶこと</h3>
+              {objectives.length > 0 ? (
+                <>
+                  {objectivesNote && <p className="muted">（{objectivesNote}）</p>}
+                  <ul className="detail-objective-list">
+                    {objectives.map((objective) => (
+                      <li key={objective.id} className={objective.value === null ? "" : "done"}>
+                        <span className="detail-objective-mark" aria-hidden="true">
+                          {objective.value === null ? "" : "✓"}
+                        </span>
+                        <span className="detail-objective-label">{objective.label}</span>
+                        <span
+                          className={`detail-objective-value${objective.value === null ? " none" : ""}`}
+                        >
+                          {objective.value === null ? "未確認" : percent(objective.value)}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              ) : (
+                <p className="muted">このノードの「理解すること」はまだありません。</p>
+              )}
+            </section>
+
+            <section className="detail-block" aria-label="確かめる">
+              <h3 className="detail-block-title">確かめる</h3>
+              <dl>
+                <dt>理解度</dt>
+                <dd>{concept.score === null ? "未確認" : percent(concept.score)}</dd>
+                <dt>自力解決</dt>
+                <dd>{concept.evidence.solvedIndependentlyCount} 回</dd>
+                <dt>手動修正</dt>
+                <dd>
+                  {concept.manual
+                    ? `あり（自動算出では ${statusLabel[concept.derived.status]}・${percent(
+                        concept.derived.status === "unobserved" ? null : concept.derived.score,
+                      )}）`
+                    : "なし"}
+                </dd>
+              </dl>
+              {concept.status === "unobserved" && !concept.manual && (
+                <p className="muted">まだ判断材料がありません。0% という意味ではありません。</p>
+              )}
+              {concept.familiarity && (
+                <>
+                  <h4>過去の学習履歴から</h4>
+                  <p className="muted">
+                    {describeFamiliarity(concept.familiarity)}
+                    {concept.familiarity.observationCount > 0 &&
+                      `（観測 ${concept.familiarity.observationCount} 件）`}
+                  </p>
+                  {concept.derived.status === "unobserved" && (
+                    <p className="muted">
+                      過去に触れた形跡はありますが、学習の記録では確認されていません。
+                    </p>
+                  )}
+                </>
+              )}
+              {loggedIn && (
+                <>
+                  <p className="muted">
+                    概要問題と実践問題の2問に両方正解すると、理解の確認として記録します。
+                  </p>
+                  <MasteryPicker concept={concept} pending={pending} onChange={onChange} />
+                </>
+              )}
+            </section>
           </>
         )}
-      </section>
 
-      <section className="detail-block" aria-label="つながり">
-        <h3 className="detail-block-title">つながり</h3>
-        <h4>前提 Concept</h4>
-        <ConceptLinksList
-          ids={links?.prerequisites ?? []}
-          concepts={concepts}
-          empty="前提はありません"
-          onSelect={onSelect}
-        />
-        <h4>次に接続する Concept</h4>
-        <ConceptLinksList
-          ids={links?.next ?? []}
-          concepts={concepts}
-          empty="この先に続く Concept はありません"
-          onSelect={onSelect}
-        />
-      </section>
-      {evidence}
+        {tab === "links" && (
+          <section className="detail-block" aria-label="つながり">
+            <h3 className="detail-block-title">つながり</h3>
+            <h4>前提 Concept</h4>
+            <ConceptLinksList
+              ids={links?.prerequisites ?? []}
+              concepts={concepts}
+              empty="前提はありません"
+              onSelect={onSelect}
+            />
+            <h4>次に接続する Concept</h4>
+            <ConceptLinksList
+              ids={links?.next ?? []}
+              concepts={concepts}
+              empty="この先に続く Concept はありません"
+              onSelect={onSelect}
+            />
+          </section>
+        )}
+
+        {tab === "evidence" && evidence}
+      </div>
+
+      {loggedIn && (
+        <div className="detail-footer">
+          {/* 先読みしない。この loader は問題が無ければ AI に生成させるので、
+              ポインタを乗せただけで生成を走らせないようにする。 */}
+          <Link
+            to="/check/$conceptId"
+            params={{ conceptId: concept.conceptId }}
+            search={fromMapId === undefined ? {} : { from: fromMapId }}
+            preload={false}
+            className="check-link"
+          >
+            確認問題を解く
+          </Link>
+        </div>
+      )}
     </aside>
   );
 }
