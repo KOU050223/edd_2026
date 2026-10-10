@@ -915,10 +915,19 @@ export function createLearningMapsRoute(resolve: LearningMapsDepsResolver) {
   });
 
   // 範囲が「全員」の共有マップの一覧（#244 の T5）。新しく上げた順。作成者の名前は出さない。
+  // `?exclude=own` で、呼び出した人のマップを除く（「みんなのマップ」の画面、#305 の P3-a）。
   app.get("/shared-maps", async (c) => {
+    const userId = c.get("user").userId;
+    const exclude = c.req.query("exclude");
+    if (exclude !== undefined && exclude !== "own") {
+      throw new HTTPException(400, { message: "exclude は own だけ指定できます" });
+    }
     const deps = resolve(c.env);
     const body: ListSharedMapsResponse = {
-      maps: await deps.maps.listPublic(MAX_LISTED_SHARED_MAPS),
+      maps: await deps.maps.listPublic(
+        MAX_LISTED_SHARED_MAPS,
+        exclude === "own" ? userId : undefined,
+      ),
     };
     return c.json(body, 200, { "cache-control": "no-store" });
   });

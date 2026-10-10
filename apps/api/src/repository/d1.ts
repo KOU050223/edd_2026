@@ -2920,18 +2920,18 @@ export class D1LearningMapRepository implements LearningMapRepository {
     };
   }
 
-  async listPublic(limit: number): Promise<SharedMapSummary[]> {
+  async listPublic(limit: number, excludeOwnerUserId?: string): Promise<SharedMapSummary[]> {
     // 題名・説明・ノード数は、手元ではなく共有の側（いちばん新しい版の中身）から読む。
     const { results } = await this.db
       .prepare(
         `SELECT ${SHARED_SUMMARY_COLUMNS}
          FROM learning_maps m
          ${LATEST_VERSION_JOIN}
-         WHERE m.share_scope = 'public'
+         WHERE m.share_scope = 'public' AND (? IS NULL OR m.owner_user_id <> ?)
          ORDER BY v.created_at_ms DESC, m.id ASC
          LIMIT ?`,
       )
-      .bind(limit)
+      .bind(excludeOwnerUserId ?? null, excludeOwnerUserId ?? null, limit)
       .all<SharedSummaryRow>();
     return results.map(toSharedMapSummary);
   }

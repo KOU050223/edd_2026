@@ -6,6 +6,7 @@ import {
   fetchPublishPreview,
   publishLearningMap,
   fetchOwnSharedMaps,
+  fetchSharedMaps,
   fetchReimportPreview,
   fetchSharedMap,
   importSharedMap,
@@ -117,6 +118,15 @@ test("共有したマップの一覧は、自分のマップの口（learning-ma
   const { fetcher, calls } = respond(200, { maps: [] });
   await expect(fetchOwnSharedMaps(fetcher)).resolves.toEqual({ maps: [] });
   expect(calls[0]!.url).toBe("/api/v1/learning-maps:shared");
+});
+
+test("みんなのマップは、自分のマップを除く指定（exclude=own）を付けて読む（#305）", async () => {
+  const all = respond(200, { maps: [] });
+  await fetchSharedMaps(all.fetcher);
+  expect(all.calls[0]!.url).toBe("/api/v1/shared-maps");
+  const others = respond(200, { maps: [] });
+  await fetchSharedMaps(others.fetcher, false, { excludeOwn: true });
+  expect(others.calls[0]!.url).toBe("/api/v1/shared-maps?exclude=own");
 });
 
 test("取り込みは鍵を本文で送り、取り込み直しは見た版・回数・残すノードを送る", async () => {

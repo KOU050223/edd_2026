@@ -140,6 +140,11 @@ function SharedMapList({
           ))}
         </ul>
       )}
+      <p>
+        <Link to="/explore" className="link">
+          みんなのマップをもっと見る
+        </Link>
+      </p>
     </section>
   );
 }
