@@ -89,6 +89,9 @@ export interface InspectRepoResult {
   /** 参考ファイルの候補（古い API では無い）。 */
   files?: RepoMapFileOption[];
   filesTruncated?: boolean;
+  /** 指定できるパスの全体（照合用）。古い API では無い。 */
+  paths?: string[];
+  pathsTruncated?: boolean;
   scan: RepoMapScan;
   usage: RepoMapUsage;
 }

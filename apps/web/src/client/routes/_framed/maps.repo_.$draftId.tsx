@@ -84,6 +84,7 @@ function RepoMapDraftPage({ loaded }: { loaded: ReturnType<typeof Route.useLoade
     if (next.candidates !== null) {
       setSelected(defaultSelection(next.candidates.items));
       setEdits({});
+      setEditing(new Set());
     }
   };
 
@@ -197,8 +198,10 @@ function RepoMapDraftPage({ loaded }: { loaded: ReturnType<typeof Route.useLoade
     names: Object.fromEntries(Object.entries(edits).map(([id, e]) => [id, e?.name])),
   });
   const materials = draft.summary?.materials ?? [];
-  const unread = draft.targets.files.filter((f) => !materials.some((m) => m.ref === f));
   const schemaFiles = draft.summary?.schema ?? [];
+  const unread = draft.targets.files.filter(
+    (f) => !materials.some((m) => m.ref === f) && !schemaFiles.some((s) => s.path === f),
+  );
 
   return (
     <>

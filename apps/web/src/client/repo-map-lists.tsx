@@ -48,6 +48,9 @@ export function CandidateRow({
   const name = edit?.name ?? candidate.name;
   const description = edit?.description ?? candidate.description;
   const kind = edit?.kind !== undefined ? edit.kind : (candidate.kind ?? null);
+  // 種類を持たない候補（古い下書き・種類に未対応の API）では、種類を選ばせない。
+  // 選ばせると、未対応の API が 400 にする（確定の入力の形が厳密なため）。
+  const kindSupported = candidate.kind !== undefined;
   const changed =
     edit !== undefined &&
     (edit.name !== undefined || edit.description !== undefined || edit.kind !== undefined);
@@ -66,7 +69,7 @@ export function CandidateRow({
           {!candidate.schemaOnly && candidate.fromSchema && (
             <span className="badge-chip">データの形にも</span>
           )}
-          {checked ? (
+          {!kindSupported ? null : checked ? (
             <select
               className={`kind-select${kind === null ? "" : ` kind-${kind}`}`}
               value={kind ?? ""}

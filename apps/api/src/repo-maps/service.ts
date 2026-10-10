@@ -12,6 +12,7 @@ import {
   REPO_MAP_LIMITS,
   type CreateRepoMapDraftInput,
   INSPECT_FILE_LIST_MAX,
+  INSPECT_PATH_LIST_MAX,
   type RepoMapNodeKind,
   type InspectRepoResponse,
   type RepoMapDraftView,
@@ -27,6 +28,7 @@ import {
   compressListing,
   detectMonorepo,
   filterByFolders,
+  MAX_FILE_BYTES,
   validateTargets,
   type Analysis,
   type KeptFile,
@@ -329,8 +331,20 @@ export async function inspectRepo(
     monorepo: detectMonorepo(source.entries),
     folders: topFolders(source.entries),
     ...inspectFiles(analysis),
+    ...inspectPaths(source.entries),
     scan: scanOf(analysis),
     usage: usageView(usage, plan),
+  };
+}
+
+/** 指定できるパス（API の `validateTargets` が受けるもの: ツリーの blob で、サイズの上限以下）。 */
+function inspectPaths(entries: TreeEntry[]): Pick<InspectRepoResponse, "paths" | "pathsTruncated"> {
+  const all = entries
+    .filter((e) => e.type === "blob" && (e.size ?? 0) <= MAX_FILE_BYTES)
+    .map((e) => e.path);
+  return {
+    paths: all.slice(0, INSPECT_PATH_LIST_MAX),
+    pathsTruncated: all.length > INSPECT_PATH_LIST_MAX,
   };
 }
 

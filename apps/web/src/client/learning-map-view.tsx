@@ -671,7 +671,7 @@ export function ConceptDetail({
         <h3 className="detail-block-title">確かめる</h3>
         <dl>
           <dt>理解度</dt>
-          <dd>{percent(concept.score)}</dd>
+          <dd>{concept.score === null ? "未確認" : percent(concept.score)}</dd>
           <dt>自力解決</dt>
           <dd>{concept.evidence.solvedIndependentlyCount} 回</dd>
           <dt>手動修正</dt>

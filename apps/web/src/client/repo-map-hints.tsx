@@ -17,22 +17,29 @@ import {
 export function HintFilePicker({
   options,
   truncated,
+  knownPaths,
+  knownTruncated,
   text,
   onChange,
   disabled,
 }: {
   options: readonly RepoMapFileOption[];
+  /** `options`（選ぶ用の一覧）が上限で切れている。 */
   truncated: boolean;
+  /** 指定できるパスの全体（照合用）。無ければ（古い API）、照合しない。 */
+  knownPaths: readonly string[] | undefined;
+  knownTruncated: boolean;
   text: string;
   onChange: (text: string) => void;
   disabled: boolean;
 }) {
   const [query, setQuery] = useState("");
   const chosen = parseHintFiles(text);
+  // 照合は「指定できるパスの全体」に対して行う。選ぶ用の一覧は一部だけなので、照合には使わない。
   const checks = checkHintFiles(
     chosen,
-    options.map((o) => o.path),
-    truncated || options.length === 0,
+    knownPaths ?? [],
+    knownPaths === undefined || knownTruncated,
   );
   const full = chosen.length >= REPO_MAP_LIMITS.hints;
   const shown = filterFileOptions(options, query);
@@ -64,7 +71,8 @@ export function HintFilePicker({
             .filter((c) => c.state === "missing")
             .map((c) => (
               <li key={c.path} className="error-text">
-                「{c.path}」はこのリポジトリに見つかりません。
+                「{c.path}
+                」は、指定できるファイルの中に見つかりません（大きすぎるファイルは指定できません）。
                 {c.suggestion !== undefined && (
                   <>
                     {" "}

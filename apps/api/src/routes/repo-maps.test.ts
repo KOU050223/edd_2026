@@ -193,6 +193,10 @@ describe("POST /v1/repo-maps:inspect", () => {
     // 参考ファイルを選ぶための一覧。捨てるファイル（依存・バイナリ）は入らない。
     expect(body.files.length).toBeGreaterThan(0);
     expect(body.filesTruncated).toBe(false);
+    // 照合用のパスは、選ぶ用の一覧と違い、捨てる規則に当たるものも含む（API は指定を受ける）。
+    expect(body.pathsTruncated).toBe(false);
+    for (const file of body.files) expect(body.paths).toContain(file.path);
+    expect(body.paths.length).toBeGreaterThanOrEqual(body.files.length);
     expect(body.files.map((f) => f.path)).not.toContain("node_modules/x/index.js");
     for (const file of body.files) {
       expect(["glossary", "doc", "schema", "code"]).toContain(file.kind);

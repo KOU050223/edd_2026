@@ -153,14 +153,23 @@ export interface InspectRepoResponse {
    * {@link INSPECT_FILE_LIST_MAX} 件まで）。下見の木から作る（GitHub の追加呼び出しは無い）。
    */
   files: InspectFileView[];
-  /** `files` が上限で切れたか。切れていても、手で書いたパスは確かめる（下書きの作成で）。 */
+  /** `files` が上限で切れたか。 */
   filesTruncated: boolean;
+  /**
+   * 参考ファイルとして指定できるパスの全体（捨てる規則に当たるものも含む。大きすぎるファイルは除く）。
+   * 手で書いたパスの照合に使う。{@link INSPECT_PATH_LIST_MAX} 件まで。
+   */
+  paths: string[];
+  /** `paths` が上限で切れたか。切れているときは、無いパスも「無い」と言い切らない。 */
+  pathsTruncated: boolean;
   scan: RepoMapScan;
   usage: RepoMapUsageView;
 }
 
-/** 下見で出すファイルの一覧の上限。 */
+/** 下見で出すファイルの一覧（選ぶ用）の上限。 */
 export const INSPECT_FILE_LIST_MAX = 300;
+/** 下見で出すパスの一覧（照合用）の上限。 */
+export const INSPECT_PATH_LIST_MAX = 5_000;
 
 export interface InspectFileView {
   path: string;

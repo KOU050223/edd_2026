@@ -295,6 +295,8 @@ function RepoMapStartPage() {
           <HintFilePicker
             options={inspected.files ?? []}
             truncated={inspected.filesTruncated ?? false}
+            knownPaths={inspected.paths}
+            knownTruncated={inspected.pathsTruncated ?? false}
             text={filesText}
             onChange={setFilesText}
             disabled={locked}
