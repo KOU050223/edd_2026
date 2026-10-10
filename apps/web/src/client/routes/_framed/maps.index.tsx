@@ -213,6 +213,14 @@ function MapList() {
           （テーマや目標から、ノードと「理解すること」をまとめて作ります）
         </span>
       </p>
+      <p>
+        <Link to="/maps/repo" className="link">
+          GitHub のリポジトリからマップを作る
+        </Link>
+        <span className="muted">
+          （公開リポジトリの文書・コード・Issue から、そのプロジェクトの用語を学ぶマップを作ります）
+        </span>
+      </p>
       <CreateMapForm full={maps.length >= MAP_LIMITS.maps} />
       {maps.length === 0 ? (
         <p className="hint">まだマップがありません。</p>

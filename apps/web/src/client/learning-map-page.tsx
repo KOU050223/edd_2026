@@ -1,4 +1,5 @@
 import { HistoryMapPanel } from "./history-map-panel.js";
+import { RepoMapSourcesPanel, type RepoMapSourcesState } from "./repo-map-sources.js";
 /**
  * 学習マップ1件の画面の中身（#242・#244・#302）。`/maps/<ID>`（手元のマップ・他人の共有マップ）と
  * `/shared/<ID>`（持ち主が見る自分の共有の版）が使う。
@@ -332,6 +333,7 @@ export function LearningMapPage({
   loaded,
   profile,
   overrides,
+  sources,
   selectedId,
   shareKey: key,
   onSelectInMap,
@@ -340,6 +342,8 @@ export function LearningMapPage({
   loaded: LoadedMap;
   profile: MapProfile;
   overrides: MasteryOverrides;
+  /** リポジトリから作ったマップの根拠（#249）。自分のマップだけが持つ。 */
+  sources?: RepoMapSourcesState;
   selectedId: string | undefined;
   /** 「リンクだけ」の共有を持ち主以外が開いたときの鍵（#244 の U1）。取り込みに使う。 */
   shareKey: string | undefined;
@@ -510,6 +514,13 @@ export function LearningMapPage({
             />
           )}
         </div>
+      )}
+      {sources !== undefined && sources.kind !== "none" && (
+        <RepoMapSourcesPanel
+          state={sources}
+          selectedId={selected?.conceptId}
+          labelOf={(conceptId) => definitionOf.get(conceptId)?.label ?? conceptId}
+        />
       )}
     </>
   );

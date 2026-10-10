@@ -5,12 +5,14 @@ import { parseConceptSearch, type MapProfile } from "../../learning-map-view.js"
 import { fetchLearningMap, findOwnMapOf } from "../../learning-maps.js";
 import { fetchSharedMap } from "../../map-sharing.js";
 import type { MasteryOverrides } from "../../overrides.js";
+import type { RepoMapSourcesState } from "../../repo-map-sources.js";
+import { fetchRepoMapSources } from "../../repo-maps.js";
 import { takeLoginRetry } from "../../session.js";
 
 /** `/maps/<ID>`。ノードを選ぶと `?concept=` を変える。 */
 function MapRoutePage() {
   const { mapId } = Route.useParams();
-  const { loaded, profile, overrides } = Route.useLoaderData();
+  const { loaded, profile, overrides, sources } = Route.useLoaderData();
   const { concept, key } = Route.useSearch();
   const navigate = useNavigate();
   return (
@@ -19,6 +21,7 @@ function MapRoutePage() {
       loaded={loaded}
       profile={profile}
       overrides={overrides}
+      sources={sources}
       selectedId={concept}
       shareKey={key}
       // 「リンクだけ」の鍵は選び直しても持ち続ける（外すと読み直しで 404 になる）。
@@ -64,6 +67,23 @@ async function loadMap(
   return { kind: "shared", map: await fetchSharedMap(mapId, search.key, fetch, retry) };
 }
 
+/**
+ * リポジトリから作ったマップの根拠（#249）。自分のマップだけが持つ。読めなくても、マップの閲覧は止めない
+ * （失敗は画面に出す。「根拠が無い」のと区別する）。
+ */
+async function loadSources(mapId: string, kind: LoadedMap["kind"]): Promise<RepoMapSourcesState> {
+  if (kind !== "own") return { kind: "none" };
+  try {
+    const sources = await fetchRepoMapSources(mapId, fetch);
+    return sources === null ? { kind: "none" } : { kind: "ok", sources };
+  } catch (error: unknown) {
+    // ログイン切れは、マップ自体の読み込みと同じ扱い（loader の失敗にする）。
+    if (error instanceof ApiError && error.kind === "session_expired") throw error;
+    console.error("failed to load repo map sources", error);
+    return { kind: "failed" };
+  }
+}
+
 export const Route = createFileRoute("/_framed/maps/$mapId")({
   // `key` は「リンクだけ」の共有の鍵（#244 の決定 U1）。
   validateSearch: (search: Record<string, unknown>): { concept?: string; key?: string } => ({
@@ -84,7 +104,8 @@ export const Route = createFileRoute("/_framed/maps/$mapId")({
       requestJson<MapProfile>("/api/v1/learning-profile", fetch, retry),
       requestJson<MasteryOverrides>("/api/v1/mastery-overrides", fetch, retry),
     ]);
-    return { loaded, profile, overrides };
+    const sources = await loadSources(params.mapId, loaded.kind);
+    return { loaded, profile, overrides, sources };
   },
   component: MapRoutePage,
 });
