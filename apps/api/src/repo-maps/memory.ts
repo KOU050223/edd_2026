@@ -20,6 +20,19 @@ export class InMemoryRepoMapDraftRepository implements RepoMapDraftRepository {
   /** 退会中の利用者。`reserveDraft` と `create` が例外にする。 */
   private readonly deleting = new Set<string>();
 
+  /**
+   * `users` の行の集合を渡すと、D1 の外部キーと同じく、行の無い利用者の書き込みを拒否する。
+   * 渡さなければ確かめない（行の用意を気にしないテスト向け）。
+   */
+  constructor(private readonly users?: ReadonlyMap<string, unknown>) {}
+
+  private requireUser(userId: string): Error | null {
+    if (this.users !== undefined && !this.users.has(userId)) {
+      return new Error("FOREIGN KEY constraint failed: users row is missing");
+    }
+    return null;
+  }
+
   /** テスト用: 退会の最中にする。 */
   markDeleting(userId: string): void {
     this.deleting.add(userId);
@@ -39,6 +52,8 @@ export class InMemoryRepoMapDraftRepository implements RepoMapDraftRepository {
     if (this.deleting.has(params.userId)) {
       return Promise.reject(new Error("user deletion is in progress"));
     }
+    const missing = this.requireUser(params.userId);
+    if (missing !== null) return Promise.reject(missing);
     const current = this.read(params);
     if (current.monthlyDrafts + 1 > params.limit) {
       return Promise.resolve({ reserved: false, usage: current });
@@ -70,6 +85,8 @@ export class InMemoryRepoMapDraftRepository implements RepoMapDraftRepository {
     if (this.deleting.has(draft.userId)) {
       return Promise.reject(new Error("user deletion is in progress"));
     }
+    const missing = this.requireUser(draft.userId);
+    if (missing !== null) return Promise.reject(missing);
     this.drafts.set(draft.id, structuredClone(draft));
     return Promise.resolve();
   }

@@ -75,6 +75,8 @@ export interface RepoMapDeps {
   /** 「今後表示しない」の記録を読む。 */
   consents: { get(userId: string): Promise<ConsentRecord | null> };
   plans: { get(userId: string): Promise<Plan> };
+  /** `repo_map_usage`・`repo_map_drafts` は `users(id)` を参照する。書く前に行を用意する。 */
+  identity: { ensureUser(params: { userId: string; nowMs: number }): Promise<void> };
   newId: () => string;
   now: () => Date;
 }
@@ -100,6 +102,13 @@ function targetRefusal(error: TargetError): RepoMapRefusal {
     return new RepoMapRefusal("invalid_target", `${error.field} は ${error.max} 個までです`, {
       field: error.field,
     });
+  }
+  if (error.code === "too_large") {
+    return new RepoMapRefusal(
+      "invalid_target",
+      `大きすぎて読めないファイルです（${error.size} バイト、上限 ${error.max}）: ${error.path}`,
+      { field: error.field, path: error.path, size: error.size, max: error.max },
+    );
   }
   if (error.code === "unknown_path") {
     return new RepoMapRefusal("invalid_target", `リポジトリに無いパスです: ${error.path}`, {
@@ -188,6 +197,27 @@ function selectFiles(kept: KeptFile[]): KeptFile[] {
   ];
 }
 
+/** 確認画面に出す、選べるフォルダの数の上限。 */
+const MAX_WORKSPACE_FOLDERS = 100;
+
+/**
+ * 保存する材料を、直列化したバイト数で上限に収める。
+ * 並びの後ろ（優先度の低い、指定されていないファイル）から外す。指定されたファイルは外さない。
+ */
+function fitFiles(state: FetchedState): FetchedState {
+  const encoder = new TextEncoder();
+  const size = (value: unknown) => encoder.encode(JSON.stringify(value)).length;
+  let total = size(state);
+  const files = [...state.files];
+  for (let i = files.length - 1; i >= 0 && total > MAX_STATE_BYTES; i -= 1) {
+    const file = files[i];
+    if (file === undefined || file.pinned) continue;
+    total -= size(file) + 1;
+    files.splice(i, 1);
+  }
+  return { ...state, files };
+}
+
 function buildState(
   source: Source,
   folders: readonly string[],
@@ -206,7 +236,7 @@ function buildState(
     scan: scanOf(analysis),
     files: selectFiles(analysis.kept),
     listing: compressListing(analysis),
-    monorepo: detectMonorepo(source.entries),
+    monorepo: detectMonorepo(source.entries)?.slice(0, MAX_WORKSPACE_FOLDERS) ?? null,
     issues,
     pinnedIssues,
   };
@@ -306,16 +336,16 @@ export async function createDraft(
   const dayKey = utcDayKey(now);
   const plan = await deps.plans.get(userId);
   const limit = REPO_MAP_LIMITS[plan].monthlyDrafts;
-  const quotaRefusal = (usage: RepoMapUsage) =>
+  const quotaRefusal = (usage: RepoMapUsage, at: Date) =>
     new RepoMapRefusal("quota_exceeded", `今月に作れるマップの数（${limit}）に達しました。`, {
       limit,
       used: usage.monthlyDrafts,
-      resetsAt: nextUtcMonth(now).toISOString(),
+      resetsAt: nextUtcMonth(at).toISOString(),
     });
 
   // 枠が尽きているなら、GitHub を呼ぶ前に断る。確保そのものは取得のあとで 1 文で行う。
   const before = await deps.drafts.usage({ userId, monthKey, dayKey });
-  if (before.monthlyDrafts >= limit) throw quotaRefusal(before);
+  if (before.monthlyDrafts >= limit) throw quotaRefusal(before, now);
 
   const source = await fetchSource(deps.github, ref);
   const targetError = validateTargets(source.entries, {
@@ -336,17 +366,28 @@ export async function createDraft(
   }
   const issues = await deps.github.listIssues(source.ref, ISSUE_TITLE_COUNT);
 
-  const state = buildState(source, input.folders, input.files, issues, pinnedIssues);
+  const state = fitFiles(buildState(source, input.folders, input.files, issues, pinnedIssues));
   const stageState = JSON.stringify(state);
   const stateBytes = new TextEncoder().encode(stageState).length;
   if (stateBytes > MAX_STATE_BYTES) {
-    // 上限つきで選んでいるので、ここに来るのは規則の破れ。黙って切らず失敗にする。
+    // 指定されたファイルと一覧だけで上限を超える。ありえない大きさなので、黙って切らず失敗にする。
     throw new Error(`repo map draft state is too large (${stateBytes} bytes)`);
   }
 
-  const updatedAt = now.toISOString();
-  const reserved = await deps.drafts.reserveDraft({ userId, monthKey, dayKey, updatedAt, limit });
-  if (!reserved.reserved) throw quotaRefusal(reserved.usage);
+  // GitHub の呼び出しのあいだに UTC の月・日が変わりうる。枠の月・作成時刻・期限は、確保の直前の時刻で決める。
+  const reservedAt = deps.now();
+  const reservedMonthKey = utcMonthKey(reservedAt);
+  const reservedDayKey = utcDayKey(reservedAt);
+  const updatedAt = reservedAt.toISOString();
+  await deps.identity.ensureUser({ userId, nowMs: reservedAt.getTime() });
+  const reserved = await deps.drafts.reserveDraft({
+    userId,
+    monthKey: reservedMonthKey,
+    dayKey: reservedDayKey,
+    updatedAt,
+    limit,
+  });
+  if (!reserved.reserved) throw quotaRefusal(reserved.usage, reservedAt);
 
   const draft: StoredRepoMapDraft = {
     id: deps.newId(),
@@ -363,14 +404,14 @@ export async function createDraft(
     stageStateVersion: STATE_VERSION,
     createdAt: updatedAt,
     updatedAt,
-    expiresAt: new Date(now.getTime() + REPO_MAP_DRAFT_TTL_DAYS * 86_400_000).toISOString(),
+    expiresAt: new Date(reservedAt.getTime() + REPO_MAP_DRAFT_TTL_DAYS * 86_400_000).toISOString(),
   };
   try {
     await deps.drafts.create(draft);
   } catch (error) {
     // 保存できなかったのに枠だけ消えるのを防ぐ。戻せなくても、元の失敗を隠さない。
     await deps.drafts
-      .releaseDraft({ userId, monthKey, updatedAt })
+      .releaseDraft({ userId, monthKey: reservedMonthKey, updatedAt })
       .catch((releaseError: unknown) => {
         console.error("failed to release repo map draft quota", { userId, releaseError });
       });

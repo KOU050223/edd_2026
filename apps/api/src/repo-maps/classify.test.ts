@@ -206,6 +206,18 @@ describe("validateTargets", () => {
     });
   });
 
+  test("上限を超える大きさの指定ファイルは断る（黙って外さない）", () => {
+    const big = [blob("docs/big.md", MAX_FILE_BYTES + 1), blob("docs/ok.md", MAX_FILE_BYTES)];
+    expect(validateTargets(big, { ...ok, files: ["docs/big.md"] })).toEqual({
+      code: "too_large",
+      field: "files",
+      path: "docs/big.md",
+      size: MAX_FILE_BYTES + 1,
+      max: MAX_FILE_BYTES,
+    });
+    expect(validateTargets(big, { ...ok, files: ["docs/ok.md"] })).toBeNull();
+  });
+
   test("ファイル・Issue は 5 個まで。Issue 番号は正の整数", () => {
     const six = ["a", "b", "c", "d", "e", "f"];
     expect(validateTargets(entries, { ...ok, files: six })).toEqual({

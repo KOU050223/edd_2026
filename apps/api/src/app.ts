@@ -426,6 +426,7 @@ app.route(
     drafts: new D1RepoMapDraftRepository(env.DB),
     consents: new D1MapGenerationConsentRepository(env.DB),
     plans: new D1UserPlanRepository(env.DB),
+    identity: new D1IdentityRepository(env.DB),
     newId: () => `r${randomKey()}`,
     now: () => new Date(),
   })),

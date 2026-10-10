@@ -13,6 +13,7 @@ import {
 } from "../contract/repo-maps.js";
 import {
   createInMemoryRepositoryStore,
+  InMemoryIdentityRepository,
   InMemoryMapGenerationConsentRepository,
   type InMemoryRepositoryStore,
 } from "../repository/memory.js";
@@ -115,6 +116,7 @@ let store: InMemoryRepositoryStore;
 let drafts: InMemoryRepoMapDraftRepository;
 let consents: InMemoryMapGenerationConsentRepository;
 let plans: InMemoryUserPlanRepository;
+let identity: InMemoryIdentityRepository;
 let github: FakeGitHub;
 let seq: number;
 let now: Date;
@@ -130,6 +132,7 @@ function build() {
       drafts,
       consents,
       plans,
+      identity,
       newId: () => `r${String((seq += 1)).padStart(8, "0")}`,
       now: () => now,
     })),
@@ -138,7 +141,9 @@ function build() {
 
 beforeEach(() => {
   store = createInMemoryRepositoryStore();
-  drafts = new InMemoryRepoMapDraftRepository();
+  // users の行が無い利用者の書き込みを、D1 の外部キーと同じく拒否する。
+  drafts = new InMemoryRepoMapDraftRepository(store.users);
+  identity = new InMemoryIdentityRepository(store);
   consents = new InMemoryMapGenerationConsentRepository(store);
   plans = new InMemoryUserPlanRepository();
   github = fakeGitHub();
@@ -239,6 +244,97 @@ describe("POST /v1/repo-map-drafts", () => {
     // 対象のフォルダの外の指定ファイルも材料に入る。AI に見せる一覧は圧縮したもの。
     expect(body.draft.listing).toContain("## ディレクトリ");
     expect(body.draft.scan.kept).toEqual({ code: 2, other: 1 });
+  });
+
+  it("初めての利用者（users の行がまだ無い）でも作れ、行を用意する", async () => {
+    expect(store.users.has("user-a")).toBe(false);
+    const res = await call("POST", "/v1/repo-map-drafts", { url: URL_IN });
+    expect(res.status).toBe(201);
+    expect(store.users.has("user-a")).toBe(true);
+  });
+
+  it("GitHub の失敗では users の行も作らない", async () => {
+    github = fakeGitHub({ fail: new GitHubError("not-found", "x") });
+    build();
+    await call("POST", "/v1/repo-map-drafts", { url: URL_IN });
+    expect(store.users.has("user-a")).toBe(false);
+  });
+
+  it("GitHub の呼び出しのあいだに月が変わったら、新しい月の枠・時刻で作る", async () => {
+    const times = [new Date("2026-10-31T23:59:59.000Z"), new Date("2026-11-01T00:00:03.000Z")];
+    now = times[0]!;
+    // 1 回目（事前の確認）だけ 10 月、そのあとは 11 月を返す。
+    let reads = 0;
+    drafts = new InMemoryRepoMapDraftRepository(store.users);
+    app = new Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>();
+    app.use("/v1/*", stubAuth(TOKENS));
+    app.route(
+      "/v1",
+      createRepoMapsRoute(() => ({
+        github,
+        drafts,
+        consents,
+        plans,
+        identity,
+        newId: () => "r00000001",
+        now: () => times[Math.min(reads++ > 0 ? 1 : 0, 1)]!,
+      })),
+    );
+    const res = await call("POST", "/v1/repo-map-drafts", { url: URL_IN });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as CreateRepoMapDraftResponse;
+    expect(body.draft.createdAt).toBe("2026-11-01T00:00:03.000Z");
+    expect(
+      (await drafts.usage({ userId: "user-a", monthKey: "2026-11", dayKey: "2026-11-01" }))
+        .monthlyDrafts,
+    ).toBe(1);
+    expect(
+      (await drafts.usage({ userId: "user-a", monthKey: "2026-10", dayKey: "2026-10-31" }))
+        .monthlyDrafts,
+    ).toBe(0);
+  });
+
+  it("上限を超える大きさの指定ファイルは、作る前に断り、枠を消費しない", async () => {
+    github = fakeGitHub({ tree: [...TREE, blob("docs/architecture.md", 250_000)] });
+    build();
+    const res = await call("POST", "/v1/repo-map-drafts", {
+      url: URL_IN,
+      files: ["docs/architecture.md"],
+    });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({
+      error: "invalid_target",
+      field: "files",
+      path: "docs/architecture.md",
+    });
+    const usage = await drafts.usage({
+      userId: "user-a",
+      monthKey: "2026-10",
+      dayKey: "2026-10-11",
+    });
+    expect(usage.monthlyDrafts).toBe(0);
+  });
+
+  it("パスが長くても、指定ファイルを残して材料を上限に収め、作れる", async () => {
+    const big: TreeEntry[] = [dir("src")];
+    const long = (kind: string, i: number) => `${kind}/${"p".repeat(280)}_${i}`;
+    for (let i = 0; i < 400; i += 1) {
+      big.push(blob(`${long("src/domain", i)}.ts`, 2000 + i));
+      big.push(blob(`${long("docs/guide", i)}.md`, 3000 + i));
+    }
+    const pinned = `${long("src/domain", 399)}.ts`;
+    github = fakeGitHub({ tree: big });
+    build();
+    const res = await call("POST", "/v1/repo-map-drafts", { url: URL_IN, files: [pinned] });
+    expect(res.status).toBe(201);
+    const stored = await drafts.get("user-a", "r00000001");
+    const state = JSON.parse(stored!.stageState) as { files: { path: string; pinned: boolean }[] };
+    expect(new TextEncoder().encode(stored!.stageState).length).toBeLessThanOrEqual(
+      MAX_STATE_BYTES,
+    );
+    expect(state.files.some((f) => f.path === pinned && f.pinned)).toBe(true);
+    // 並びの後ろ（優先度の低いコード）から外れている。
+    expect(state.files.length).toBeLessThan(301);
   });
 
   it("同意が無ければ、GitHub を呼ばず枠も数えずに 403", async () => {
