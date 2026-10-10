@@ -2,6 +2,8 @@ import { createFileRoute, Link, useNavigate, useRouter } from "@tanstack/react-r
 import { useRef, useState } from "react";
 import { createSubmitGuard } from "../../api.js";
 import { fetchGenerationConsent } from "../../check.js";
+import { WizardSteps } from "../../repo-map-board.js";
+import { ScopePanel } from "../../repo-map-scope.js";
 import { fetchLearningMaps, MAP_LIMITS } from "../../learning-maps.js";
 import { ConsentPrompt } from "../../map-consent.js";
 import { MAP_GENERATION_CONSENT_PATH } from "../../map-generation.js";
@@ -146,6 +148,7 @@ function RepoMapStartPage() {
 
   return (
     <>
+      <WizardSteps current={1} />
       <p className="map-head">
         <Link to="/maps" className="link">
           ← 自分のマップ
@@ -259,7 +262,7 @@ function RepoMapStartPage() {
           )}
 
           {inspected.monorepo !== null ? (
-            <fieldset disabled={locked}>
+            <fieldset disabled={locked} className="scope-chips">
               <legend>対象のフォルダ</legend>
               <p className="muted">{MONOREPO_NOTICE}</p>
               {inspected.monorepo.map((folder) => (
@@ -279,7 +282,7 @@ function RepoMapStartPage() {
             inspected.folders.length > 0 && (
               <details>
                 <summary>対象のフォルダを絞る（任意）</summary>
-                <fieldset disabled={locked}>
+                <fieldset disabled={locked} className="scope-chips">
                   {inspected.folders.slice(0, REPO_MAP_LIMITS.folders).map((path) => (
                     <label key={path} className="check-consent-remember">
                       <input
@@ -294,6 +297,8 @@ function RepoMapStartPage() {
               </details>
             )
           )}
+
+          <ScopePanel inspected={inspected} folders={folders} hintFiles={hintFiles} />
 
           <HintFilePicker
             options={inspected.files ?? []}

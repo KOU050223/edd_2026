@@ -14,6 +14,7 @@ import {
   INSPECT_FILE_LIST_MAX,
   INSPECT_PATH_LIST_MAX,
   type RepoMapNodeKind,
+  type InspectFolderStat,
   type InspectRepoResponse,
   type RepoMapDraftView,
   type RepoMapMaterialView,
@@ -332,6 +333,7 @@ export async function inspectRepo(
     folders: topFolders(source.entries),
     ...inspectFiles(analysis),
     ...inspectPaths(source.entries),
+    folderStats: inspectFolderStats(analysis, source.entries),
     scan: scanOf(analysis),
     usage: usageView(usage, plan),
   };
@@ -346,6 +348,26 @@ function inspectPaths(entries: TreeEntry[]): Pick<InspectRepoResponse, "paths" |
     paths: all.slice(0, INSPECT_PATH_LIST_MAX),
     pathsTruncated: all.length > INSPECT_PATH_LIST_MAX,
   };
+}
+
+/** 対象にできるフォルダごとに、読める材料を数える（用語集は文書に数える）。 */
+function inspectFolderStats(
+  analysis: Analysis,
+  entries: TreeEntry[],
+): InspectRepoResponse["folderStats"] {
+  const folders = [
+    ...new Set([...(detectMonorepo(entries) ?? []).map((f) => f.path), ...topFolders(entries)]),
+  ];
+  const stats: InspectRepoResponse["folderStats"] = {};
+  for (const folder of folders) stats[folder] = { doc: 0, code: 0, schema: 0 };
+  for (const file of analysis.kept) {
+    if (file.cls === "other") continue;
+    const key = file.cls === "glossary" ? "doc" : file.cls;
+    for (const folder of folders) {
+      if (file.path.startsWith(`${folder}/`)) (stats[folder] as InspectFolderStat)[key] += 1;
+    }
+  }
+  return stats;
 }
 
 const INSPECT_KIND_ORDER = { glossary: 0, doc: 1, schema: 2, code: 3 } as const;

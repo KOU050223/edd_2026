@@ -77,6 +77,12 @@ export interface RepoMapScan {
 }
 
 /** 下見が返す、参考ファイルとして選べるファイル。 */
+export interface RepoMapFolderStat {
+  doc: number;
+  code: number;
+  schema: number;
+}
+
 export interface RepoMapFileOption {
   path: string;
   kind: "glossary" | "doc" | "schema" | "code";
@@ -92,6 +98,8 @@ export interface InspectRepoResult {
   /** 指定できるパスの全体（照合用）。古い API では無い。 */
   paths?: string[];
   pathsTruncated?: boolean;
+  /** 対象にできるフォルダごとの、読める材料の件数（古い API では無い）。 */
+  folderStats?: Record<string, RepoMapFolderStat>;
   scan: RepoMapScan;
   usage: RepoMapUsage;
 }
@@ -785,4 +793,136 @@ export function nodeKindsOf(
     if (kind !== null) kinds.set(node.conceptId, kind);
   }
   return kinds;
+}
+
+/** 作成の手順（左上に出す）。`current` は 1 始まり。5 は「全部済み」。 */
+export const WIZARD_STEP_LABELS = [
+  "リポジトリを選ぶ",
+  "材料を読む",
+  "用語を選ぶ",
+  "マップができる",
+] as const;
+
+export interface WizardStep {
+  label: string;
+  state: "done" | "current" | "todo";
+}
+
+export function wizardSteps(current: 1 | 2 | 3 | 4 | 5): WizardStep[] {
+  return WIZARD_STEP_LABELS.map((label, index) => ({
+    label,
+    state: index + 1 < current ? "done" : index + 1 === current ? "current" : "todo",
+  }));
+}
+
+/** 下書きの段から、手順のどこにいるか。確定済みは全部済み。 */
+export function wizardStepOf(step: RepoMapNextStep): 2 | 3 | 5 {
+  if (step.kind === "confirmed") return 5;
+  return step.kind === "choose" ? 3 : 2;
+}
+
+export interface KindColumn<T> {
+  /** `null` は「種類なし」の列。 */
+  kind: RepoMapNodeKind | null;
+  items: T[];
+}
+
+/**
+ * 候補を種類ごとの列にする。種類の 5 列は、空でも必ず出す（ドロップ先になる）。
+ * 「種類なし」の列は、中身があるときだけ末尾に出す。列の中は、渡された順のまま。
+ */
+export function groupByKind<T>(
+  items: readonly T[],
+  kindOf: (item: T) => RepoMapNodeKind | null,
+  /** 「種類なし」の列を、空でも出す（ドロップ先にする）。 */
+  alwaysNone = false,
+): KindColumn<T>[] {
+  const columns: KindColumn<T>[] = REPO_MAP_NODE_KINDS.map((kind) => ({ kind, items: [] }));
+  const none: KindColumn<T> = { kind: null, items: [] };
+  for (const item of items) {
+    const kind = kindOf(item);
+    (columns.find((c) => c.kind === kind) ?? none).items.push(item);
+  }
+  return alwaysNone || none.items.length > 0 ? [...columns, none] : columns;
+}
+
+/** 候補の種類。直した種類があればそれ（`null` は種類なしに直した）。 */
+export function effectiveKind(
+  candidate: Pick<RepoMapCandidate, "kind">,
+  edit: { kind?: RepoMapNodeKind | null } | undefined,
+): RepoMapNodeKind | null {
+  return edit?.kind !== undefined ? edit.kind : (candidate.kind ?? null);
+}
+
+/** ドラッグで運んでいる候補の ID を、dataTransfer に載せる／取り出すときの型名。 */
+export const CANDIDATE_DRAG_TYPE = "application/x-repo-map-candidate";
+
+export interface ScopeRow {
+  path: string;
+  shared: boolean;
+  /** このフォルダを読むか（何も選ばなければ全体を読むので、全部 true）。 */
+  reading: boolean;
+  /** 件数。古い API（`folderStats` なし）では `null`。 */
+  stat: RepoMapFolderStat | null;
+  /** このフォルダの中の、参考ファイルの数。 */
+  pinned: number;
+}
+
+export interface ScopeSummary {
+  rows: ScopeRow[];
+  /** 何も選んでいない（全体を読む）。 */
+  readsAll: boolean;
+  /** 読む材料の合計。数えられないとき（古い API）は `null`。 */
+  totals: RepoMapFolderStat | null;
+  /** 選んだフォルダの外にある参考ファイル（それでも読む）。 */
+  outsidePinned: number;
+}
+
+/**
+ * 「読む範囲」の表示を作る。フォルダの選び方を変えるたびに、何をどれだけ読むかがその場で変わる。
+ * 入れ子のフォルダを両方選んでも、合計は二重に数えない。
+ */
+export function scopeSummary(
+  inspected: Pick<InspectRepoResult, "monorepo" | "folders" | "folderStats" | "scan">,
+  selected: ReadonlySet<string>,
+  hintFiles: readonly string[],
+  maxFolders: number = REPO_MAP_LIMITS.folders,
+): ScopeSummary {
+  const readsAll = selected.size === 0;
+  const candidates: { path: string; shared: boolean }[] =
+    inspected.monorepo ??
+    inspected.folders.slice(0, maxFolders).map((path) => ({ path, shared: false }));
+  const inside = (file: string, folder: string) => file.startsWith(`${folder}/`);
+  const rows = candidates.map((c) => ({
+    path: c.path,
+    shared: c.shared,
+    reading: readsAll || selected.has(c.path),
+    stat: inspected.folderStats?.[c.path] ?? null,
+    pinned: hintFiles.filter((f) => inside(f, c.path)).length,
+  }));
+  let totals: RepoMapFolderStat | null = null;
+  if (readsAll) {
+    const kept = inspected.scan.kept;
+    totals = {
+      doc: (kept.doc ?? 0) + (kept.glossary ?? 0),
+      code: kept.code ?? 0,
+      schema: kept.schema ?? 0,
+    };
+  } else if (inspected.folderStats !== undefined) {
+    const chosen = [...selected].filter(
+      (p) => !selected.has(p) || ![...selected].some((o) => o !== p && inside(p, o)),
+    );
+    totals = { doc: 0, code: 0, schema: 0 };
+    for (const path of chosen) {
+      const stat = inspected.folderStats[path];
+      if (stat === undefined) continue;
+      totals.doc += stat.doc;
+      totals.code += stat.code;
+      totals.schema += stat.schema;
+    }
+  }
+  const outsidePinned = readsAll
+    ? 0
+    : hintFiles.filter((f) => ![...selected].some((folder) => inside(f, folder))).length;
+  return { rows, readsAll, totals, outsidePinned };
 }

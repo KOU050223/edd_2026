@@ -202,6 +202,18 @@ describe("POST /v1/repo-maps:inspect", () => {
     // 大きすぎる文書は、自動では読めても、指定すると断られる。選ぶ一覧にも照合用にも入れない。
     expect(body.files.map((f) => f.path)).not.toContain("docs/huge.md");
     expect(body.paths).not.toContain("docs/huge.md");
+    // フォルダごとの件数は、選ぶ一覧の上限とは別に、読める材料を数える。
+    const stat = (folder: string) => body.folderStats[folder];
+    expect(Object.keys(body.folderStats)).toEqual(expect.arrayContaining(["apps/api", "apps/web"]));
+    const inApi = body.files.filter((f) => f.path.startsWith("apps/api/"));
+    const countOf = (k: "doc" | "code" | "schema") =>
+      inApi.filter((f) => (k === "doc" ? ["doc", "glossary"].includes(f.kind) : f.kind === k))
+        .length;
+    expect(stat("apps/api")).toEqual({
+      doc: countOf("doc"),
+      code: countOf("code"),
+      schema: countOf("schema"),
+    });
     for (const file of body.files) {
       expect(["glossary", "doc", "schema", "code"]).toContain(file.kind);
     }
