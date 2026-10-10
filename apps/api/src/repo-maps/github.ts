@@ -59,8 +59,6 @@ export type IssueDetail = IssueSummary & { body: string; isPullRequest: boolean 
 
 export type BlobText = {
   text: string;
-  /** 全体のバイト数。 */
-  size: number;
   /** 上限で先頭だけ読んだ。 */
   truncated: boolean;
 };
@@ -112,7 +110,8 @@ export function createGitHubClient(options: GitHubClientOptions) {
   const fetchFn = options.fetchFn ?? fetch;
   const timeoutMs = options.timeoutMs ?? GITHUB_TIMEOUT_MS;
 
-  async function request(path: string): Promise<unknown> {
+  /** 状態コードの検査までを行い、本文は読まずに返す。 */
+  async function send(path: string, accept: string): Promise<Response> {
     let res: Response;
     try {
       res = await fetchFn(`${API_ORIGIN}${path}`, {
@@ -120,7 +119,7 @@ export function createGitHubClient(options: GitHubClientOptions) {
         redirect: "manual",
         signal: AbortSignal.timeout(timeoutMs),
         headers: {
-          accept: "application/vnd.github+json",
+          accept,
           "x-github-api-version": "2022-11-28",
           "user-agent": "gakushu-sochi",
           ...(options.token ? { authorization: `Bearer ${options.token}` } : {}),
@@ -151,6 +150,11 @@ export function createGitHubClient(options: GitHubClientOptions) {
     if (!res.ok) {
       throw new GitHubError("unavailable", `GitHub がエラーを返しました（${res.status}）`);
     }
+    return res;
+  }
+
+  async function request(path: string): Promise<unknown> {
+    const res = await send(path, "application/vnd.github+json");
     try {
       return await res.json();
     } catch {
@@ -216,31 +220,53 @@ export function createGitHubClient(options: GitHubClientOptions) {
       return entries;
     },
 
-    /** ファイルの先頭 `maxBytes` バイトを文字列で返す。バイナリ（NUL を含む）は失敗にする。 */
+    /**
+     * ファイルの先頭 `maxBytes` バイトを文字列で返す。バイナリ（NUL を含む）は失敗にする。
+     *
+     * 生のバイト列（raw メディアタイプ）を流れで読み、上限を超えたら打ち切る。JSON（base64）で
+     * 受けると全体をメモリに載せるため、大きな文書で Worker のメモリを使い切る（PR #311 のレビュー）。
+     */
     async getBlobText(ref: RepoRef, blobSha: string, maxBytes: number): Promise<BlobText> {
-      const body = await request(`/repos/${ref.owner}/${ref.name}/git/blobs/${blobSha}`);
-      if (
-        !isObject(body) ||
-        body.encoding !== "base64" ||
-        typeof body.content !== "string" ||
-        typeof body.size !== "number"
-      ) {
-        throw unreadable("blob");
-      }
-      let bytes: Uint8Array;
+      const res = await send(
+        `/repos/${ref.owner}/${ref.name}/git/blobs/${blobSha}`,
+        "application/vnd.github.raw+json",
+      );
+      if (res.body === null) throw unreadable("blob");
+      const reader = res.body.getReader();
+      const chunks: Uint8Array[] = [];
+      let total = 0;
+      let truncated = false;
       try {
-        const binary = atob(body.content.replace(/\s/g, ""));
-        bytes = Uint8Array.from(binary, (ch) => ch.charCodeAt(0));
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          const room = maxBytes - total;
+          if (value.length > room) {
+            if (room > 0) chunks.push(value.subarray(0, room));
+            total += Math.max(room, 0);
+            truncated = true;
+            break;
+          }
+          chunks.push(value);
+          total += value.length;
+        }
       } catch {
-        throw unreadable("blob content");
+        throw new GitHubError("unreadable", "GitHub の応答を読めませんでした（blob の本文）");
+      } finally {
+        // 残りは読まない。接続を閉じる。
+        await reader.cancel().catch(() => undefined);
       }
-      const truncated = bytes.length > maxBytes;
-      const head = truncated ? bytes.subarray(0, maxBytes) : bytes;
+      const head = new Uint8Array(total);
+      let offset = 0;
+      for (const c of chunks) {
+        head.set(c, offset);
+        offset += c.length;
+      }
       if (head.includes(0)) throw unreadable("binary file");
       let text = new TextDecoder("utf-8").decode(head);
       // 先頭で切ると多バイト文字の途中で終わりうる。壊れた末尾 1 文字だけ落とす。
       if (truncated && text.endsWith("�")) text = text.slice(0, -1);
-      return { text, size: body.size, truncated };
+      return { text, truncated };
     },
 
     /** 更新の新しい順。PR は除く（Issues API は PR も返す）。open と closed の両方。 */

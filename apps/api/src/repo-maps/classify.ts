@@ -188,6 +188,27 @@ const byteLength = (s: string) => encoder.encode(s).length;
 export function compressListing(analysis: Analysis, budget: number = LISTING_BUDGET_BYTES): string {
   const { kept, dropped } = analysis;
   const lines: string[] = [];
+  let used = 0;
+  /** 予算に収まるときだけ 1 行足す。`reserve` は、この行のあとに必ず残しておくバイト数。 */
+  const tryAdd = (line: string, reserve = 0): boolean => {
+    const cost = byteLength(line) + (lines.length > 0 ? 1 : 0);
+    if (used + cost + reserve > budget) return false;
+    lines.push(line);
+    used += cost;
+    return true;
+  };
+  /** 要素を区切りで連ねた 1 行を、収まる分だけ作る（先頭の `head` は必ず含める）。 */
+  const joinWithin = (head: string, parts: string[], sep: string): string | null => {
+    const room = budget - used - (lines.length > 0 ? 1 : 0);
+    let line = head;
+    if (byteLength(line) > room) return null;
+    for (const p of parts) {
+      const next = line === head ? head + p : line + sep + p;
+      if (byteLength(next) > room) break;
+      line = next;
+    }
+    return line;
+  };
 
   const dirCount = new Map<string, number>();
   for (const f of kept) {
@@ -198,36 +219,41 @@ export function compressListing(analysis: Analysis, budget: number = LISTING_BUD
   const dirs = [...dirCount.entries()]
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
     .slice(0, 25);
-  lines.push("## ディレクトリ（深さ2まで・ファイル数）");
-  lines.push(dirs.map(([d, n]) => `${d} (${n})`).join("  "));
+  // 見出しも行も、予算に収まる分だけ。収まらなければ省く（上限を超えるより、情報が減るほうを選ぶ）。
+  if (tryAdd("## ディレクトリ（深さ2まで・ファイル数）")) {
+    const line = joinWithin(
+      "",
+      dirs.map(([d, n]) => `${d} (${n})`),
+      "  ",
+    );
+    if (line !== null && line !== "") tryAdd(line);
+  }
 
   const counts = new Map<FileClass, number>();
   for (const f of kept) counts.set(f.cls, (counts.get(f.cls) ?? 0) + 1);
   const droppedEntries = Object.entries(dropped);
-  lines.push("## 分類の件数");
-  lines.push(
-    [...counts.entries()].map(([k, v]) => `${k}:${v}`).join(" ") +
-      (droppedEntries.length > 0
+  if (tryAdd("## 分類の件数")) {
+    const countText = [...counts.entries()].map(([k, v]) => `${k}:${v}`).join(" ");
+    const droppedText =
+      droppedEntries.length > 0
         ? `  捨てた: ${droppedEntries.map(([k, v]) => `${k} ${v}`).join(", ")}`
-        : ""),
-  );
+        : "";
+    // 捨てた件数が収まらなければ、分類の件数だけにする。それも収まらなければ行ごと省く。
+    if (!tryAdd(countText + droppedText)) tryAdd(countText);
+  }
 
-  let used = byteLength(lines.join("\n"));
   const section = (title: string, items: KeptFile[]) => {
     if (items.length === 0) return;
-    const heading = `## ${title}`;
-    if (used + byteLength(heading) + 1 > budget) return;
-    lines.push(heading);
-    used += byteLength(heading) + 1;
+    // 入りきらないときの「ほか N 件」の分を、先に取っておく。
+    const summaryBytes = byteLength(`…ほか ${items.length} 件`) + 1;
+    if (!tryAdd(`## ${title}`, summaryBytes)) return;
     let shown = 0;
-    for (const f of items) {
-      const line = `${f.path} (${f.size}B)`;
-      if (used + byteLength(line) + 1 > budget) break;
-      lines.push(line);
-      used += byteLength(line) + 1;
+    for (const [i, f] of items.entries()) {
+      const isLast = i === items.length - 1;
+      if (!tryAdd(`${f.path} (${f.size}B)`, isLast ? 0 : summaryBytes)) break;
       shown += 1;
     }
-    if (shown < items.length) lines.push(`…ほか ${items.length - shown} 件`);
+    if (shown < items.length) tryAdd(`…ほか ${items.length - shown} 件`);
   };
 
   const byClass = (cls: FileClass) => kept.filter((f) => f.cls === cls);

@@ -131,6 +131,28 @@ describe("compressListing", () => {
     expect(text).toContain("## ディレクトリ");
   });
 
+  test("長いパスや小さな予算でも、どの行も含めて予算を超えない", () => {
+    const longDir = (i: number) => `${"d".repeat(180)}${i}`;
+    const entries: TreeEntry[] = [];
+    for (let i = 0; i < 40; i += 1) entries.push(blob(`${longDir(i)}/models/order.ts`, 500 + i));
+    entries.push(blob("README.md", 300));
+    const analysis = analyzeTree(entries);
+    for (const budget of [0, 10, 60, 200, 1000, 4500]) {
+      const text = compressListing(analysis, budget);
+      expect(new TextEncoder().encode(text).length).toBeLessThanOrEqual(budget);
+    }
+  });
+
+  test("「ほか N 件」の分も予算に含める", () => {
+    const entries: TreeEntry[] = [];
+    for (let i = 0; i < 30; i += 1) entries.push(blob(`src/domain/e${i}.ts`, 1000));
+    const analysis = analyzeTree(entries);
+    for (let budget = 150; budget < 700; budget += 7) {
+      const text = compressListing(analysis, budget);
+      expect(new TextEncoder().encode(text).length).toBeLessThanOrEqual(budget);
+    }
+  });
+
   test("捨てた件数を理由ごとに出す", () => {
     const text = compressListing(analyzeTree([blob("README.md"), blob("a.png"), blob("b.png")]));
     expect(text).toContain("捨てた: binary 2");

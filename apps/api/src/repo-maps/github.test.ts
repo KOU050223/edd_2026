@@ -33,10 +33,6 @@ async function kindOf(promise: Promise<unknown>): Promise<GitHubErrorKind> {
   throw new Error("失敗するはずの呼び出しが成功した");
 }
 
-function b64(text: string): string {
-  return btoa(String.fromCharCode(...new TextEncoder().encode(text)));
-}
-
 describe("リクエスト", () => {
   test("トークンを載せ、リダイレクトを追わず、期限を付ける", async () => {
     const f = fakeFetch(() => json({ default_branch: "main", private: false }));
@@ -145,38 +141,68 @@ describe("ツリー・commit", () => {
 });
 
 describe("ファイルの本文", () => {
-  const blob = (text: string) =>
-    fakeFetch(() =>
-      json({ encoding: "base64", content: b64(text), size: new TextEncoder().encode(text).length }),
-    );
+  const raw = (bytes: Uint8Array) =>
+    fakeFetch(() => new Response(bytes as BodyInit, { status: 200 }));
+  const text = (s: string) => raw(new TextEncoder().encode(s));
 
-  test("上限以内なら全部読む", async () => {
-    const client = createGitHubClient({ token: "t", fetchFn: blob("# 注文\n").fn });
-    await expect(client.getBlobText(ref, "s", 1000)).resolves.toMatchObject({
+  test("生のバイト列を頼み、上限以内なら全部読む", async () => {
+    const f = text("# 注文\n");
+    const client = createGitHubClient({ token: "t", fetchFn: f.fn });
+    await expect(client.getBlobText(ref, "s", 1000)).resolves.toEqual({
       text: "# 注文\n",
+      truncated: false,
+    });
+    expect((f.calls[0]?.init?.headers as Record<string, string>).accept).toBe(
+      "application/vnd.github.raw+json",
+    );
+  });
+
+  test("上限で切り、多バイト文字の途中で終わっても壊れた文字を残さない", async () => {
+    const client = createGitHubClient({ token: "t", fetchFn: text("あいう").fn });
+    // 「あ」は 3 バイト。4 バイトで切ると「あ」+ 壊れた 1 バイト。
+    await expect(client.getBlobText(ref, "s", 4)).resolves.toEqual({ text: "あ", truncated: true });
+  });
+
+  test("上限ちょうどは切り詰めではない", async () => {
+    const client = createGitHubClient({ token: "t", fetchFn: text("abcd").fn });
+    await expect(client.getBlobText(ref, "s", 4)).resolves.toEqual({
+      text: "abcd",
       truncated: false,
     });
   });
 
-  test("上限で切り、多バイト文字の途中で終わっても壊れた文字を残さない", async () => {
-    const client = createGitHubClient({ token: "t", fetchFn: blob("あいう").fn });
-    // 「あ」は 3 バイト。4 バイトで切ると「あ」+ 壊れた 1 バイト。
-    const result = await client.getBlobText(ref, "s", 4);
-    expect(result.text).toBe("あ");
+  test("大きな本文は上限を超えた分を読まずに接続を閉じる", async () => {
+    let pulled = 0;
+    let cancelled = false;
+    const chunk = new Uint8Array(64 * 1024).fill(97);
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulled += 1;
+        controller.enqueue(chunk);
+        if (pulled > 1000) controller.close();
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const f = fakeFetch(() => new Response(body, { status: 200 }));
+    const client = createGitHubClient({ token: "t", fetchFn: f.fn });
+    const result = await client.getBlobText(ref, "s", 4000);
+    expect(result.text).toHaveLength(4000);
     expect(result.truncated).toBe(true);
-    expect(result.size).toBe(9);
+    expect(cancelled).toBe(true);
+    expect(pulled).toBeLessThan(10);
   });
 
   test("バイナリ（NUL を含む）は失敗にする", async () => {
-    const f = fakeFetch(() => json({ encoding: "base64", content: btoa("a\0b"), size: 3 }));
-    const client = createGitHubClient({ token: "t", fetchFn: f.fn });
+    const client = createGitHubClient({ token: "t", fetchFn: raw(Uint8Array.of(97, 0, 98)).fn });
     await expect(kindOf(client.getBlobText(ref, "s", 100))).resolves.toBe("unreadable");
   });
 
-  test("base64 でない・壊れた本文は失敗にする", async () => {
-    const f = fakeFetch(() => json({ encoding: "base64", content: "***", size: 3 }));
+  test("404 などは状態コードの種類で返す", async () => {
+    const f = fakeFetch(() => new Response("", { status: 404 }));
     const client = createGitHubClient({ token: "t", fetchFn: f.fn });
-    await expect(kindOf(client.getBlobText(ref, "s", 100))).resolves.toBe("unreadable");
+    await expect(kindOf(client.getBlobText(ref, "s", 100))).resolves.toBe("not-found");
   });
 });
 
