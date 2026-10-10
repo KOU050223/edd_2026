@@ -38,6 +38,7 @@ interface DraftRow {
   stage_state_version: number;
   failed_stage: DraftStage | null;
   failure_code: string | null;
+  confirmed_map_id: string | null;
   ai_calls: number;
   input_tokens: number;
   output_tokens: number;
@@ -48,6 +49,9 @@ interface DraftRow {
 
 /** 要約の保管を引くときの 1 文あたりの blob SHA の数（D1 の束縛は 100 個まで）。 */
 const SUMMARY_LOOKUP_CHUNK = 50;
+
+/** 読むときの列。INSERT の列（{@link DRAFT_COLUMNS}）に、確定の印を足したもの。 */
+const DRAFT_SELECT_COLUMNS_SUFFIX = ", confirmed_map_id";
 
 const DRAFT_COLUMNS = `id, user_id, repo_owner, repo_name, default_branch, commit_sha,
   target_folders, hint_files, hint_issues, status, stage_state, stage_state_version,
@@ -92,6 +96,7 @@ function toDraft(row: DraftRow): StoredRepoMapDraft {
     stageStateVersion: row.stage_state_version,
     failedStage: row.failed_stage,
     failureCode: row.failure_code,
+    confirmedMapId: row.confirmed_map_id,
     aiCalls: row.ai_calls,
     inputTokens: row.input_tokens,
     outputTokens: row.output_tokens,
@@ -325,6 +330,7 @@ export class D1RepoMapDraftRepository implements RepoMapDraftRepository {
       .prepare(
         `UPDATE repo_map_drafts SET failure_code = ?
          WHERE id = ? AND user_id = ? AND status IN (${marks})
+           AND confirmed_map_id IS NULL
            AND (
              failure_code IS NULL
              OR failure_code NOT LIKE 'claim:%'
@@ -338,6 +344,22 @@ export class D1RepoMapDraftRepository implements RepoMapDraftRepository {
         ...params.statuses,
         params.nowMs - params.leaseMs,
       )
+      .run();
+    return result.meta.changes > 0;
+  }
+
+  async markConfirmed(params: {
+    userId: string;
+    id: string;
+    claim: string;
+    mapId: string;
+  }): Promise<boolean> {
+    const result = await this.db
+      .prepare(
+        `UPDATE repo_map_drafts SET confirmed_map_id = ?
+         WHERE id = ? AND user_id = ? AND failure_code = ?`,
+      )
+      .bind(params.mapId, params.id, params.userId, params.claim)
       .run();
     return result.meta.changes > 0;
   }
@@ -476,7 +498,9 @@ export class D1RepoMapDraftRepository implements RepoMapDraftRepository {
 
   async get(userId: string, id: string): Promise<StoredRepoMapDraft | null> {
     const row = await this.db
-      .prepare(`SELECT ${DRAFT_COLUMNS} FROM repo_map_drafts WHERE id = ? AND user_id = ?`)
+      .prepare(
+        `SELECT ${DRAFT_COLUMNS}${DRAFT_SELECT_COLUMNS_SUFFIX} FROM repo_map_drafts WHERE id = ? AND user_id = ?`,
+      )
       .bind(id, userId)
       .first<DraftRow>();
     return row === null ? null : toDraft(row);
@@ -485,7 +509,7 @@ export class D1RepoMapDraftRepository implements RepoMapDraftRepository {
   async list(userId: string, nowIso: string): Promise<StoredRepoMapDraft[]> {
     const { results } = await this.db
       .prepare(
-        `SELECT ${DRAFT_COLUMNS} FROM repo_map_drafts
+        `SELECT ${DRAFT_COLUMNS}${DRAFT_SELECT_COLUMNS_SUFFIX} FROM repo_map_drafts
          WHERE user_id = ? AND expires_at > ?
          ORDER BY updated_at DESC, id`,
       )

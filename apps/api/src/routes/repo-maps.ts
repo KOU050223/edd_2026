@@ -12,6 +12,8 @@ import { Hono, type Context } from "hono";
 import { HTTPException } from "hono/http-exception";
 import type { AuthVariables } from "../auth/middleware.js";
 import {
+  confirmRepoMapDraftSchema,
+  type ConfirmRepoMapDraftResponse,
   candidatesRepoMapDraftSchema,
   rebuildRepoMapDraftSchema,
   createRepoMapDraftSchema,
@@ -23,6 +25,7 @@ import {
 import { AiStageFailure } from "../repo-maps/ai.js";
 import { GitHubError } from "../repo-maps/github.js";
 import { buildCandidates } from "../repo-maps/candidates.js";
+import { confirmDraft } from "../repo-maps/confirm.js";
 import { summarizeDraft } from "../repo-maps/summarize.js";
 import type { GitHubErrorKind } from "../repo-maps/github.js";
 import {
@@ -176,6 +179,22 @@ export function createRepoMapsRoute(resolve: RepoMapsDepsResolver) {
         rebuild: false,
       });
       return c.json(body, 200, NO_STORE);
+    } catch (error) {
+      return respondFailure(c, error);
+    }
+  });
+
+  app.post("/repo-map-drafts/:id/confirm", async (c) => {
+    const userId = c.get("user").userId;
+    const input = await parseBody(c, confirmRepoMapDraftSchema);
+    try {
+      const body: ConfirmRepoMapDraftResponse = await confirmDraft(
+        resolve(c.env),
+        userId,
+        c.req.param("id"),
+        input,
+      );
+      return c.json(body, 201, NO_STORE);
     } catch (error) {
       return respondFailure(c, error);
     }

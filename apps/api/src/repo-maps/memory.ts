@@ -172,12 +172,26 @@ export class InMemoryRepoMapDraftRepository implements RepoMapDraftRepository {
     const draft = this.drafts.get(params.id);
     if (draft === undefined || draft.userId !== params.userId) return Promise.resolve(false);
     if (!params.statuses.includes(draft.status)) return Promise.resolve(false);
+    if (draft.confirmedMapId !== null) return Promise.resolve(false);
     const held = draft.failureCode;
     if (held?.startsWith("claim:")) {
       const heldAt = Number(held.slice(6, 19));
       if (heldAt >= params.nowMs - params.leaseMs) return Promise.resolve(false);
     }
     this.drafts.set(params.id, { ...draft, failureCode: params.claim });
+    return Promise.resolve(true);
+  }
+
+  markConfirmed(params: {
+    userId: string;
+    id: string;
+    claim: string;
+    mapId: string;
+  }): Promise<boolean> {
+    const draft = this.drafts.get(params.id);
+    if (draft === undefined || draft.userId !== params.userId) return Promise.resolve(false);
+    if (draft.failureCode !== params.claim) return Promise.resolve(false);
+    this.drafts.set(params.id, { ...draft, confirmedMapId: params.mapId });
     return Promise.resolve(true);
   }
 

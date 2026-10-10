@@ -83,6 +83,8 @@ import type {
   StoredOwnMapNode,
   StoredSharedMap,
   MapSourceInput,
+  RepoMapNodeSource,
+  RepoMapSourceInput,
   UserPlanRepository,
   UserSettingsRepository,
   FixedMapCreatorRepository,
@@ -2171,6 +2173,7 @@ export class D1LearningMapRepository implements LearningMapRepository {
       content: StoredMapContent;
       objectives?: readonly StoredLearningObjective[];
       creationChecksLevel?: CheckLevel;
+      repoSource?: RepoMapSourceInput;
       nowIso: string;
       nowMs: number;
       maxMaps: number;
@@ -2191,8 +2194,8 @@ export class D1LearningMapRepository implements LearningMapRepository {
         .prepare(
           `INSERT INTO learning_maps
              (id, owner_user_id, title, description, visibility, created_at, updated_at, updated_at_ms,
-              creation_checks_level)
-           SELECT ?, ?, ?, ?, 'private', ?, ?, ?, ?
+              creation_checks_level, repo_url, repo_commit_sha)
+           SELECT ?, ?, ?, ?, 'private', ?, ?, ?, ?, ?, ?
            WHERE (SELECT COUNT(*) FROM learning_maps WHERE owner_user_id = ?) < ?`,
         )
         .bind(
@@ -2204,6 +2207,8 @@ export class D1LearningMapRepository implements LearningMapRepository {
           params.nowIso,
           params.nowMs,
           params.creationChecksLevel ?? null,
+          params.repoSource?.url ?? null,
+          params.repoSource?.commitSha ?? null,
           ownerUserId,
           params.maxMaps,
         ),
@@ -2221,8 +2226,64 @@ export class D1LearningMapRepository implements LearningMapRepository {
            WHERE ${OWNED_MAP}`,
         )
         .bind(id, params.nowIso, params.nowIso, JSON.stringify(objectives), id, ownerUserId),
+      // ノードの根拠（リポジトリから作ったマップだけ）。マップの行が入ったときだけ書く。
+      ...(params.repoSource === undefined || params.repoSource.nodeSources.length === 0
+        ? []
+        : [
+            this.db
+              .prepare(
+                `INSERT INTO learning_map_node_sources
+                   (map_id, concept_id, position, kind, path, issue_number, summary)
+                 SELECT ?, json_extract(value, '$.conceptId'), json_extract(value, '$.position'),
+                        json_extract(value, '$.kind'), json_extract(value, '$.path'),
+                        json_extract(value, '$.issueNumber'), json_extract(value, '$.summary')
+                 FROM json_each(?)
+                 WHERE ${OWNED_MAP}`,
+              )
+              .bind(id, JSON.stringify(params.repoSource.nodeSources), id, ownerUserId),
+          ]),
     ]);
     return { created: changesOf(inserted) === 1 };
+  }
+
+  async getRepoSource(
+    ownerUserId: string,
+    mapId: string,
+  ): Promise<{ url: string; commitSha: string; nodeSources: RepoMapNodeSource[] } | null> {
+    const map = await this.db
+      .prepare(
+        `SELECT repo_url, repo_commit_sha FROM learning_maps
+         WHERE id = ? AND owner_user_id = ? AND repo_url IS NOT NULL`,
+      )
+      .bind(mapId, ownerUserId)
+      .first<{ repo_url: string; repo_commit_sha: string }>();
+    if (map === null) return null;
+    const { results } = await this.db
+      .prepare(
+        `SELECT concept_id, position, kind, path, issue_number, summary
+         FROM learning_map_node_sources WHERE map_id = ? ORDER BY concept_id, position`,
+      )
+      .bind(mapId)
+      .all<{
+        concept_id: string;
+        position: number;
+        kind: RepoMapNodeSource["kind"];
+        path: string | null;
+        issue_number: number | null;
+        summary: string;
+      }>();
+    return {
+      url: map.repo_url,
+      commitSha: map.repo_commit_sha,
+      nodeSources: results.map((r) => ({
+        conceptId: r.concept_id,
+        position: r.position,
+        kind: r.kind,
+        path: r.path,
+        issueNumber: r.issue_number,
+        summary: r.summary,
+      })),
+    };
   }
 
   async listByOwner(ownerUserId: string): Promise<LearningMapSummary[]> {

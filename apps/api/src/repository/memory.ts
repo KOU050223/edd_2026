@@ -45,6 +45,8 @@ import type {
   StoredLearningObjective,
   StoredMapContent,
   MapSourceInput,
+  RepoMapNodeSource,
+  RepoMapSourceInput,
   StoredMapSource,
   StoredMapVersion,
   StoredOwnMapNode,
@@ -121,6 +123,8 @@ export interface InMemoryLearningMap extends StoredLearningMap {
   versions: (StoredMapVersion & { createdAtMs: number })[];
   /** 取り込んだ版の公開の確認問題（0020 の imported_map_checks）。 */
   importedChecks: PersonalConceptCheck[];
+  /** リポジトリから作ったマップの取り込み元と根拠（0021）。 */
+  repoSource?: { url: string; commitSha: string; nodeSources: RepoMapNodeSource[] };
 }
 
 export function createInMemoryRepositoryStore(): InMemoryRepositoryStore {
@@ -807,6 +811,7 @@ export class InMemoryLearningMapRepository implements LearningMapRepository {
       content: StoredMapContent;
       objectives?: readonly StoredLearningObjective[];
       creationChecksLevel?: CheckLevel;
+      repoSource?: RepoMapSourceInput;
       nowIso: string;
       nowMs: number;
       maxMaps: number;
@@ -814,6 +819,17 @@ export class InMemoryLearningMapRepository implements LearningMapRepository {
   ): Promise<{ created: boolean }> {
     if (this.ownedMaps(ownerUserId).length >= params.maxMaps) {
       return Promise.resolve({ created: false });
+    }
+    // D1 では根拠がノードを外部キーで参照し、無いノードを指すと batch ごと失敗する。
+    const sourceOwnIds = new Set(
+      params.content.nodes.filter((node) => node.kind === "own").map((node) => node.conceptId),
+    );
+    for (const source of params.repoSource?.nodeSources ?? []) {
+      if (!sourceOwnIds.has(source.conceptId)) {
+        return Promise.reject(
+          new Error(`source points to a node not in this map: ${source.conceptId}`),
+        );
+      }
     }
     // D1 では項目がノードを外部キーで参照し、無いノードを指すと batch ごと失敗する。
     const ownIds = new Set(
@@ -850,8 +866,28 @@ export class InMemoryLearningMapRepository implements LearningMapRepository {
         params.creationChecksLevel === undefined
           ? null
           : { level: params.creationChecksLevel, attempts: 0, doneAt: null, startedAtMs: null },
+      ...(params.repoSource === undefined
+        ? {}
+        : {
+            repoSource: {
+              url: params.repoSource.url,
+              commitSha: params.repoSource.commitSha,
+              nodeSources: params.repoSource.nodeSources.map((s) => ({ ...s })),
+            },
+          }),
     });
     return Promise.resolve({ created: true });
+  }
+
+  getRepoSource(
+    ownerUserId: string,
+    mapId: string,
+  ): Promise<{ url: string; commitSha: string; nodeSources: RepoMapNodeSource[] } | null> {
+    const map = this.store.learningMaps.get(mapId);
+    if (map === undefined || map.ownerUserId !== ownerUserId || map.repoSource === undefined) {
+      return Promise.resolve(null);
+    }
+    return Promise.resolve(structuredClone(map.repoSource));
   }
 
   claimCreationChecks(

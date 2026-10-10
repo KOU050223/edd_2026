@@ -201,6 +201,32 @@ export const rebuildRepoMapDraftSchema = v.strictObject({
 });
 export type RebuildRepoMapDraftInput = v.InferOutput<typeof rebuildRepoMapDraftSchema>;
 
+/**
+ * `POST /v1/repo-map-drafts/:id/confirm` が受け取るもの。選んだ候補（最大 30）から、マップを作る。
+ * 表示名・説明は、候補のものを直して送れる（省くと候補のまま）。題名を省くとリポジトリ名から付ける。
+ */
+export const confirmRepoMapDraftSchema = v.strictObject({
+  consentVersion: v.optional(v.pipe(v.number(), v.integer())),
+  title: v.optional(v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(200))),
+  accepted: v.pipe(
+    v.array(
+      v.strictObject({
+        id: v.pipe(v.string(), v.regex(/^C[0-9]{1,3}$/)),
+        name: v.optional(v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(200))),
+        description: v.optional(v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(400))),
+      }),
+    ),
+    v.minLength(1),
+    v.maxLength(30),
+  ),
+});
+export type ConfirmRepoMapDraftInput = v.InferOutput<typeof confirmRepoMapDraftSchema>;
+
+export interface ConfirmRepoMapDraftResponse {
+  /** 作った学習マップの ID（`GET /v1/learning-maps/:id`）。 */
+  mapId: string;
+}
+
 /** `POST /v1/repo-map-drafts/:id/summarize` が受け取るもの。 */
 export const summarizeRepoMapDraftSchema = v.strictObject({
   consentVersion: v.optional(v.pipe(v.number(), v.integer())),

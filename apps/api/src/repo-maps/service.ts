@@ -32,6 +32,7 @@ import {
 } from "./classify.js";
 import type { GitHubClient, IssueSummary, TreeEntry } from "./github.js";
 import type { RepoMapDraftRepository, RepoMapUsage, StoredRepoMapDraft } from "./repository.js";
+import type { LearningMapRepository } from "../repository/types.js";
 import type { RepoMapAiConfig } from "./ai.js";
 import { issueLink, parseRepoUrl, permalink, repoUrl, type RepoRef } from "./url.js";
 
@@ -138,6 +139,10 @@ export interface RepoMapDeps {
   ai?: RepoMapAiConfig;
   /** 1 リクエストの外部呼び出しの上限。省略は `MAX_SUBREQUESTS`。テストだけが小さくする。 */
   subrequestBudget?: number;
+  /** 確定（マップの保存）が使う。無ければ確定は 503 を返す。 */
+  maps?: LearningMapRepository;
+  /** 英小文字と数字 8 文字を返す。マップ・項目の ID に使う。 */
+  newKey?: () => string;
 }
 
 interface Source {
@@ -564,6 +569,7 @@ export async function createDraft(
     stageStateVersion: STATE_VERSION,
     failedStage: null,
     failureCode: null,
+    confirmedMapId: null,
     aiCalls: 0,
     inputTokens: 0,
     outputTokens: 0,
