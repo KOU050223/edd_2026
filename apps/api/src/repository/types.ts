@@ -30,6 +30,7 @@ import type {
   LearningMapVisibility,
   MapVersionMeta,
   MapVersionSummary,
+  OwnSharedMapSummary,
   SharedMapSummary,
   ShareScope,
   LearningObjectiveSource,
@@ -953,6 +954,12 @@ export interface LearningMapRepository {
 
   /** 範囲が「全員」の共有マップ。新しく上げた順（同時刻は ID の昇順）に `limit` 件まで。 */
   listPublic(limit: number): Promise<SharedMapSummary[]>;
+
+  /**
+   * 持ち主が共有しているマップ（範囲が「リンクだけ」か「全員」で、版があるもの、#302）。
+   * 題名・説明・ノード数は共有の側のいちばん新しい版のもの。新しく上げた順（同時刻は ID の昇順）。
+   */
+  listSharedByOwner(ownerUserId: string): Promise<OwnSharedMapSummary[]>;
 
   /** マップを消す。ノード・線・項目も消える。@returns 消したら `true`。 */
   delete(ownerUserId: string, mapId: string): Promise<boolean>;

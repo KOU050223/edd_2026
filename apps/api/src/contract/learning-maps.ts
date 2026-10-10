@@ -472,6 +472,20 @@ export interface SharedMapSummary {
   publishedAt: string;
 }
 
+/**
+ * 持ち主の「共有したマップ」の一覧の1件（`GET /v1/learning-maps:shared`、#302）。
+ * 題名・説明・ノード数は、全員の一覧と同じく共有の側のいちばん新しい版のもの。
+ * 手元で直してまだ上げていない題名を出すと、開いた先（共有の版）と食い違う（PR #304 のレビュー）。
+ */
+export interface OwnSharedMapSummary extends SharedMapSummary {
+  visibility: ShareScope;
+}
+
+/** `GET /v1/learning-maps:shared` の応答。新しく上げた順。 */
+export interface ListOwnSharedMapsResponse {
+  maps: OwnSharedMapSummary[];
+}
+
 /** `GET /v1/shared-maps` の応答。新しく上げた順。作成者の名前は出さない（T5）。 */
 export interface ListSharedMapsResponse {
   maps: SharedMapSummary[];

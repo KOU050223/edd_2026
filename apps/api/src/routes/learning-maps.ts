@@ -46,6 +46,7 @@ import {
   type LearningObjectiveView,
   type ListClientMapConceptsResponse,
   type ListLearningMapsResponse,
+  type ListOwnSharedMapsResponse,
   type ListMapVersionsResponse,
   type ListSharedMapsResponse,
   type MapGenerationConsentBody,
@@ -602,6 +603,14 @@ export function createLearningMapsRoute(resolve: LearningMapsDepsResolver) {
     return c.json(body, 200, { "cache-control": "no-store" });
   });
 
+  // 自分が共有しているマップ（「共有したマップ」の画面、#302）。題名・説明は共有の版のもの。
+  app.get("/learning-maps:shared", async (c) => {
+    const userId = c.get("user").userId;
+    const deps = resolve(c.env);
+    const body: ListOwnSharedMapsResponse = { maps: await deps.maps.listSharedByOwner(userId) };
+    return c.json(body, 200, { "cache-control": "no-store" });
+  });
+
   app.post("/learning-maps", async (c) => {
     const userId = c.get("user").userId;
     const input = await parseBody(c, learningMapContentSchema);
@@ -915,7 +924,8 @@ export function createLearningMapsRoute(resolve: LearningMapsDepsResolver) {
   });
 
   // 共有の側のいちばん新しい版（#244）。リンクを知っている人（link、`?key=` の鍵が合う人）と
-  // 全員（public）が読める。共有されていないマップは、持ち主にも 404 にする（持ち主は手元のマップを読む）。
+  // 全員（public）が読める。持ち主は鍵なしで読める（「共有したマップ」の画面、#302）。
+  // 共有されていないマップは、持ち主にも 404 にする（持ち主は手元のマップを読む）。
   // 鍵が合わないときも、マップがあることを隠すため 404 にする（決定 U1）。
   app.get("/shared-maps/:id", async (c) => {
     const userId = c.get("user").userId;

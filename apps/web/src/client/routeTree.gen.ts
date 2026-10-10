@@ -25,6 +25,8 @@ import { Route as FramedSettingsIndexRouteImport } from './routes/_framed/settin
 import { Route as FramedSettingsBillingRouteImport } from './routes/_framed/settings/billing'
 import { Route as FramedSettingsDataRouteImport } from './routes/_framed/settings/data'
 import { Route as FramedSettingsUsageRouteImport } from './routes/_framed/settings/usage'
+import { Route as FramedSharedIndexRouteImport } from './routes/_framed/shared.index'
+import { Route as FramedSharedMapIdRouteImport } from './routes/_framed/shared.$mapId'
 import { Route as FramedMapLanguageObjectivesRouteImport } from './routes/_framed/map.$language_.objectives'
 import { Route as FramedMapsMapIdEditRouteImport } from './routes/_framed/maps.$mapId_.edit'
 import { Route as FramedMapsMapIdHistoryRouteImport } from './routes/_framed/maps.$mapId_.history'
@@ -111,6 +113,16 @@ const FramedSettingsUsageRoute = FramedSettingsUsageRouteImport.update({
   path: '/usage',
   getParentRoute: () => FramedSettingsRouteRoute,
 } as any)
+const FramedSharedIndexRoute = FramedSharedIndexRouteImport.update({
+  id: '/shared/',
+  path: '/shared/',
+  getParentRoute: () => FramedRouteRoute,
+} as any)
+const FramedSharedMapIdRoute = FramedSharedMapIdRouteImport.update({
+  id: '/shared/$mapId',
+  path: '/shared/$mapId',
+  getParentRoute: () => FramedRouteRoute,
+} as any)
 const FramedMapLanguageObjectivesRoute =
   FramedMapLanguageObjectivesRouteImport.update({
     id: '/map/$language_/objectives',
@@ -151,9 +163,11 @@ export interface FileRoutesByFullPath {
   '/settings/billing': typeof FramedSettingsBillingRoute
   '/settings/data': typeof FramedSettingsDataRoute
   '/settings/usage': typeof FramedSettingsUsageRoute
+  '/shared/$mapId': typeof FramedSharedMapIdRoute
   '/history/': typeof FramedHistoryIndexRoute
   '/maps/': typeof FramedMapsIndexRoute
   '/settings/': typeof FramedSettingsIndexRoute
+  '/shared/': typeof FramedSharedIndexRoute
   '/map/$language/objectives': typeof FramedMapLanguageObjectivesRoute
   '/maps/$mapId/edit': typeof FramedMapsMapIdEditRoute
   '/maps/$mapId/history': typeof FramedMapsMapIdHistoryRoute
@@ -172,9 +186,11 @@ export interface FileRoutesByTo {
   '/settings/billing': typeof FramedSettingsBillingRoute
   '/settings/data': typeof FramedSettingsDataRoute
   '/settings/usage': typeof FramedSettingsUsageRoute
+  '/shared/$mapId': typeof FramedSharedMapIdRoute
   '/history': typeof FramedHistoryIndexRoute
   '/maps': typeof FramedMapsIndexRoute
   '/settings': typeof FramedSettingsIndexRoute
+  '/shared': typeof FramedSharedIndexRoute
   '/map/$language/objectives': typeof FramedMapLanguageObjectivesRoute
   '/maps/$mapId/edit': typeof FramedMapsMapIdEditRoute
   '/maps/$mapId/history': typeof FramedMapsMapIdHistoryRoute
@@ -196,9 +212,11 @@ export interface FileRoutesById {
   '/_framed/settings/billing': typeof FramedSettingsBillingRoute
   '/_framed/settings/data': typeof FramedSettingsDataRoute
   '/_framed/settings/usage': typeof FramedSettingsUsageRoute
+  '/_framed/shared/$mapId': typeof FramedSharedMapIdRoute
   '/_framed/history/': typeof FramedHistoryIndexRoute
   '/_framed/maps/': typeof FramedMapsIndexRoute
   '/_framed/settings/': typeof FramedSettingsIndexRoute
+  '/_framed/shared/': typeof FramedSharedIndexRoute
   '/_framed/map/$language_/objectives': typeof FramedMapLanguageObjectivesRoute
   '/_framed/maps/$mapId_/edit': typeof FramedMapsMapIdEditRoute
   '/_framed/maps/$mapId_/history': typeof FramedMapsMapIdHistoryRoute
@@ -220,9 +238,11 @@ export interface FileRouteTypes {
     | '/settings/billing'
     | '/settings/data'
     | '/settings/usage'
+    | '/shared/$mapId'
     | '/history/'
     | '/maps/'
     | '/settings/'
+    | '/shared/'
     | '/map/$language/objectives'
     | '/maps/$mapId/edit'
     | '/maps/$mapId/history'
@@ -241,9 +261,11 @@ export interface FileRouteTypes {
     | '/settings/billing'
     | '/settings/data'
     | '/settings/usage'
+    | '/shared/$mapId'
     | '/history'
     | '/maps'
     | '/settings'
+    | '/shared'
     | '/map/$language/objectives'
     | '/maps/$mapId/edit'
     | '/maps/$mapId/history'
@@ -264,9 +286,11 @@ export interface FileRouteTypes {
     | '/_framed/settings/billing'
     | '/_framed/settings/data'
     | '/_framed/settings/usage'
+    | '/_framed/shared/$mapId'
     | '/_framed/history/'
     | '/_framed/maps/'
     | '/_framed/settings/'
+    | '/_framed/shared/'
     | '/_framed/map/$language_/objectives'
     | '/_framed/maps/$mapId_/edit'
     | '/_framed/maps/$mapId_/history'
@@ -393,6 +417,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof FramedSettingsUsageRouteImport
       parentRoute: typeof FramedSettingsRouteRoute
     }
+    '/_framed/shared/': {
+      id: '/_framed/shared/'
+      path: '/shared'
+      fullPath: '/shared/'
+      preLoaderRoute: typeof FramedSharedIndexRouteImport
+      parentRoute: typeof FramedRouteRoute
+    }
+    '/_framed/shared/$mapId': {
+      id: '/_framed/shared/$mapId'
+      path: '/shared/$mapId'
+      fullPath: '/shared/$mapId'
+      preLoaderRoute: typeof FramedSharedMapIdRouteImport
+      parentRoute: typeof FramedRouteRoute
+    }
     '/_framed/map/$language_/objectives': {
       id: '/_framed/map/$language_/objectives'
       path: '/map/$language/objectives'
@@ -457,8 +495,10 @@ interface FramedRouteRouteChildren {
   FramedMapLanguageRoute: typeof FramedMapLanguageRoute
   FramedMapsMapIdRoute: typeof FramedMapsMapIdRoute
   FramedMapsGenerateRoute: typeof FramedMapsGenerateRoute
+  FramedSharedMapIdRoute: typeof FramedSharedMapIdRoute
   FramedHistoryIndexRoute: typeof FramedHistoryIndexRoute
   FramedMapsIndexRoute: typeof FramedMapsIndexRoute
+  FramedSharedIndexRoute: typeof FramedSharedIndexRoute
   FramedMapLanguageObjectivesRoute: typeof FramedMapLanguageObjectivesRoute
   FramedMapsMapIdEditRoute: typeof FramedMapsMapIdEditRoute
   FramedMapsMapIdHistoryRoute: typeof FramedMapsMapIdHistoryRoute
@@ -475,8 +515,10 @@ const FramedRouteRouteChildren: FramedRouteRouteChildren = {
   FramedMapLanguageRoute: FramedMapLanguageRoute,
   FramedMapsMapIdRoute: FramedMapsMapIdRoute,
   FramedMapsGenerateRoute: FramedMapsGenerateRoute,
+  FramedSharedMapIdRoute: FramedSharedMapIdRoute,
   FramedHistoryIndexRoute: FramedHistoryIndexRoute,
   FramedMapsIndexRoute: FramedMapsIndexRoute,
+  FramedSharedIndexRoute: FramedSharedIndexRoute,
   FramedMapLanguageObjectivesRoute: FramedMapLanguageObjectivesRoute,
   FramedMapsMapIdEditRoute: FramedMapsMapIdEditRoute,
   FramedMapsMapIdHistoryRoute: FramedMapsMapIdHistoryRoute,

@@ -12,6 +12,8 @@ import type { AuthVariables } from "../auth/middleware.js";
 import { stubAuth } from "../auth/test-auth.js";
 import type {
   LearningMapView,
+  ListClientMapConceptsResponse,
+  ListOwnSharedMapsResponse,
   ListMapVersionsResponse,
   ListSharedMapsResponse,
   MapPublishPreview,
@@ -466,6 +468,78 @@ describe("手元の書き換えとの競合（PR #294 のレビュー）", () =>
     expect(after.latestVersion).toBe(2);
     expect(after.nodes[0]).toMatchObject({ label: "別の画面" });
     expect(after.revision).toBeGreaterThan(read.revision);
+  });
+});
+
+describe("共有したマップの一覧（#302）", () => {
+  const listShared = async (token = "token-a") =>
+    (await json<ListOwnSharedMapsResponse>(await send("GET", "/learning-maps:shared", token))).maps;
+
+  test("共有しているマップだけを、共有の版の題名・説明・ノード数で新しく上げた順に返す", async () => {
+    const { map: first } = await create();
+    const { map: second } = await create({ ...TWO_NODES, title: "Go 入門" });
+    await create({ ...TWO_NODES, title: "まだ共有しない" });
+    expect(await listShared()).toEqual([]);
+
+    const published = await publish(first.id, "link");
+    nowMs += 60_000;
+    await publish(second.id, "public");
+
+    expect(await listShared()).toEqual([
+      expect.objectContaining({
+        id: second.id,
+        title: "Go 入門",
+        visibility: "public",
+        version: 1,
+      }),
+      {
+        id: first.id,
+        title: "Rust 入門",
+        description: TWO_NODES.description,
+        nodeCount: 2,
+        version: 1,
+        publishedAt: published.version.createdAt,
+        visibility: "link",
+      },
+    ]);
+    // 持ち主以外の一覧には出ない。
+    expect(await listShared("token-b")).toEqual([]);
+  });
+
+  test("手元の題名を直してまだ上げていなければ、共有の版の題名のまま（PR #304 のレビュー）", async () => {
+    const { map } = await create();
+    await publish(map.id);
+    const own = await json<LearningMapView>(
+      await send("GET", `/learning-maps/${map.id}`, "token-a"),
+    );
+    await send("PUT", `/learning-maps/${map.id}`, "token-a", {
+      title: "所有権ガイド",
+      description: "書き直した説明",
+      nodes: own.nodes.map((node) =>
+        node.kind === "own"
+          ? { kind: "own", ref: node.conceptId, label: node.label, summary: node.summary }
+          : { kind: "reference", conceptId: node.conceptId },
+      ),
+      edges: own.edges,
+    });
+
+    expect(await listShared()).toEqual([
+      expect.objectContaining({ title: "Rust 入門", description: TWO_NODES.description }),
+    ]);
+  });
+
+  test("共有をやめたマップは出ない", async () => {
+    const { map } = await create();
+    await publish(map.id);
+    await send("PUT", `/learning-maps/${map.id}/visibility`, "token-a", { visibility: "private" });
+    expect(await listShared()).toEqual([]);
+  });
+
+  test("同じ形の口（learning-maps:concepts）と取り違えない", async () => {
+    const concepts = await json<ListClientMapConceptsResponse>(
+      await send("GET", "/learning-maps:concepts", "token-a"),
+    );
+    expect(concepts).not.toHaveProperty("maps");
   });
 });
 
