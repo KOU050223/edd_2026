@@ -223,6 +223,7 @@ export async function summarizeDraft(
     claim,
     nowMs: now.getTime(),
     leaseMs: CLAIM_LEASE_MS,
+    statuses: ["fetched", "failed"],
   });
   if (!claimed) {
     throw new RepoMapRefusal(

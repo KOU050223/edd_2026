@@ -162,6 +162,57 @@ export class D1RepoMapDraftRepository implements RepoMapDraftRepository {
     throw new Error("user deletion is in progress");
   }
 
+  async reserveRebuild(params: {
+    userId: string;
+    monthKey: string;
+    dayKey: string;
+    updatedAt: string;
+    limit: number;
+  }): Promise<{ reserved: boolean; usage: RepoMapUsage }> {
+    const { userId, monthKey, dayKey, updatedAt, limit } = params;
+    const nowMs = Date.now();
+    // 判定と加算を 1 文で行う。日が変わっていれば、その日の最初の 1 回として数え直す。
+    const row = await this.db
+      .prepare(
+        `INSERT INTO repo_map_usage (
+           user_id, month_key, monthly_drafts, day_key, daily_rebuilds, monthly_tokens, updated_at
+         )
+         SELECT ?, ?, 0, ?, 1, 0, ?
+         WHERE NOT EXISTS (
+           SELECT 1 FROM account_deletions
+           WHERE user_id = ? AND started_at_ms > ?
+         )
+           AND 1 <= ?
+         ON CONFLICT (user_id, month_key) DO UPDATE SET
+           daily_rebuilds = CASE
+             WHEN repo_map_usage.day_key = excluded.day_key
+               THEN repo_map_usage.daily_rebuilds + 1
+             ELSE 1
+           END,
+           day_key = excluded.day_key,
+           updated_at = excluded.updated_at
+         WHERE repo_map_usage.day_key <> excluded.day_key
+            OR repo_map_usage.daily_rebuilds + 1 <= ?
+         RETURNING day_key, monthly_drafts, daily_rebuilds, monthly_tokens`,
+      )
+      .bind(
+        userId,
+        monthKey,
+        dayKey,
+        updatedAt,
+        userId,
+        nowMs - ACCOUNT_DELETION_TOMBSTONE_TTL_MS,
+        limit,
+        limit,
+      )
+      .first<UsageRow>();
+    if (row !== null) return { reserved: true, usage: toUsage(row, dayKey) };
+
+    const current = await this.usage({ userId, monthKey, dayKey });
+    if (current.dailyRebuilds + 1 > limit) return { reserved: false, usage: current };
+    throw new Error("user deletion is in progress");
+  }
+
   async releaseDraft(params: {
     userId: string;
     monthKey: string;
@@ -264,20 +315,29 @@ export class D1RepoMapDraftRepository implements RepoMapDraftRepository {
     claim: string;
     nowMs: number;
     leaseMs: number;
+    statuses: readonly DraftStatus[];
   }): Promise<boolean> {
+    if (params.statuses.length === 0) return false;
+    const marks = params.statuses.map(() => "?").join(", ");
     // 1 文で、状態の確認と占有を行う（読んでから書くと、同時の 2 つが両方取れる）。
     // 占有は `claim:<13 桁のミリ秒>:<トークン>`。古い占有（期限切れ）は取り直せる。
     const result = await this.db
       .prepare(
         `UPDATE repo_map_drafts SET failure_code = ?
-         WHERE id = ? AND user_id = ? AND status IN ('fetched', 'failed')
+         WHERE id = ? AND user_id = ? AND status IN (${marks})
            AND (
              failure_code IS NULL
              OR failure_code NOT LIKE 'claim:%'
              OR CAST(substr(failure_code, 7, 13) AS INTEGER) < ?
            )`,
       )
-      .bind(params.claim, params.id, params.userId, params.nowMs - params.leaseMs)
+      .bind(
+        params.claim,
+        params.id,
+        params.userId,
+        ...params.statuses,
+        params.nowMs - params.leaseMs,
+      )
       .run();
     return result.meta.changes > 0;
   }

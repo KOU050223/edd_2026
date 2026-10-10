@@ -436,6 +436,11 @@ app.route(
         const summary = parseModelList(env.REPO_MAP_SUMMARY_MODELS);
         return summary.length > 0 ? summary : parseModelList(env.CHECK_MODELS);
       })(),
+      // 候補の段（用語の抽出）は、要約より質が要るので、確認問題と同じモデルを既定にする。
+      candidateModels: (() => {
+        const candidate = parseModelList(env.REPO_MAP_CANDIDATE_MODELS);
+        return candidate.length > 0 ? candidate : parseModelList(env.CHECK_MODELS);
+      })(),
     },
     newId: () => `r${randomKey()}`,
     now: () => new Date(),

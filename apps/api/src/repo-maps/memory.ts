@@ -83,6 +83,35 @@ export class InMemoryRepoMapDraftRepository implements RepoMapDraftRepository {
     });
   }
 
+  reserveRebuild(params: {
+    userId: string;
+    monthKey: string;
+    dayKey: string;
+    updatedAt: string;
+    limit: number;
+  }): Promise<{ reserved: boolean; usage: RepoMapUsage }> {
+    if (this.deleting.has(params.userId)) {
+      return Promise.reject(new Error("user deletion is in progress"));
+    }
+    const missing = this.requireUser(params.userId);
+    if (missing !== null) return Promise.reject(missing);
+    const current = this.read(params);
+    if (current.dailyRebuilds + 1 > params.limit) {
+      return Promise.resolve({ reserved: false, usage: current });
+    }
+    const row = this.usageRows.get(params.userId)?.get(params.monthKey);
+    this.write(params.userId, params.monthKey, {
+      monthlyDrafts: row?.monthlyDrafts ?? 0,
+      dayKey: params.dayKey,
+      dailyRebuilds: current.dailyRebuilds + 1,
+      monthlyTokens: row?.monthlyTokens ?? 0,
+    });
+    return Promise.resolve({
+      reserved: true,
+      usage: { ...current, dailyRebuilds: current.dailyRebuilds + 1 },
+    });
+  }
+
   releaseDraft(params: { userId: string; monthKey: string; updatedAt: string }): Promise<void> {
     const row = this.usageRows.get(params.userId)?.get(params.monthKey);
     if (row === undefined || row.monthlyDrafts === 0) {
@@ -138,10 +167,11 @@ export class InMemoryRepoMapDraftRepository implements RepoMapDraftRepository {
     claim: string;
     nowMs: number;
     leaseMs: number;
+    statuses: readonly DraftStatus[];
   }): Promise<boolean> {
     const draft = this.drafts.get(params.id);
     if (draft === undefined || draft.userId !== params.userId) return Promise.resolve(false);
-    if (draft.status !== "fetched" && draft.status !== "failed") return Promise.resolve(false);
+    if (!params.statuses.includes(draft.status)) return Promise.resolve(false);
     const held = draft.failureCode;
     if (held?.startsWith("claim:")) {
       const heldAt = Number(held.slice(6, 19));
