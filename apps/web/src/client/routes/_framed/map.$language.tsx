@@ -104,9 +104,6 @@ function LanguageMap() {
           </Link>
         )}
       </p>
-      {loggedIn && (
-        <HistoryMapPanel key={language} target={`language:${language}`} onApplied={select} />
-      )}
       {summary.complete && (
         <section className="celebrate" role="status">
           <CompleteBadge />
@@ -187,6 +184,9 @@ function LanguageMap() {
           />
         )}
       </div>
+      {loggedIn && (
+        <HistoryMapPanel key={language} target={`language:${language}`} onApplied={select} />
+      )}
     </>
   );
 }

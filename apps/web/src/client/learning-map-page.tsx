@@ -435,7 +435,6 @@ export function LearningMapPage({
           </Link>
         )}
       </p>
-      {own && <HistoryMapPanel key={mapId} target={mapId} onApplied={onSelectInMap} />}
       {map.description && <p className="muted">{map.description}</p>}
       {own ? (
         <>
@@ -535,6 +534,7 @@ export function LearningMapPage({
         </div>
       )}
       {sources !== undefined && <RepoMapSourcesFailure state={sources} />}
+      {own && <HistoryMapPanel key={mapId} target={mapId} onApplied={onSelectInMap} />}
     </>
   );
 }

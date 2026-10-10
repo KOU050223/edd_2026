@@ -475,17 +475,17 @@ export function HistoryMapPanel({
           ))}
         </select>
       </label>
-      <div className="history-stats">
-        <div>
+      <div className="history-stats history-map-stats" role="status">
+        <div className="history-stat-total">
           <strong>{counts.total}</strong>取り込んだ質問
         </div>
-        <div>
+        <div className="history-stat-related">
           <strong>{counts.related}</strong>関連が見つかった質問
         </div>
-        <div>
+        <div className="history-stat-pending">
           <strong>{counts.pending}</strong>関連が未確認の質問
         </div>
-        <div>
+        <div className="history-stat-unrelated">
           <strong>{counts.unrelated}</strong>このマップに関連なし
         </div>
       </div>
