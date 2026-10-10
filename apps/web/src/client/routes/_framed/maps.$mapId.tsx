@@ -5,12 +5,13 @@ import { parseConceptSearch, type MapProfile } from "../../learning-map-view.js"
 import { fetchLearningMap, findOwnMapOf } from "../../learning-maps.js";
 import { fetchSharedMap } from "../../map-sharing.js";
 import type { MasteryOverrides } from "../../overrides.js";
+import { loadRepoMapSources } from "../../repo-maps.js";
 import { takeLoginRetry } from "../../session.js";
 
 /** `/maps/<ID>`。ノードを選ぶと `?concept=` を変える。 */
 function MapRoutePage() {
   const { mapId } = Route.useParams();
-  const { loaded, profile, overrides } = Route.useLoaderData();
+  const { loaded, profile, overrides, sources } = Route.useLoaderData();
   const { concept, key } = Route.useSearch();
   const navigate = useNavigate();
   return (
@@ -19,6 +20,7 @@ function MapRoutePage() {
       loaded={loaded}
       profile={profile}
       overrides={overrides}
+      sources={sources}
       selectedId={concept}
       shareKey={key}
       // 「リンクだけ」の鍵は選び直しても持ち続ける（外すと読み直しで 404 になる）。
@@ -80,12 +82,17 @@ export const Route = createFileRoute("/_framed/maps/$mapId")({
   loader: async ({ params, deps, location }) => {
     const retry = takeLoginRetry();
     const { concept } = parseConceptSearch(location.search as Record<string, unknown>);
-    const [loaded, profile, overrides] = await Promise.all([
-      loadMap(params.mapId, { key: deps.key, concept }, retry),
+    const loadedPromise = loadMap(params.mapId, { key: deps.key, concept }, retry);
+    const [loaded, profile, overrides, sources] = await Promise.all([
+      loadedPromise,
       requestJson<MapProfile>("/api/v1/learning-profile", fetch, retry),
       requestJson<MasteryOverrides>("/api/v1/mastery-overrides", fetch, retry),
+      // 根拠は、自分のマップのときだけ読む（マップの読み込みと並べて、直列の 1 回を増やさない）。
+      loadedPromise.then((value) =>
+        loadRepoMapSources(params.mapId, value.kind === "own", fetch, retry),
+      ),
     ]);
-    return { loaded, profile, overrides };
+    return { loaded, profile, overrides, sources };
   },
   component: MapRoutePage,
 });
