@@ -677,6 +677,19 @@ export interface RepoMapSourceInput {
   /** 根拠のリンクを固定した commit SHA。 */
   commitSha: string;
   nodeSources: readonly RepoMapNodeSource[];
+  /** ノードの種類（#322。migrations/0024）。種類なしのノードは入れない。 */
+  nodeKinds?: readonly { conceptId: string; kind: RepoMapNodeKindValue }[];
+}
+
+/** ノードの種類（contract/repo-maps.ts の `RepoMapNodeKind` と同じ値）。 */
+export type RepoMapNodeKindValue = "core" | "event" | "state" | "record" | "system";
+
+/** `getRepoSource` の結果。 */
+export interface RepoMapSourceRecord {
+  url: string;
+  commitSha: string;
+  nodeSources: RepoMapNodeSource[];
+  nodeKinds: { conceptId: string; kind: RepoMapNodeKindValue }[];
 }
 
 /** 取り込み元（migrations/0020_learning_map_imports.sql）。 */
@@ -781,10 +794,7 @@ export interface LearningMapRepository {
   ): Promise<{ created: boolean }>;
 
   /** リポジトリから作ったマップの取り込み元と根拠。そうでないマップ・他人のマップは `null`。 */
-  getRepoSource(
-    ownerUserId: string,
-    mapId: string,
-  ): Promise<{ url: string; commitSha: string; nodeSources: RepoMapNodeSource[] } | null>;
+  getRepoSource(ownerUserId: string, mapId: string): Promise<RepoMapSourceRecord | null>;
 
   /**
    * 作成時の確認問題を頼む権利を取る（#247）。まだ作成済みでなく、頼んだ回数が

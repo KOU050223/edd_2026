@@ -12,6 +12,7 @@ import {
   REPO_MAP_LIMITS,
   type CreateRepoMapDraftInput,
   INSPECT_FILE_LIST_MAX,
+  type RepoMapNodeKind,
   type InspectRepoResponse,
   type RepoMapDraftView,
   type RepoMapMaterialView,
@@ -76,6 +77,8 @@ export interface CandidateState {
   evidence: string[];
   fromSchema: boolean;
   schemaOnly: boolean;
+  /** AI が提案した種類（#322）。古い下書きには無い（版は上げない）。 */
+  kind?: RepoMapNodeKind | null;
 }
 
 /** 候補の段（PR C2b）の結果。 */

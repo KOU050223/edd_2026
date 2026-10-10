@@ -227,6 +227,7 @@ export function createRepoMapsRoute(resolve: RepoMapsDepsResolver) {
     if (found === null) throw new HTTPException(404, { message: "repo map source not found" });
     const ref = parseRepoUrl(found.url);
     if (ref === null) throw new Error(`stored repo url is invalid: ${found.url}`);
+    const kindByNode = new Map(found.nodeKinds.map((k) => [k.conceptId, k.kind]));
     const byNode = new Map<string, RepoMapSourcesResponse["nodes"][number]["sources"]>();
     for (const s of found.nodeSources) {
       const list = byNode.get(s.conceptId) ?? [];
@@ -244,7 +245,11 @@ export function createRepoMapsRoute(resolve: RepoMapsDepsResolver) {
     }
     const body: RepoMapSourcesResponse = {
       repo: { url: found.url, commitSha: found.commitSha },
-      nodes: [...byNode].map(([conceptId, sources]) => ({ conceptId, sources })),
+      nodes: [...byNode].map(([conceptId, sources]) => ({
+        conceptId,
+        kind: kindByNode.get(conceptId) ?? null,
+        sources,
+      })),
     };
     return c.json(body, 200, NO_STORE);
   });

@@ -31,6 +31,25 @@ export const REPO_MAP_AI_TIMEOUT_MS = 330_000;
 
 export type RepoMapEvidenceKind = "glossary" | "doc" | "code" | "issue" | "schema";
 
+/** ノードの種類（#322）。API の `REPO_MAP_NODE_KINDS` と同じ値。 */
+export const REPO_MAP_NODE_KINDS = ["core", "event", "state", "record", "system"] as const;
+export type RepoMapNodeKind = (typeof REPO_MAP_NODE_KINDS)[number];
+
+export const REPO_MAP_NODE_KIND_LABELS: Record<RepoMapNodeKind, string> = {
+  core: "中心の概念",
+  event: "出来事・操作",
+  state: "状態・指標",
+  record: "記録・データ",
+  system: "仕組み・外部",
+};
+
+/** 知らない値は「種類なし」にする。 */
+export function asNodeKind(value: unknown): RepoMapNodeKind | null {
+  return typeof value === "string" && (REPO_MAP_NODE_KINDS as readonly string[]).includes(value)
+    ? (value as RepoMapNodeKind)
+    : null;
+}
+
 export interface RepoMapRepoInfo {
   owner: string;
   name: string;
@@ -91,6 +110,8 @@ export interface RepoMapCandidate {
   evidence: { id: string; kind: RepoMapEvidenceKind; ref: string; url: string }[];
   fromSchema: boolean;
   schemaOnly: boolean;
+  /** AI が提案した種類。古い下書きでは無い。 */
+  kind?: RepoMapNodeKind | null;
 }
 
 export interface RepoMapDraft {
@@ -121,6 +142,8 @@ export interface RepoMapSources {
   repo: { url: string; commitSha: string };
   nodes: {
     conceptId: string;
+    /** ノードの種類（古い API・種類なしは無い・null）。 */
+    kind?: RepoMapNodeKind | null;
     sources: {
       kind: RepoMapEvidenceKind;
       path: string | null;
@@ -343,7 +366,13 @@ export function rebuildRepoMapCandidates(
 
 export interface ConfirmRequest {
   title?: string;
-  accepted: { id: string; name?: string; description?: string }[];
+  accepted: {
+    id: string;
+    name?: string;
+    description?: string;
+    /** 直した種類。`null` は「種類なし」。省くと候補のまま。 */
+    kind?: RepoMapNodeKind | null;
+  }[];
   consentVersion?: number;
 }
 
@@ -664,7 +693,12 @@ export const EVIDENCE_KIND_LABELS: Record<RepoMapEvidenceKind, string> = {
 export function buildConfirmRequest(
   candidates: readonly RepoMapCandidate[],
   selected: ReadonlySet<string>,
-  edits: Readonly<Record<string, { name?: string; description?: string } | undefined>>,
+  edits: Readonly<
+    Record<
+      string,
+      { name?: string; description?: string; kind?: RepoMapNodeKind | null } | undefined
+    >
+  >,
   title: string,
 ): ConfirmRequest {
   const accepted = candidates
@@ -678,6 +712,8 @@ export function buildConfirmRequest(
         id: c.id,
         ...(name !== undefined && name !== c.name ? { name } : {}),
         ...(description !== undefined && description !== c.description ? { description } : {}),
+        // 種類は、直したものだけを送る（候補と同じなら省く）。
+        ...(edit?.kind !== undefined && edit.kind !== (c.kind ?? null) ? { kind: edit.kind } : {}),
       };
     });
   const trimmed = title.trim();
@@ -723,4 +759,17 @@ export function validateConfirm(
     }
   }
   return undefined;
+}
+
+/** マップの根拠の応答から、ノードごとの種類を取り出す（種類なしのノードは入らない）。 */
+export function nodeKindsOf(
+  state: RepoMapSourcesState | undefined,
+): ReadonlyMap<string, RepoMapNodeKind> {
+  const kinds = new Map<string, RepoMapNodeKind>();
+  if (state === undefined || state.kind !== "ok") return kinds;
+  for (const node of state.sources.nodes) {
+    const kind = asNodeKind(node.kind);
+    if (kind !== null) kinds.set(node.conceptId, kind);
+  }
+  return kinds;
 }

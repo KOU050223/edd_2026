@@ -4,7 +4,11 @@
  */
 
 import {
+  asNodeKind,
   EVIDENCE_KIND_LABELS,
+  REPO_MAP_NODE_KIND_LABELS,
+  REPO_MAP_NODE_KINDS,
+  type RepoMapNodeKind,
   evidenceCounts,
   groupByEvidenceKind,
   REPO_MAP_LIMITS,
@@ -17,6 +21,8 @@ import { EvidenceLink } from "./repo-map-ui.js";
 interface Edit {
   name?: string;
   description?: string;
+  /** 直した種類。`null` は「種類なし」に直した。 */
+  kind?: RepoMapNodeKind | null;
 }
 
 /** 候補 1 件。1 行に畳み、「直す」を押したときだけ入力欄を開く。 */
@@ -41,7 +47,10 @@ export function CandidateRow({
 }) {
   const name = edit?.name ?? candidate.name;
   const description = edit?.description ?? candidate.description;
-  const changed = edit !== undefined && (edit.name !== undefined || edit.description !== undefined);
+  const kind = edit?.kind !== undefined ? edit.kind : (candidate.kind ?? null);
+  const changed =
+    edit !== undefined &&
+    (edit.name !== undefined || edit.description !== undefined || edit.kind !== undefined);
   return (
     <li className={`repo-candidate${checked ? "" : " off"}`}>
       <div className="repo-candidate-row">
@@ -56,6 +65,26 @@ export function CandidateRow({
           {candidate.schemaOnly && <span className="badge-chip">データの形のみ</span>}
           {!candidate.schemaOnly && candidate.fromSchema && (
             <span className="badge-chip">データの形にも</span>
+          )}
+          {checked ? (
+            <select
+              className={`kind-select${kind === null ? "" : ` kind-${kind}`}`}
+              value={kind ?? ""}
+              aria-label={`${name} の種類`}
+              disabled={disabled}
+              onChange={(event) => onEdit({ kind: asNodeKind(event.target.value) })}
+            >
+              <option value="">種類なし</option>
+              {REPO_MAP_NODE_KINDS.map((k) => (
+                <option key={k} value={k}>
+                  {REPO_MAP_NODE_KIND_LABELS[k]}
+                </option>
+              ))}
+            </select>
+          ) : (
+            kind !== null && (
+              <span className={`badge-chip kind-${kind}`}>{REPO_MAP_NODE_KIND_LABELS[kind]}</span>
+            )
           )}
           {changed && <span className="badge-chip">直した</span>}
           {checked && (

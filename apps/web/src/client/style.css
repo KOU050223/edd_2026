@@ -2099,3 +2099,91 @@ button.link.danger {
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+
+/* ノードの種類（#322）。塗りは種類、理解度は枠線（確認済み=緑・学習中=橙・未観測=灰）と ✓ で表す。 */
+:root {
+  --kind-core-bg: #e0e7ff;
+  --kind-core-fg: #3730a3;
+  --kind-event-bg: #fce7f3;
+  --kind-event-fg: #9d174d;
+  --kind-state-bg: #fef9c3;
+  --kind-state-fg: #854d0e;
+  --kind-record-bg: #e0f2fe;
+  --kind-record-fg: #075985;
+  --kind-system-bg: #ccfbf1;
+  --kind-system-fg: #115e59;
+}
+.kind-core {
+  --kind-bg: var(--kind-core-bg);
+  --kind-fg: var(--kind-core-fg);
+}
+.kind-event {
+  --kind-bg: var(--kind-event-bg);
+  --kind-fg: var(--kind-event-fg);
+}
+.kind-state {
+  --kind-bg: var(--kind-state-bg);
+  --kind-fg: var(--kind-state-fg);
+}
+.kind-record {
+  --kind-bg: var(--kind-record-bg);
+  --kind-fg: var(--kind-record-fg);
+}
+.kind-system {
+  --kind-bg: var(--kind-system-bg);
+  --kind-fg: var(--kind-system-fg);
+}
+.node[class*="kind-"]:not(.current) {
+  background: var(--kind-bg);
+  color: var(--kind-fg);
+  border-width: 2px;
+}
+.node .kind-label {
+  font-style: normal;
+  font-weight: 600;
+  opacity: 0.85;
+}
+.node.dim {
+  opacity: 0.35;
+}
+.kind-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  grid-column: 1 / -1;
+}
+.kind-chip,
+.badge-chip.kind-core,
+.badge-chip.kind-event,
+.badge-chip.kind-state,
+.badge-chip.kind-record,
+.badge-chip.kind-system,
+.kind-select[class*="kind-"] {
+  background: var(--kind-bg, #e2e8f0);
+  color: var(--kind-fg, #334155);
+}
+.kind-chip {
+  display: inline-block;
+  border: 1.5px solid transparent;
+  border-radius: 999px;
+  padding: 2px 10px;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+}
+button.kind-chip {
+  cursor: pointer;
+}
+button.kind-chip.active {
+  border-color: var(--kind-fg);
+}
+.kind-select {
+  font: inherit;
+  font-size: 0.8rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  padding: 2px 4px;
+}

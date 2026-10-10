@@ -26,6 +26,7 @@ import {
   type CandidateSort,
   type RepoMapCandidate,
   type RepoMapDraft,
+  type RepoMapNodeKind,
 } from "../../repo-maps.js";
 import { takeLoginRetry } from "../../session.js";
 
@@ -62,7 +63,9 @@ function RepoMapDraftPage({ loaded }: { loaded: ReturnType<typeof Route.useLoade
   const [selected, setSelected] = useState<ReadonlySet<string>>(
     defaultSelection(loaded.draft.candidates?.items ?? []),
   );
-  const [edits, setEdits] = useState<Record<string, { name?: string; description?: string }>>({});
+  const [edits, setEdits] = useState<
+    Record<string, { name?: string; description?: string; kind?: RepoMapNodeKind | null }>
+  >({});
   const [title, setTitle] = useState("");
   const [excluded, setExcluded] = useState<ReadonlySet<string>>(new Set());
   const [editing, setEditing] = useState<ReadonlySet<string>>(new Set());
@@ -183,8 +186,10 @@ function RepoMapDraftPage({ loaded }: { loaded: ReturnType<typeof Route.useLoade
     apply(next);
   };
 
-  const edit = (id: string, patch: { name?: string; description?: string }) =>
-    setEdits((current) => ({ ...current, [id]: { ...current[id], ...patch } }));
+  const edit = (
+    id: string,
+    patch: { name?: string; description?: string; kind?: RepoMapNodeKind | null },
+  ) => setEdits((current) => ({ ...current, [id]: { ...current[id], ...patch } }));
 
   const visible = arrangeCandidates(candidates, {
     query,

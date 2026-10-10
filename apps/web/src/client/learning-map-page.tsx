@@ -1,6 +1,6 @@
 import { HistoryMapPanel } from "./history-map-panel.js";
 import { RepoMapNodeSources, RepoMapSourcesFailure } from "./repo-map-sources.js";
-import type { RepoMapSourcesState } from "./repo-maps.js";
+import { nodeKindsOf, type RepoMapNodeKind, type RepoMapSourcesState } from "./repo-maps.js";
 /**
  * 学習マップ1件の画面の中身（#242・#244・#302）。`/maps/<ID>`（手元のマップ・他人の共有マップ）と
  * `/shared/<ID>`（持ち主が見る自分の共有の版）が使う。
@@ -14,6 +14,7 @@ import {
   ConceptDetail,
   NARROW_LAYOUT,
   overlaidConcepts,
+  KindLegend,
   SkillTree,
   useGoToConcept,
   useMasteryChange,
@@ -385,6 +386,8 @@ export function LearningMapPage({
   const selectedNode = selectedNodeId === undefined ? undefined : nodeOf.get(selectedNodeId);
 
   // マップの中の選択は同じ画面のまま。前提・次の Concept もこのマップのノードなので、ここで選ぶ。
+  const kinds = nodeKindsOf(sources);
+  const [focusKind, setFocusKind] = useState<RepoMapNodeKind | null>(null);
   const select = (conceptId: string) => {
     if (!inMap.has(conceptId)) {
       goToConcept(conceptId);
@@ -492,6 +495,7 @@ export function LearningMapPage({
         )
       ) : (
         <div className={selected ? "map-layout" : undefined}>
+          {kinds.size > 0 && <KindLegend kinds={kinds} focus={focusKind} onFocus={setFocusKind} />}
           <div className="map" id="learning-map">
             <SkillTree
               tree={tree}
@@ -501,6 +505,8 @@ export function LearningMapPage({
               next={next}
               selected={selected?.conceptId}
               onSelect={select}
+              kinds={kinds}
+              focusKind={focusKind}
             />
           </div>
           {selected && selectedNode && (
@@ -522,6 +528,7 @@ export function LearningMapPage({
               onChange={(status) => changeStatus(selected.conceptId, status)}
               onSelect={select}
               panel={detail}
+              kind={kinds.get(selected.conceptId)}
               evidence={<RepoMapNodeSources state={sources} conceptId={selected.conceptId} />}
             />
           )}

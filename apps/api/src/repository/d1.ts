@@ -84,7 +84,9 @@ import type {
   StoredSharedMap,
   MapSourceInput,
   RepoMapNodeSource,
+  RepoMapNodeKindValue,
   RepoMapSourceInput,
+  RepoMapSourceRecord,
   UserPlanRepository,
   UserSettingsRepository,
   FixedMapCreatorRepository,
@@ -2242,14 +2244,24 @@ export class D1LearningMapRepository implements LearningMapRepository {
               )
               .bind(id, JSON.stringify(params.repoSource.nodeSources), id, ownerUserId),
           ]),
+      // ノードの種類（#322）。種類を付けたノードだけ。マップの行が入ったときだけ書く。
+      ...(params.repoSource?.nodeKinds === undefined || params.repoSource.nodeKinds.length === 0
+        ? []
+        : [
+            this.db
+              .prepare(
+                `INSERT INTO learning_map_node_kinds (map_id, concept_id, kind)
+                 SELECT ?, json_extract(value, '$.conceptId'), json_extract(value, '$.kind')
+                 FROM json_each(?)
+                 WHERE ${OWNED_MAP}`,
+              )
+              .bind(id, JSON.stringify(params.repoSource.nodeKinds), id, ownerUserId),
+          ]),
     ]);
     return { created: changesOf(inserted) === 1 };
   }
 
-  async getRepoSource(
-    ownerUserId: string,
-    mapId: string,
-  ): Promise<{ url: string; commitSha: string; nodeSources: RepoMapNodeSource[] } | null> {
+  async getRepoSource(ownerUserId: string, mapId: string): Promise<RepoMapSourceRecord | null> {
     const map = await this.db
       .prepare(
         `SELECT repo_url, repo_commit_sha FROM learning_maps
@@ -2272,9 +2284,14 @@ export class D1LearningMapRepository implements LearningMapRepository {
         issue_number: number | null;
         summary: string;
       }>();
+    const kinds = await this.db
+      .prepare(`SELECT concept_id, kind FROM learning_map_node_kinds WHERE map_id = ?`)
+      .bind(mapId)
+      .all<{ concept_id: string; kind: RepoMapNodeKindValue }>();
     return {
       url: map.repo_url,
       commitSha: map.repo_commit_sha,
+      nodeKinds: kinds.results.map((r) => ({ conceptId: r.concept_id, kind: r.kind })),
       nodeSources: results.map((r) => ({
         conceptId: r.concept_id,
         position: r.position,

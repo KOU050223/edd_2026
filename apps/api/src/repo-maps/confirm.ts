@@ -22,7 +22,7 @@ import {
   MIN_GENERATED_OBJECTIVES,
   type LearningMapContentInput,
 } from "../contract/learning-maps.js";
-import type { ConfirmRepoMapDraftInput } from "../contract/repo-maps.js";
+import type { ConfirmRepoMapDraftInput, RepoMapNodeKind } from "../contract/repo-maps.js";
 import { newMapId, resolveMapContent } from "../maps/content.js";
 import {
   OBJECTIVES_MAX_OUTPUT_TOKENS as GENERATED_OBJECTIVES_MAX_OUTPUT_TOKENS,
@@ -70,6 +70,8 @@ interface Node {
   /** 根拠の要約（AI へ渡す材料）。 */
   evidence: { kind: RepoMapNodeSource["kind"]; ref: string; text: string }[];
   sources: Omit<RepoMapNodeSource, "conceptId">[];
+  /** 種類（#322）。利用者が直したものを先に、無ければ AI の提案。 */
+  nodeKind?: RepoMapNodeKind | null;
 }
 
 function buildTreePrompt(nodes: readonly Node[], summaryBytes: number): string {
@@ -204,7 +206,12 @@ export async function confirmDraft(
 
   // 選んだ候補（この下書きにあるものだけ。重複なし）。
   const byId = new Map(candidates.items.map((c) => [c.id, c]));
-  const picked: { candidate: CandidateState; label: string; summary: string }[] = [];
+  const picked: {
+    candidate: CandidateState;
+    label: string;
+    summary: string;
+    kind: RepoMapNodeKind | null;
+  }[] = [];
   const seen = new Set<string>();
   for (const item of input.accepted) {
     const candidate = byId.get(item.id);
@@ -236,7 +243,9 @@ export async function confirmDraft(
         { id: item.id },
       );
     }
-    picked.push({ candidate, label, summary });
+    // 利用者が直した種類を先に（`null` は「種類なし」に直したという意味）。省けば AI の提案。
+    const kind = item.kind !== undefined ? item.kind : (candidate.kind ?? null);
+    picked.push({ candidate, label, summary, kind });
   }
   if (picked.length < 1 || picked.length > MAX_GENERATED_NODES) {
     throw new RepoMapRefusal(
@@ -325,6 +334,7 @@ export async function confirmDraft(
       summary: p.summary,
       evidence: evidence.slice(0, EVIDENCE_PER_NODE),
       sources,
+      nodeKind: p.kind,
     };
   });
   // key は確定の内側で振り直す（候補の ID とは別。木の応答の検証で使う）。
@@ -499,8 +509,10 @@ export async function confirmDraft(
     }
     const objectives: StoredLearningObjective[] = [];
     const nodeSources: RepoMapNodeSource[] = [];
+    const nodeKinds: { conceptId: string; kind: RepoMapNodeKind }[] = [];
     for (const n of ordered) {
       const conceptId = resolved.assigned[`new:${n.key}`]!;
+      if (n.nodeKind != null) nodeKinds.push({ conceptId, kind: n.nodeKind });
       const used = new Set<string>();
       for (const label of objectivesByKey.get(n.key) ?? []) {
         let id = `${conceptId}:${newKey()}`;
@@ -522,6 +534,7 @@ export async function confirmDraft(
           url: repoUrl({ owner: draft.repoOwner, name: draft.repoName }),
           commitSha: draft.commitSha,
           nodeSources,
+          nodeKinds,
         },
         nowIso: stageNow,
         nowMs: now.getTime(),

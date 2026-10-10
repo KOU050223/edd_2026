@@ -19,6 +19,28 @@ import {
   MAX_NODE_SUMMARY_LENGTH,
 } from "./learning-maps.js";
 
+/**
+ * ノードの「種類」（#322）。リポジトリから作ったマップだけが持つ。色分けと凡例に使う。
+ * 当てはまらない・AI が返さない・知らない値は `null`（種類なし）にする。
+ */
+export const REPO_MAP_NODE_KINDS = ["core", "event", "state", "record", "system"] as const;
+export type RepoMapNodeKind = (typeof REPO_MAP_NODE_KINDS)[number];
+
+export const REPO_MAP_NODE_KIND_LABELS: Record<RepoMapNodeKind, string> = {
+  core: "中心の概念",
+  event: "出来事・操作",
+  state: "状態・指標",
+  record: "記録・データ",
+  system: "仕組み・外部",
+};
+
+/** 外から来た値（AI の応答など）を種類にする。知らない値は `null`。 */
+export function normalizeNodeKind(value: unknown): RepoMapNodeKind | null {
+  return typeof value === "string" && (REPO_MAP_NODE_KINDS as readonly string[]).includes(value)
+    ? (value as RepoMapNodeKind)
+    : null;
+}
+
 /** リポジトリからのマップの回数の上限（プランごと）。正本は docs/ai-limits.md。 */
 export interface RepoMapLimits {
   /** 暦月（UTC）に作れる下書き（マップ）の数。作った時点で数える。 */
@@ -193,6 +215,8 @@ export interface RepoMapCandidateView {
   fromSchema: boolean;
   /** 文書・コードには無く、データの形にだけある名前（機械で足した候補）。 */
   schemaOnly: boolean;
+  /** AI が提案した種類（#322）。無い・当てはまらないときは `null`。古い下書きでは省かれる。 */
+  kind?: RepoMapNodeKind | null;
 }
 
 export interface RepoMapCandidatesView {
@@ -241,6 +265,8 @@ export const confirmRepoMapDraftSchema = v.strictObject({
         description: v.optional(
           v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(MAX_NODE_SUMMARY_LENGTH)),
         ),
+        // 候補の種類を直したとき。`null` は「種類なし」にする。省くと候補のまま。
+        kind: v.optional(v.nullable(v.picklist(REPO_MAP_NODE_KINDS))),
       }),
     ),
     v.minLength(1),
@@ -254,6 +280,8 @@ export interface RepoMapSourcesResponse {
   repo: { url: string; commitSha: string };
   nodes: {
     conceptId: string;
+    /** ノードの種類（#322）。種類なし・古いマップは `null`。 */
+    kind: RepoMapNodeKind | null;
     sources: {
       kind: "doc" | "glossary" | "code" | "issue" | "schema";
       /** ファイルのパス。Issue は null。 */

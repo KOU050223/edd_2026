@@ -10,7 +10,12 @@
  */
 
 import { utcDayKey, utcMonthKey } from "../contract/ai-usage.js";
-import { REPO_MAP_LIMITS, type RepoMapDraftView } from "../contract/repo-maps.js";
+import {
+  normalizeNodeKind,
+  REPO_MAP_LIMITS,
+  type RepoMapDraftView,
+  type RepoMapNodeKind,
+} from "../contract/repo-maps.js";
 import { AI_USAGE_LIMITS } from "../contract/ai-usage.js";
 import { AiSession, AiStageFailure, MAX_AI_CALLS_PER_DRAFT } from "./ai.js";
 import {
@@ -75,6 +80,8 @@ interface RawCandidate {
   original: string;
   description: string;
   evidence: string[];
+  /** 種類（#322）。無い・知らない値は `null`（応答を断らない）。 */
+  kind: RepoMapNodeKind | null;
 }
 
 /** 応答の形を確かめる。1 件でも形が違えば受理しない（取れた分だけ使わない）。 */
@@ -101,6 +108,7 @@ function parseCandidates(value: unknown): RawCandidate[] {
       original: typeof o.original === "string" ? o.original.trim() : "",
       description: o.description.trim(),
       evidence: [...new Set(o.evidence as string[])],
+      kind: normalizeNodeKind(o.kind),
     };
   });
 }
@@ -339,6 +347,7 @@ export async function buildCandidates(
         evidence,
         fromSchema,
         schemaOnly: false,
+        kind: c.kind,
       });
       if (items.length >= MAX_CANDIDATES) break;
     }
@@ -360,6 +369,7 @@ export async function buildCandidates(
         evidence: [s.id],
         fromSchema: true,
         schemaOnly: true,
+        kind: null,
       });
     }
 

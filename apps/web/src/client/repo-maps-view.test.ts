@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   arrangeCandidates,
+  asNodeKind,
+  buildConfirmRequest,
   checkHintFiles,
   evidenceCounts,
   filterFileOptions,
   groupByEvidenceKind,
+  nodeKindsOf,
   normalizeHintPath,
   parseHintFiles,
   splitPath,
@@ -129,5 +132,44 @@ describe("arrangeCandidates", () => {
         names: { C3: "直した名前" },
       }).map((c) => c.id),
     ).toEqual(["C3"]);
+  });
+});
+
+describe("ノードの種類（#322）", () => {
+  it("知らない値は種類なしにする", () => {
+    expect(asNodeKind("core")).toBe("core");
+    expect(asNodeKind("person")).toBeNull();
+    expect(asNodeKind(undefined)).toBeNull();
+  });
+
+  it("根拠の応答から、種類を持つノードだけを取り出す", () => {
+    const state = {
+      kind: "ok" as const,
+      sources: {
+        repo: { url: "github.com/o/r", commitSha: "abc" },
+        nodes: [
+          { conceptId: "a", kind: "event" as const, sources: [] },
+          { conceptId: "b", kind: null, sources: [] },
+          { conceptId: "c", sources: [] },
+        ],
+      },
+    };
+    expect([...nodeKindsOf(state)]).toEqual([["a", "event"]]);
+    expect(nodeKindsOf({ kind: "none" }).size).toBe(0);
+    expect(nodeKindsOf(undefined).size).toBe(0);
+  });
+
+  it("確定の入力には、直した種類だけを入れる（null は種類なしに直した）", () => {
+    const base = { ...candidate("C1", "a", 1), kind: "core" as const };
+    const other = candidate("C2", "b", 1);
+    const request = buildConfirmRequest(
+      [base, other, candidate("C3", "c", 1)],
+      new Set(["C1", "C2", "C3"]),
+      { C1: { kind: "core" }, C2: { kind: "state" }, C3: { kind: null } },
+      "",
+    );
+    expect(request.accepted).toEqual([{ id: "C1" }, { id: "C2", kind: "state" }, { id: "C3" }]);
+    const cleared = buildConfirmRequest([base], new Set(["C1"]), { C1: { kind: null } }, "");
+    expect(cleared.accepted).toEqual([{ id: "C1", kind: null }]);
   });
 });

@@ -11,6 +11,11 @@ import {
 import { Link, useNavigate, useRouter } from "@tanstack/react-router";
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import {
+  REPO_MAP_NODE_KIND_LABELS,
+  REPO_MAP_NODE_KINDS,
+  type RepoMapNodeKind,
+} from "./repo-maps.js";
+import {
   ApiError,
   createOperationQueue,
   createSubmitGuard,
@@ -368,6 +373,8 @@ export function SkillTree({
   selected,
   onSelect,
   followSelected = false,
+  kinds,
+  focusKind = null,
 }: {
   tree: MapTree;
   /** 見出し。省略すると領域名。手で作ったマップは題名を渡す（#242）。 */
@@ -382,6 +389,13 @@ export function SkillTree({
    * 一覧から選ぶ編集画面（#286）で使う。地図の画面では、押したノードはもう見えているので使わない。
    */
   followSelected?: boolean;
+  /**
+   * ノードの種類（#322。リポジトリから作ったマップだけ）。あれば塗りと種類名で見せる。
+   * 理解度は枠線とバッジのままで、色の意味は割らない。
+   */
+  kinds?: ReadonlyMap<string, RepoMapNodeKind>;
+  /** 凡例で選んだ種類。それ以外のノードを薄くする。 */
+  focusKind?: RepoMapNodeKind | null;
 }) {
   const width = nodeX(tree.depths - 1) + NODE_WIDTH;
   const height = nodeY(tree.rows - 1) + NODE_HEIGHT;
@@ -450,8 +464,11 @@ export function SkillTree({
             const concept = concepts.get(node.conceptId);
             if (!concept) return null;
             const isCurrent = node.conceptId === current;
+            const kind = kinds?.get(node.conceptId);
             const classes = [
               "node",
+              kind !== undefined && `kind-${kind}`,
+              focusKind !== null && kind !== focusKind && "dim",
               isCurrent ? "current" : concept.status,
               next.has(node.conceptId) && "next",
               node.conceptId === selected && "selected",
@@ -464,7 +481,7 @@ export function SkillTree({
                 style={{ left: nodeX(node.depth), top: nodeY(node.row), width: NODE_WIDTH }}
                 title={nameOf(concept)}
                 aria-pressed={node.conceptId === selected}
-                aria-label={`${nameOf(concept)}：${isCurrent ? "現在地・" : ""}${statusLabel[concept.status]}${concept.familiarity ? `・履歴あり ${concept.familiarity.observationCount} 件` : ""}`}
+                aria-label={`${nameOf(concept)}：${kind === undefined ? "" : `${REPO_MAP_NODE_KIND_LABELS[kind]}・`}${isCurrent ? "現在地・" : ""}${statusLabel[concept.status]}${concept.familiarity ? `・履歴あり ${concept.familiarity.observationCount} 件` : ""}`}
                 onClick={() => onSelect(node.conceptId)}
               >
                 <span className="node-name">
@@ -472,6 +489,9 @@ export function SkillTree({
                   {nameOf(concept)}
                 </span>
                 <span className="node-status">
+                  {kind !== undefined && (
+                    <em className="kind-label">{REPO_MAP_NODE_KIND_LABELS[kind]}</em>
+                  )}
                   {isCurrent && <em className="badge">現在地</em>}
                   {statusLabel[concept.status]}
                   {concept.manual && <em className="manual">手動</em>}
@@ -488,6 +508,40 @@ export function SkillTree({
         </div>
       </div>
     </section>
+  );
+}
+
+/**
+ * ノードの種類の凡例（#322）。押すとその種類だけを強調する（もう一度押すと戻す）。
+ * 色だけに頼らず、種類名を文字で出す。マップにある種類だけを並べる。
+ */
+export function KindLegend({
+  kinds,
+  focus,
+  onFocus,
+}: {
+  kinds: ReadonlyMap<string, RepoMapNodeKind>;
+  focus: RepoMapNodeKind | null;
+  onFocus: (kind: RepoMapNodeKind | null) => void;
+}) {
+  const counts = new Map<RepoMapNodeKind, number>();
+  for (const kind of kinds.values()) counts.set(kind, (counts.get(kind) ?? 0) + 1);
+  if (counts.size === 0) return null;
+  return (
+    <ul className="kind-legend" aria-label="ノードの種類">
+      {REPO_MAP_NODE_KINDS.filter((kind) => counts.has(kind)).map((kind) => (
+        <li key={kind}>
+          <button
+            type="button"
+            className={`kind-chip kind-${kind}${focus === kind ? " active" : ""}`}
+            aria-pressed={focus === kind}
+            onClick={() => onFocus(focus === kind ? null : kind)}
+          >
+            {REPO_MAP_NODE_KIND_LABELS[kind]} {counts.get(kind)}
+          </button>
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -540,6 +594,7 @@ export function ConceptDetail({
   onSelect,
   panel,
   evidence,
+  kind,
 }: {
   concept: OverlaidConcept;
   /** 概要。定義に無ければ出さない。 */
@@ -565,6 +620,8 @@ export function ConceptDetail({
   panel: RefObject<HTMLElement | null>;
   /** 右パネルの最後に出す根拠（リポジトリから作ったマップだけ。#322）。 */
   evidence?: ReactNode;
+  /** ノードの種類（#322）。 */
+  kind?: RepoMapNodeKind;
 }) {
   // 手動修正は status だけを変えるので、項目の割合は自動算出のまま見せる。
   const objectives = objectiveProgress(definedObjectives, {
@@ -579,6 +636,9 @@ export function ConceptDetail({
           {isCurrent && <em className="badge">現在地</em>}
           <span className={`status ${concept.status}`}>{statusLabel[concept.status]}</span>
           {concept.manual && <em className="manual">手動</em>}
+          {kind !== undefined && (
+            <span className={`kind-chip kind-${kind}`}>{REPO_MAP_NODE_KIND_LABELS[kind]}</span>
+          )}
         </p>
       </header>
       {note && <p className="muted">{note}</p>}
