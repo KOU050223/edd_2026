@@ -24,6 +24,10 @@ import {
 } from "../contract/learning-maps.js";
 import type { ConfirmRepoMapDraftInput } from "../contract/repo-maps.js";
 import { newMapId, resolveMapContent } from "../maps/content.js";
+import {
+  OBJECTIVES_MAX_OUTPUT_TOKENS as GENERATED_OBJECTIVES_MAX_OUTPUT_TOKENS,
+  OBJECTIVES_NODES_PER_REQUEST,
+} from "../maps/generate.js";
 import { parseObjectives } from "../maps/generation-response.js";
 import type { RepoMapNodeSource, StoredLearningObjective } from "../repository/types.js";
 import { AiSession, AiStageFailure, MAX_AI_CALLS_PER_DRAFT } from "./ai.js";
@@ -44,7 +48,7 @@ import { repoUrl } from "./url.js";
 export const TREE_MAX_OUTPUT_TOKENS = 2_048;
 export const TREE_THINKING_BUDGET = 256;
 /** 「理解すること」の 1 回の出力上限・思考の上限。 */
-export const OBJECTIVES_MAX_OUTPUT_TOKENS = 3_072;
+export const OBJECTIVES_MAX_OUTPUT_TOKENS = GENERATED_OBJECTIVES_MAX_OUTPUT_TOKENS;
 export const OBJECTIVES_THINKING_BUDGET = 256;
 /** 1 つのノードに渡す根拠の要約の長さ（バイト）と、1 ノードあたりの根拠の数。 */
 const EVIDENCE_TEXT_BYTES = 240;
@@ -155,7 +159,11 @@ export function planObjectiveBatches(
   let current: Node[] = [];
   for (const node of nodes) {
     const trial = [...current, node];
-    if (byteLength(buildObjectivesPrompt(title, trial)) <= limit) {
+    // 1 回に頼むノードは 10 まで（#243 と同じ）。入力が小さくても、出力が上限を超えて切れない。
+    if (
+      trial.length <= OBJECTIVES_NODES_PER_REQUEST &&
+      byteLength(buildObjectivesPrompt(title, trial)) <= limit
+    ) {
       current = trial;
       continue;
     }
@@ -217,11 +225,18 @@ export async function confirmDraft(
       candidate.original !== "" && !label.includes(candidate.original)
         ? `${description}（原文: ${candidate.original}）`
         : description;
-    picked.push({
-      candidate,
-      label: headBytesChars(label, MAX_NODE_LABEL_LENGTH),
-      summary: headBytesChars(summary, MAX_NODE_SUMMARY_LENGTH),
-    });
+    // 黙って切らない。見えたものがそのまま保存される長さかを確かめる。
+    if (
+      [...label].length > MAX_NODE_LABEL_LENGTH ||
+      [...summary].length > MAX_NODE_SUMMARY_LENGTH
+    ) {
+      throw new RepoMapRefusal(
+        "invalid_target",
+        `${item.id} の表示名は ${String(MAX_NODE_LABEL_LENGTH)} 文字、説明（原文の名前を含む）は ${String(MAX_NODE_SUMMARY_LENGTH)} 文字までです。`,
+        { id: item.id },
+      );
+    }
+    picked.push({ candidate, label, summary });
   }
   if (picked.length < 1 || picked.length > MAX_GENERATED_NODES) {
     throw new RepoMapRefusal(
@@ -292,7 +307,9 @@ export async function confirmDraft(
         });
       } else if (schema !== undefined) {
         const text = `データの形に現れる名前: ${schema.names.join(", ")}`;
-        evidence.push({ kind: "schema", ref: schema.path, text });
+        // データの形の名前は、文書が薄いときだけ AI へ渡す（docs/data-privacy.md）。
+        // 根拠としては常に保存する（画面でリンクを見せる）。
+        if (candidates.thin) evidence.push({ kind: "schema", ref: schema.path, text });
         sources.push({
           position: sources.length,
           kind: "schema",
@@ -311,10 +328,14 @@ export async function confirmDraft(
     };
   });
   // key は確定の内側で振り直す（候補の ID とは別。木の応答の検証で使う）。
-  const title = headBytesChars(
-    (input.title ?? `${draft.repoName} のドメイン知識`).trim(),
-    MAX_MAP_TITLE_LENGTH,
-  );
+  const title = (input.title ?? `${draft.repoName} のドメイン知識`).trim();
+  if ([...title].length > MAX_MAP_TITLE_LENGTH) {
+    throw new RepoMapRefusal(
+      "invalid_target",
+      `題名は ${String(MAX_MAP_TITLE_LENGTH)} 文字までです。`,
+      {},
+    );
+  }
 
   // 段の占有。同じ下書きの段を同時に走らせない。
   const claim = `claim:${String(now.getTime()).padStart(13, "0")}:${deps.newId()}`;
@@ -494,14 +515,20 @@ export async function confirmDraft(
   if (!marked) {
     console.error("repo map draft was not marked as confirmed", { draftId, mapId });
   }
-  await deps.drafts.delete(userId, draftId).catch((deleteError: unknown) => {
-    console.error("failed to delete a confirmed repo map draft", { draftId, mapId, deleteError });
-  });
+  // 材料・要約・候補は消し、確定のマップの ID だけを期限まで残す（確定の応答を取り損ねても、
+  // もう一度呼べば同じマップの ID が返る。下書きの一覧には出ない）。
+  await deps.drafts
+    .update(userId, draftId, {
+      status: "candidates",
+      stageState: "{}",
+      stageStateVersion: draft.stageStateVersion,
+      failedStage: null,
+      failureCode: null,
+      updatedAt: stageNow,
+      claim,
+    })
+    .catch((updateError: unknown) => {
+      console.error("failed to clear a confirmed repo map draft", { draftId, mapId, updateError });
+    });
   return { mapId };
-}
-
-/** 文字数（コード単位ではなく文字）で切る。ノードの表示名・概要の上限は文字数。 */
-function headBytesChars(text: string, maxChars: number): string {
-  const chars = [...text];
-  return chars.length <= maxChars ? text : chars.slice(0, maxChars).join("");
 }

@@ -8,6 +8,7 @@ import type {
   ConfirmRepoMapDraftResponse,
   CreateRepoMapDraftResponse,
   RepoMapDraftView,
+  RepoMapSourcesResponse,
 } from "../contract/repo-maps.js";
 import {
   createInMemoryRepositoryStore,
@@ -58,6 +59,7 @@ let prompts: string[];
 let treeResponse: (keys: string[]) => unknown;
 let objectivesResponse: (keys: string[]) => unknown;
 let candidateItems: unknown[];
+let tree: TreeEntry[];
 let seq: number;
 let keySeq: number;
 
@@ -90,7 +92,7 @@ function ai(prompt: string): Response {
 const github = (): GitHubClient => ({
   getRepo: () => Promise.resolve({ owner: "Owner", name: "Repo", defaultBranch: "main" }),
   getHeadSha: () => Promise.resolve(SHA),
-  getTree: () => Promise.resolve(TREE),
+  getTree: () => Promise.resolve(tree),
   getBlobText: (_r, sha, max) => {
     const body = BODIES[sha];
     if (body === undefined) return Promise.reject(new GitHubError("not-found", sha));
@@ -162,6 +164,7 @@ beforeEach(async () => {
     await consents.put(u, { version: MAP_GENERATION_CONSENT_VERSION, grantedAt: "t" } as never);
   }
   prompts = [];
+  tree = TREE;
   seq = 0;
   keySeq = 0;
   candidateItems = [
@@ -222,8 +225,19 @@ describe("POST /v1/repo-map-drafts/:id/confirm", () => {
       ]),
     );
     expect(orderSources.every((s) => s.summary !== "")).toBe(true);
-    // 下書きは消える。
-    expect(await drafts.get("user-a", draft.id)).toBeNull();
+    // 下書きは材料を消して、確定のマップの ID だけを残す（一覧には出ない）。
+    const kept = await drafts.get("user-a", draft.id);
+    expect(kept).toMatchObject({ confirmedMapId: mapId, stageState: "{}" });
+    const list = await call("GET", "/v1/repo-map-drafts");
+    expect(((await list.json()) as { drafts: unknown[] }).drafts).toEqual([]);
+    const again = await call("GET", `/v1/repo-map-drafts/${draft.id}`);
+    expect(((await again.json()) as RepoMapDraftView).confirmedMapId).toBe(mapId);
+    // 応答を取り損ねても、もう一度呼べば同じマップの ID が返る（AI を呼ばない）。
+    prompts.length = 0;
+    const retry = await confirm(draft.id, { accepted: ids.map((id) => ({ id })) });
+    expect(((await retry.json()) as ConfirmRepoMapDraftResponse).mapId).toBe(mapId);
+    expect(prompts).toHaveLength(0);
+    expect(await maps.listByOwner("user-a")).toHaveLength(1);
     // 呼び出しは記録に残る（木 1 回 + 理解すること）。
     expect(drafts.aiCallRows.filter((r) => r.call.stage === "tree")).toHaveLength(1);
     expect(drafts.aiCallRows.filter((r) => r.call.stage === "objectives").length).toBeGreaterThan(
@@ -324,7 +338,7 @@ describe("POST /v1/repo-map-drafts/:id/confirm", () => {
   it("後始末（下書きの削除）に失敗しても確定は成功し、もう一度呼んでも二重に作らない", async () => {
     const draft = await candidatesDraft();
     const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    vi.spyOn(drafts, "delete").mockRejectedValueOnce(new Error("transient"));
+    vi.spyOn(drafts, "update").mockRejectedValueOnce(new Error("transient"));
     const first = await confirm(draft.id, { accepted: [{ id: "C1" }] });
     expect(first.status).toBe(201);
     const second = await confirm(draft.id, { accepted: [{ id: "C1" }] });
@@ -344,6 +358,90 @@ describe("POST /v1/repo-map-drafts/:id/confirm", () => {
     ]);
     expect([a.status, b.status].sort()).toEqual([201, 409]);
     expect(await maps.listByOwner("user-a")).toHaveLength(1);
+  });
+
+  it("データの形の名前は、文書が十分なら AI へ渡さず、薄ければ渡す。根拠としては常に保存する", async () => {
+    const draft = await candidatesDraft();
+    expect(draft.candidates!.thin).toBe(false);
+    prompts.length = 0;
+    const res = await confirm(draft.id, { accepted: [{ id: "C1" }, { id: "C2" }] });
+    expect(res.status).toBe(201);
+    const sent = prompts.filter((p) => p.includes("「理解すること」を作ってください"));
+    expect(sent.length).toBeGreaterThan(0);
+    for (const p of sent) expect(p).not.toContain("customers");
+    // 根拠としては保存している（画面でリンクを見せる）。
+    const mapId = ((await res.json()) as ConfirmRepoMapDraftResponse).mapId;
+    const source = await maps.getRepoSource("user-a", mapId);
+    expect(source!.nodeSources.some((s) => s.kind === "schema" && s.path === "db/schema.rb")).toBe(
+      true,
+    );
+  });
+
+  it("文書が薄いときは、データの形の名前を「理解すること」の材料にも渡す", async () => {
+    tree = [blob("README.md", 120), ...TREE.slice(2)];
+    const draft = await candidatesDraft();
+    expect(draft.candidates!.thin).toBe(true);
+    prompts.length = 0;
+    expect((await confirm(draft.id, { accepted: [{ id: "C1" }] })).status).toBe(201);
+    const sent = prompts.filter((p) => p.includes("「理解すること」を作ってください"));
+    expect(sent.some((p) => p.includes("customers"))).toBe(true);
+  });
+
+  it("1 回に頼むノードは 10 まで。根拠が短くても、まとめすぎない", async () => {
+    candidateItems = Array.from({ length: 20 }, (_, i) => ({
+      name: `語${String(i + 1)}`,
+      original: "",
+      description: "短い",
+      evidence: ["E1"],
+    }));
+    const draft = await candidatesDraft();
+    const ids = draft.candidates!.items.filter((c) => !c.schemaOnly).map((c) => c.id);
+    prompts.length = 0;
+    expect((await confirm(draft.id, { accepted: ids.map((id) => ({ id })) })).status).toBe(201);
+    for (const p of prompts.filter((p) => p.includes("「理解すること」を作ってください"))) {
+      expect(keysIn(p).length).toBeLessThanOrEqual(10);
+    }
+  });
+
+  it("保存できる長さを超える題名・表示名・説明は、切らずに 400", async () => {
+    const draft = await candidatesDraft();
+    expect(
+      (await confirm(draft.id, { title: "あ".repeat(81), accepted: [{ id: "C1" }] })).status,
+    ).toBe(400);
+    expect(
+      (await confirm(draft.id, { accepted: [{ id: "C1", name: "あ".repeat(41) }] })).status,
+    ).toBe(400);
+    expect(
+      (await confirm(draft.id, { accepted: [{ id: "C1", description: "あ".repeat(201) }] })).status,
+    ).toBe(400);
+    // 説明 + 「（原文: Order）」が 200 を超えるものも、切らずに断る。
+    expect(
+      (await confirm(draft.id, { accepted: [{ id: "C1", description: "あ".repeat(195) }] })).status,
+    ).toBe(400);
+    expect(await maps.listByOwner("user-a")).toHaveLength(0);
+    expect(prompts.filter((p) => p.includes("学ぶ順に並べ"))).toHaveLength(0);
+  });
+
+  it("作ったマップの根拠を、パスとリンクつきで読める。他人・手で作ったマップは 404", async () => {
+    const draft = await candidatesDraft();
+    const res = await confirm(draft.id, { accepted: [{ id: "C1" }, { id: "C2" }] });
+    const mapId = ((await res.json()) as ConfirmRepoMapDraftResponse).mapId;
+    const sources = await call("GET", `/v1/repo-maps/${mapId}/sources`);
+    expect(sources.status).toBe(200);
+    const body = (await sources.json()) as RepoMapSourcesResponse;
+    expect(body.repo).toEqual({ url: "github.com/Owner/Repo", commitSha: SHA });
+    const all = body.nodes.flatMap((n) => n.sources);
+    expect(all).toContainEqual(
+      expect.objectContaining({
+        kind: "doc",
+        path: "README.md",
+        url: `https://github.com/Owner/Repo/blob/${SHA}/README.md`,
+      }),
+    );
+    expect((await call("GET", `/v1/repo-maps/${mapId}/sources`, undefined, "token-b")).status).toBe(
+      404,
+    );
+    expect((await call("GET", "/v1/repo-maps/mzzzzzzzz/sources")).status).toBe(404);
   });
 
   it("ノードが多くても、1 回の入力の上限（6,000 バイト）に収め、全ノードに項目を作る", async () => {

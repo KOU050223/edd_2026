@@ -269,7 +269,7 @@ export class InMemoryRepoMapDraftRepository implements RepoMapDraftRepository {
 
   list(userId: string, nowIso: string): Promise<StoredRepoMapDraft[]> {
     const out = [...this.drafts.values()]
-      .filter((d) => d.userId === userId && d.expiresAt > nowIso)
+      .filter((d) => d.userId === userId && d.expiresAt > nowIso && d.confirmedMapId === null)
       .sort((a, b) =>
         a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : a.id.localeCompare(b.id),
       );

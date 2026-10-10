@@ -344,6 +344,38 @@ export function parseState(draft: StoredRepoMapDraft): FetchedState {
 }
 
 function toView(draft: StoredRepoMapDraft): RepoMapDraftView {
+  // 確定済みの下書きは、材料を消して、マップの ID だけを持つ。
+  if (draft.confirmedMapId !== null) {
+    const ref = { owner: draft.repoOwner, name: draft.repoName };
+    return {
+      id: draft.id,
+      repo: {
+        owner: ref.owner,
+        name: ref.name,
+        url: repoUrl(ref),
+        defaultBranch: draft.defaultBranch,
+        commitSha: draft.commitSha,
+      },
+      status: draft.status,
+      targets: { folders: draft.targetFolders, files: draft.hintFiles, issues: draft.hintIssues },
+      monorepo: null,
+      scan: { blobTotal: 0, kept: {}, dropped: {} },
+      listing: "",
+      issues: [],
+      summary: null,
+      candidates: null,
+      confirmedMapId: draft.confirmedMapId,
+      partial: false,
+      ai: {
+        calls: draft.aiCalls,
+        inputTokens: draft.inputTokens,
+        outputTokens: draft.outputTokens,
+      },
+      failure: null,
+      createdAt: draft.createdAt,
+      expiresAt: draft.expiresAt,
+    };
+  }
   const state = parseState(draft);
   const ref = { owner: draft.repoOwner, name: draft.repoName };
   const summary = state.summary;
@@ -385,6 +417,7 @@ function toView(draft: StoredRepoMapDraft): RepoMapDraftView {
             docChars: summary.docChars,
           },
     candidates: candidatesView(state, draft),
+    confirmedMapId: null,
     // 外部呼び出しの上限で止まり、続きから再開できる（もう一度呼べば進む）。
     partial: draft.status === "fetched" && state.progress !== undefined && summary === undefined,
     ai: {

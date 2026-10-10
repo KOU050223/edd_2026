@@ -13,6 +13,11 @@
 
 import * as v from "valibot";
 import type { Plan } from "./ai-usage.js";
+import {
+  MAX_MAP_TITLE_LENGTH,
+  MAX_NODE_LABEL_LENGTH,
+  MAX_NODE_SUMMARY_LENGTH,
+} from "./learning-maps.js";
 
 /** リポジトリからのマップの回数の上限（プランごと）。正本は docs/ai-limits.md。 */
 export interface RepoMapLimits {
@@ -207,13 +212,20 @@ export type RebuildRepoMapDraftInput = v.InferOutput<typeof rebuildRepoMapDraftS
  */
 export const confirmRepoMapDraftSchema = v.strictObject({
   consentVersion: v.optional(v.pipe(v.number(), v.integer())),
-  title: v.optional(v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(200))),
+  // 保存できる長さまで。超えるものは黙って切らず、400 にする（見えたものがそのまま保存される）。
+  title: v.optional(
+    v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(MAX_MAP_TITLE_LENGTH)),
+  ),
   accepted: v.pipe(
     v.array(
       v.strictObject({
         id: v.pipe(v.string(), v.regex(/^C[0-9]{1,3}$/)),
-        name: v.optional(v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(200))),
-        description: v.optional(v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(400))),
+        name: v.optional(
+          v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(MAX_NODE_LABEL_LENGTH)),
+        ),
+        description: v.optional(
+          v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(MAX_NODE_SUMMARY_LENGTH)),
+        ),
       }),
     ),
     v.minLength(1),
@@ -221,6 +233,23 @@ export const confirmRepoMapDraftSchema = v.strictObject({
   ),
 });
 export type ConfirmRepoMapDraftInput = v.InferOutput<typeof confirmRepoMapDraftSchema>;
+
+/** `GET /v1/repo-maps/:mapId/sources` の応答。リポジトリから作ったマップの根拠。 */
+export interface RepoMapSourcesResponse {
+  repo: { url: string; commitSha: string };
+  nodes: {
+    conceptId: string;
+    sources: {
+      kind: "doc" | "glossary" | "code" | "issue" | "schema";
+      /** ファイルのパス。Issue は null。 */
+      path: string | null;
+      issueNumber: number | null;
+      /** commit SHA で固定したリンク（Issue は番号のリンク）。 */
+      url: string;
+      summary: string;
+    }[];
+  }[];
+}
 
 export interface ConfirmRepoMapDraftResponse {
   /** 作った学習マップの ID（`GET /v1/learning-maps/:id`）。 */
@@ -248,6 +277,8 @@ export interface RepoMapDraftView {
   summary: RepoMapSummaryView | null;
   /** 候補の段が終わっていれば、その結果。 */
   candidates: RepoMapCandidatesView | null;
+  /** 確定して作ったマップ。確定済みの下書きは、材料を持たず、この ID だけを持つ。 */
+  confirmedMapId: string | null;
   /** 要約の段が途中で止まっている。もう一度 summarize を呼ぶと続きから進む。 */
   partial: boolean;
   ai: RepoMapAiUsageView;

@@ -510,7 +510,7 @@ export class D1RepoMapDraftRepository implements RepoMapDraftRepository {
     const { results } = await this.db
       .prepare(
         `SELECT ${DRAFT_COLUMNS}${DRAFT_SELECT_COLUMNS_SUFFIX} FROM repo_map_drafts
-         WHERE user_id = ? AND expires_at > ?
+         WHERE user_id = ? AND expires_at > ? AND confirmed_map_id IS NULL
          ORDER BY updated_at DESC, id`,
       )
       .bind(userId, nowIso)
