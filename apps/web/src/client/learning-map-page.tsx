@@ -387,7 +387,10 @@ export function LearningMapPage({
 
   // マップの中の選択は同じ画面のまま。前提・次の Concept もこのマップのノードなので、ここで選ぶ。
   const kinds = nodeKindsOf(sources);
-  const [focusKind, setFocusKind] = useState<RepoMapNodeKind | null>(null);
+  const [pickedKind, setFocusKind] = useState<RepoMapNodeKind | null>(null);
+  // 別のマップへ移ったとき、前のマップで選んだ種類がこのマップに無ければ、強調しない（全部が薄くならない）。
+  const focusKind =
+    pickedKind !== null && [...kinds.values()].includes(pickedKind) ? pickedKind : null;
   const select = (conceptId: string) => {
     if (!inMap.has(conceptId)) {
       goToConcept(conceptId);

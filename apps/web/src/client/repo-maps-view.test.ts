@@ -42,6 +42,24 @@ describe("normalizeHintPath", () => {
     expect(normalizeHintPath("  docs/a.md  ")).toBe("docs/a.md");
   });
 
+  it("ブランチ名に / が入る URL は、一覧にあるパスで切れ目を決める", () => {
+    const known = new Set(["docs/guide.md"]);
+    expect(normalizeHintPath("https://github.com/o/r/blob/release/2026/docs/guide.md", known)).toBe(
+      "docs/guide.md",
+    );
+    // 一覧が無いときは、ブランチを 1 区切りとして外す。
+    expect(normalizeHintPath("https://github.com/o/r/blob/main/docs/guide.md")).toBe(
+      "docs/guide.md",
+    );
+    expect(normalizeHintPath("https://github.com/o/r/blob/main/docs/guide.md#L3-L9")).toBe(
+      "docs/guide.md",
+    );
+  });
+
+  it("普通のパスの # はファイル名として残す", () => {
+    expect(normalizeHintPath("docs/C#-guide.md")).toBe("docs/C#-guide.md");
+  });
+
   it("parseHintFiles は揃えたうえで重複と空行を除く", () => {
     expect(parseHintFiles("/docs/a.md\n\n./docs/a.md\nREADME.md")).toEqual([
       "docs/a.md",

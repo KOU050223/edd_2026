@@ -34,7 +34,8 @@ export function HintFilePicker({
   disabled: boolean;
 }) {
   const [query, setQuery] = useState("");
-  const chosen = parseHintFiles(text);
+  const known = knownPaths === undefined ? undefined : new Set(knownPaths);
+  const chosen = parseHintFiles(text, known);
   // 照合は「指定できるパスの全体」に対して行う。選ぶ用の一覧は一部だけなので、照合には使わない。
   const checks = checkHintFiles(
     chosen,

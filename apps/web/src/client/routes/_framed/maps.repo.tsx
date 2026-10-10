@@ -80,7 +80,10 @@ function RepoMapStartPage() {
       .finally(() => setBusy(undefined));
   };
 
-  const hintFiles = parseHintFiles(filesText);
+  const hintFiles = parseHintFiles(
+    filesText,
+    inspected?.paths === undefined ? undefined : new Set(inspected.paths),
+  );
   const hintIssues = parseHintIssues(issuesText);
   const hintError = validateHints(hintFiles, hintIssues);
   const canCreate =

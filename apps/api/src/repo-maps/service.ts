@@ -353,7 +353,11 @@ const INSPECT_KIND_ORDER = { glossary: 0, doc: 1, schema: 2, code: 3 } as const;
 /** 下見の木から、参考ファイルとして選べる一覧を作る（用語集・文書・データの形・コードの順、浅い順）。 */
 function inspectFiles(analysis: Analysis): Pick<InspectRepoResponse, "files" | "filesTruncated"> {
   const all = analysis.kept
-    .filter((f): f is typeof f & { cls: keyof typeof INSPECT_KIND_ORDER } => f.cls !== "other")
+    // 大きすぎるファイルは、自動では読めても、指定すると API が断る（`validateTargets`）。選ばせない。
+    .filter(
+      (f): f is typeof f & { cls: keyof typeof INSPECT_KIND_ORDER } =>
+        f.cls !== "other" && f.size <= MAX_FILE_BYTES,
+    )
     .map((f) => ({ path: f.path, kind: f.cls }))
     .sort(
       (a, b) =>

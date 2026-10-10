@@ -460,21 +460,31 @@ export function defaultFolderSelection(monorepo: RepoMapWorkspaceFolder[] | null
  * 手で書かれたパスを、リポジトリの中のパスに揃える。先頭の `/`・`./`、GitHub の
  * `https://github.com/owner/repo/blob/ブランチ/` の接頭辞、`#L10` などの行の指定を取る。
  */
-export function normalizeHintPath(raw: string): string {
+export function normalizeHintPath(raw: string, known?: ReadonlySet<string>): string {
   let path = raw.trim();
-  path = path.replace(/^https?:\/\/github\.com\/[^/]+\/[^/]+\/(?:blob|tree)\/[^/]+\//, "");
-  path = path.replace(/[#?].*$/, "");
-  path = path.replace(/^(?:\.\/|\/)+/, "");
-  return path;
+  const url = /^https?:\/\/github\.com\/[^/]+\/[^/]+\/(?:blob|tree)\/(.+)$/.exec(path);
+  if (url?.[1] !== undefined) {
+    // URL のときだけ、行の指定（`#L10`・`#L10-L20`）と問い合わせを取る。
+    // 普通のパスの `#` は、ファイル名の一部かもしれないので残す。
+    const rest = url[1].replace(/#L\d+(?:-L?\d+)?$/, "").replace(/\?.*$/, "");
+    const segments = rest.split("/");
+    // ブランチ名に `/` が入る（`release/2026`）ので、一覧にあるパスで切れ目を決める。
+    // 一覧が無い、または一致しないときは、ブランチを 1 区切りとして外す。
+    const cut = known
+      ? segments.findIndex((_, i) => i > 0 && known.has(segments.slice(i).join("/")))
+      : -1;
+    path = segments.slice(cut > 0 ? cut : 1).join("/");
+  }
+  return path.replace(/^(?:\.\/|\/)+/, "");
 }
 
 /** 入力欄の文字列を、ファイルのパスの一覧にする。空行は除き、重複は 1 つにする。 */
-export function parseHintFiles(text: string): string[] {
+export function parseHintFiles(text: string, known?: ReadonlySet<string>): string[] {
   return [
     ...new Set(
       text
         .split("\n")
-        .map(normalizeHintPath)
+        .map((line) => normalizeHintPath(line, known))
         .filter((line) => line !== ""),
     ),
   ];
