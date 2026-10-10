@@ -93,6 +93,18 @@ export interface RepoMapDraftRepository {
   list(userId: string, nowIso: string): Promise<StoredRepoMapDraft[]>;
 
   /**
+   * 作り直しの回数（UTC の日）を 1 つ確保する。月の枠には数えない。確保できなければ加算しない。
+   * 行が無い月でも作る（作った月と違う月に作り直すことがある）。
+   */
+  reserveRebuild(params: {
+    userId: string;
+    monthKey: string;
+    dayKey: string;
+    updatedAt: string;
+    limit: number;
+  }): Promise<{ reserved: boolean; usage: RepoMapUsage }>;
+
+  /**
    * 段を占有する。同じ下書きの段を同時に 2 つ走らせない（両方が AI を呼び、後の失敗が先の成功を
    * 上書きするのを防ぐ。PR #314 のレビュー）。`fetched`・`failed` の下書きで、別の占有が無いか、
    * 占有が `leaseMs` より古いときだけ取れる。占有は `failure_code` に `claim:<時刻>:<トークン>` で置く。
@@ -104,6 +116,8 @@ export interface RepoMapDraftRepository {
     claim: string;
     nowMs: number;
     leaseMs: number;
+    /** 占有できる状態。段ごとに違う（要約は `fetched`・`failed`、候補は `summarized` など）。 */
+    statuses: readonly DraftStatus[];
   }): Promise<boolean>;
 
   /** 段の結果を書く。持ち主の下書きでなければ false。 */

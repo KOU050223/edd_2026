@@ -154,6 +154,53 @@ export interface RepoMapAiUsageView {
   outputTokens: number;
 }
 
+/** 用語の候補 1 件。根拠は材料の ID で持ち、パスは機械で戻して返す。 */
+export interface RepoMapCandidateView {
+  id: string;
+  /** 日本語の表示名。 */
+  name: string;
+  /** 原文の名前（無ければ空）。画面では「注文（`Order`）」のように見せる。 */
+  original: string;
+  description: string;
+  /** 根拠。要約した材料・データの形のファイルへのリンク（commit SHA で固定）。 */
+  evidence: {
+    id: string;
+    kind: "glossary" | "doc" | "code" | "issue" | "schema";
+    ref: string;
+    url: string;
+  }[];
+  /** データの形にも現れる。AI の自己申告ではなく、名前のつき合わせで機械が付ける。 */
+  fromSchema: boolean;
+  /** 文書・コードには無く、データの形にだけある名前（機械で足した候補）。 */
+  schemaOnly: boolean;
+}
+
+export interface RepoMapCandidatesView {
+  items: RepoMapCandidateView[];
+  /** 文書が薄い（用語集・README・docs の合計が小さい）。データの形とコードを主の材料にした。 */
+  thin: boolean;
+  /** 作り直しで外した材料の ID。 */
+  excluded: string[];
+}
+
+/** `POST /v1/repo-map-drafts/:id/candidates` が受け取るもの。 */
+export const candidatesRepoMapDraftSchema = v.strictObject({
+  consentVersion: v.optional(v.pipe(v.number(), v.integer())),
+});
+
+/**
+ * `POST /v1/repo-map-drafts/:id/rebuild` が受け取るもの。外す材料の ID（`E1`・`S1` など）を指定して、
+ * 候補だけを作り直す。要約はやり直さない（1 日 5 回までで、月の枠には数えない）。
+ */
+export const rebuildRepoMapDraftSchema = v.strictObject({
+  consentVersion: v.optional(v.pipe(v.number(), v.integer())),
+  excludeIds: v.optional(
+    v.pipe(v.array(v.pipe(v.string(), v.regex(/^[ES][0-9]{1,3}$/))), v.maxLength(30)),
+    [],
+  ),
+});
+export type RebuildRepoMapDraftInput = v.InferOutput<typeof rebuildRepoMapDraftSchema>;
+
 /** `POST /v1/repo-map-drafts/:id/summarize` が受け取るもの。 */
 export const summarizeRepoMapDraftSchema = v.strictObject({
   consentVersion: v.optional(v.pipe(v.number(), v.integer())),
@@ -173,6 +220,8 @@ export interface RepoMapDraftView {
   issues: { number: number; title: string }[];
   /** 要約の段が終わっていれば、その結果。 */
   summary: RepoMapSummaryView | null;
+  /** 候補の段が終わっていれば、その結果。 */
+  candidates: RepoMapCandidatesView | null;
   /** 要約の段が途中で止まっている。もう一度 summarize を呼ぶと続きから進む。 */
   partial: boolean;
   ai: RepoMapAiUsageView;

@@ -25,6 +25,8 @@
     // リポジトリからのマップの要約・選択（#249）で順に試すモデル。短い出力なので安いモデルを先にする。
     // 空なら CHECK_MODELS と同じ。どれも ALLOWED_MODELS に入っていること。
     "REPO_MAP_SUMMARY_MODELS": "gemini-3.5-flash-lite,gemini-3.8-flash",
+    // 候補（用語の抽出）の段で順に試すモデル。空なら CHECK_MODELS と同じ。ALLOWED_MODELS に入っていること。
+    "REPO_MAP_CANDIDATE_MODELS": "gemini-3.8-flash,gemini-3.5-flash-lite",
     // テスト中だけ、確認問題の生成の回数上限（日 15・月 150）を外す。
     // 確認問題の実装が終わったらこの行を消して上限を戻す（#255）。"off" 以外・未設定なら上限が効く。
     "CHECK_GENERATION_LIMITS": "off",

@@ -68,6 +68,39 @@ export function buildSummaryPrompt(role: SummaryRole, label: string, text: strin
   ].join("\n");
 }
 
+/** 候補に渡す材料の要約・データの形の名前の上限（バイト）。入力の上限に収める。 */
+export const CANDIDATE_MATERIAL_BYTES = 3_800;
+export const CANDIDATE_SCHEMA_BYTES = 1_200;
+
+/**
+ * 用語の候補を出させる。応答は
+ * `{"name", "original", "description", "evidence": ["E1", ...]}` の JSON 配列。
+ * 根拠は材料の ID で返させ、パスは機械で戻す（AI にパスを書かせると、短縮や誤記が出る）。
+ * 文書が薄いときは、データの形の名前とコードの要約を主の材料にするよう頼む。
+ */
+export function buildCandidatesPrompt(params: {
+  materials: string;
+  schema: string;
+  thin: boolean;
+  max: number;
+}): string {
+  return [
+    `あなたはソフトウェアのドメイン知識を整理する人です。${GUARD}`,
+    `資料から、このプロジェクトの『ドメインの用語（業務の概念）』の候補を最大 ${String(params.max)} 個、JSON 配列で返してください。`,
+    '各要素: {"name": 日本語の表示名, "original": 原文の名前（無ければ空文字）, "description": 40〜80 文字の説明, "evidence": 根拠の ID（資料の [E1] や [S1] の ID）の配列}',
+    "根拠の ID は資料に書かれているものだけを使う。実装の道具（フレームワーク名・ライブラリ名）や開発の作法は用語にしない。同じ概念は 1 つにまとめる。",
+    ...(params.thin
+      ? [
+          "文書が少ないので、データの形に現れる名前とコードの要約を主の材料にして、業務の概念になっているものを選ぶ。",
+        ]
+      : []),
+    fence("要約", params.materials, CANDIDATE_MATERIAL_BYTES),
+    ...(params.schema === ""
+      ? []
+      : [fence("データの形に現れる名前（機械で抽出）", params.schema, CANDIDATE_SCHEMA_BYTES)]),
+  ].join("\n");
+}
+
 /** 重要なコードを選ばせる。応答はパスの JSON 配列。 */
 export function buildPickCodePrompt(overview: string, listing: string, max: number): string {
   return [

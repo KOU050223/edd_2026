@@ -23,8 +23,10 @@ export const SELECT_MAX_OUTPUT_TOKENS = 1_200;
 export interface RepoMapAiConfig {
   apiKey: string | undefined;
   fetch: typeof fetch;
-  /** 順に試すモデル。allowlist を通らないものがあれば設定の誤りとして失敗にする。 */
+  /** 順に試すモデル（要約・選択）。allowlist を通らないものがあれば設定の誤りとして失敗にする。 */
   models: readonly string[];
+  /** 候補の段で順に試すモデル。省略は {@link models} と同じ。 */
+  candidateModels?: readonly string[];
   retryDelaysMs?: readonly number[];
 }
 

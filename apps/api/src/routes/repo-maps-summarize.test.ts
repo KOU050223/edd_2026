@@ -491,6 +491,7 @@ describe("POST /v1/repo-map-drafts/:id/summarize", () => {
       claim: fresh,
       nowMs: NOW.getTime() - 1000,
       leaseMs: 60_000,
+      statuses: ["fetched", "failed"],
     });
     expect((await summarize(draft.id)).status).toBe(409);
     expect(h.aiPrompts).toHaveLength(0);
@@ -503,6 +504,7 @@ describe("POST /v1/repo-map-drafts/:id/summarize", () => {
       claim: stale,
       nowMs: NOW.getTime() - 10 * 60_000,
       leaseMs: 60_000,
+      statuses: ["fetched", "failed"],
     });
     expect((await summarize(draft2.id)).status).toBe(200);
   });

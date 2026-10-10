@@ -12,6 +12,8 @@ import { Hono, type Context } from "hono";
 import { HTTPException } from "hono/http-exception";
 import type { AuthVariables } from "../auth/middleware.js";
 import {
+  candidatesRepoMapDraftSchema,
+  rebuildRepoMapDraftSchema,
   createRepoMapDraftSchema,
   inspectRepoSchema,
   summarizeRepoMapDraftSchema,
@@ -20,6 +22,7 @@ import {
 } from "../contract/repo-maps.js";
 import { AiStageFailure } from "../repo-maps/ai.js";
 import { GitHubError } from "../repo-maps/github.js";
+import { buildCandidates } from "../repo-maps/candidates.js";
 import { summarizeDraft } from "../repo-maps/summarize.js";
 import type { GitHubErrorKind } from "../repo-maps/github.js";
 import {
@@ -157,6 +160,36 @@ export function createRepoMapsRoute(resolve: RepoMapsDepsResolver) {
     const input = await parseBody(c, summarizeRepoMapDraftSchema);
     try {
       const body = await summarizeDraft(resolve(c.env), userId, c.req.param("id"), input);
+      return c.json(body, 200, NO_STORE);
+    } catch (error) {
+      return respondFailure(c, error);
+    }
+  });
+
+  app.post("/repo-map-drafts/:id/candidates", async (c) => {
+    const userId = c.get("user").userId;
+    const input = await parseBody(c, candidatesRepoMapDraftSchema);
+    try {
+      const body = await buildCandidates(resolve(c.env), userId, c.req.param("id"), {
+        consentVersion: input.consentVersion,
+        excludeIds: [],
+        rebuild: false,
+      });
+      return c.json(body, 200, NO_STORE);
+    } catch (error) {
+      return respondFailure(c, error);
+    }
+  });
+
+  app.post("/repo-map-drafts/:id/rebuild", async (c) => {
+    const userId = c.get("user").userId;
+    const input = await parseBody(c, rebuildRepoMapDraftSchema);
+    try {
+      const body = await buildCandidates(resolve(c.env), userId, c.req.param("id"), {
+        consentVersion: input.consentVersion,
+        excludeIds: input.excludeIds,
+        rebuild: true,
+      });
       return c.json(body, 200, NO_STORE);
     } catch (error) {
       return respondFailure(c, error);

@@ -65,6 +65,24 @@ export interface SummaryState {
   docChars: number;
 }
 
+/** 用語の候補 1 件。根拠は材料・データの形の ID（`E1`・`S1`）。 */
+export interface CandidateState {
+  id: string;
+  name: string;
+  original: string;
+  description: string;
+  evidence: string[];
+  fromSchema: boolean;
+  schemaOnly: boolean;
+}
+
+/** 候補の段（PR C2b）の結果。 */
+export interface CandidatesState {
+  items: CandidateState[];
+  thin: boolean;
+  excluded: string[];
+}
+
 /** `stage_state` の中身。形の版は `stage_state_version`。 */
 export interface FetchedState {
   scan: RepoMapScan;
@@ -83,6 +101,8 @@ export interface FetchedState {
   progress?: { codePicks?: string[]; issuePicks?: number[] };
   /** 要約の段が終わっていれば入る。 */
   summary?: SummaryState;
+  /** 候補の段が終わっていれば入る。 */
+  candidates?: CandidatesState;
 }
 
 /** 呼び出し側が HTTP の応答へ写す、利用者の入力・状態のせいの失敗。 */
@@ -359,6 +379,7 @@ function toView(draft: StoredRepoMapDraft): RepoMapDraftView {
             skipped: summary.skipped,
             docChars: summary.docChars,
           },
+    candidates: candidatesView(state, draft),
     // 外部呼び出しの上限で止まり、続きから再開できる（もう一度呼べば進む）。
     partial: draft.status === "fetched" && state.progress !== undefined && summary === undefined,
     ai: {
@@ -376,6 +397,48 @@ function toView(draft: StoredRepoMapDraft): RepoMapDraftView {
         : null,
     createdAt: draft.createdAt,
     expiresAt: draft.expiresAt,
+  };
+}
+
+/** 候補の根拠（ID）を、リンクつきの材料・データの形へ戻す。 */
+function candidatesView(
+  state: FetchedState,
+  draft: StoredRepoMapDraft,
+): RepoMapDraftView["candidates"] {
+  const candidates = state.candidates;
+  if (candidates === undefined) return null;
+  const ref = { owner: draft.repoOwner, name: draft.repoName };
+  const byId = new Map<
+    string,
+    { kind: "glossary" | "doc" | "code" | "issue" | "schema"; ref: string; url: string }
+  >();
+  for (const m of state.summary?.materials ?? []) {
+    byId.set(m.id, {
+      kind: m.kind,
+      ref: m.ref,
+      url:
+        m.kind === "issue"
+          ? issueLink(ref, Number(m.ref.slice(1)))
+          : permalink(ref, draft.commitSha, m.ref),
+    });
+  }
+  for (const [i, f] of (state.summary?.schema ?? []).entries()) {
+    byId.set(`S${String(i + 1)}`, {
+      kind: "schema",
+      ref: f.path,
+      url: permalink(ref, draft.commitSha, f.path),
+    });
+  }
+  return {
+    items: candidates.items.map((c) => ({
+      ...c,
+      evidence: c.evidence.flatMap((id) => {
+        const e = byId.get(id);
+        return e === undefined ? [] : [{ id, ...e }];
+      }),
+    })),
+    thin: candidates.thin,
+    excluded: candidates.excluded,
   };
 }
 
