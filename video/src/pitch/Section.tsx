@@ -7,7 +7,7 @@ const ITEMS = [
   { no: "②", text: "GitHub のリポジトリから、地図を作る", tag: "開発中" },
 ];
 
-/** 概要から「ポスターセッション以降に足したこと」へ移る見出し。 */
+/** おさらいから「ポスターセッション以降に足したこと」へ移る見出し。 */
 export const Section = () => {
   const frame = useCurrentFrame();
   return (

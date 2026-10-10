@@ -8,15 +8,15 @@ export const PITCH_FPS = 30;
 const sec = (s: number) => Math.round(s * PITCH_FPS);
 
 /**
- * 場面の割り付け。概要の 4 場面はローンチ動画（src/scenes）をそのまま使い、
- * 長さもローンチ動画と同じにする（中の拍がその長さを前提にしている）。
+ * 場面の割り付け。審査員はローンチ動画を見ている前提なので、概要はおさらいだけにする。
+ * おさらいの 2 場面はローンチ動画（src/scenes）を流用する。「どこからでも」は
+ * 中の動きが 2 秒で済み、残りは記録が流れ込み続ける絵なので延ばしてよい。
+ * 学習マップはノードが灯って現在地が光るところ（約 4 秒）までで切る。
  */
 const ORDER = [
-  ["hook", SCENES.hook.duration],
-  ["vscode", SCENES.vscode.duration],
-  ["desktop", SCENES.desktop.duration],
-  ["map", SCENES.map.duration],
-  ["section", sec(6)],
+  ["everywhere", sec(8)],
+  ["map", sec(5)],
+  ["section", sec(5)],
   ["importDemo", sec(60)],
   ["repoMap", sec(40)],
   ["share", sec(14)],
