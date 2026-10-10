@@ -98,7 +98,14 @@ export async function parseClaudeHistory(
   fallbackSession: string,
 ) {
   const questions = new Map<string, HistoryQuestion>();
-  const warnings: string[] = [];
+  const warningCounts = new Map<string, { count: number; lines: number[] }>();
+  const warn = (reason: string, line?: number) => {
+    const entry = warningCounts.get(reason) ?? { count: 0, lines: [] };
+    entry.count++;
+    if (line !== undefined && entry.lines.length < 5) entry.lines.push(line);
+    warningCounts.set(reason, entry);
+  };
+  const questionLines = new Map<string, number>();
   let recognized = 0;
   let lineNumber = 0;
   let latest: HistoryQuestion | undefined;
@@ -110,11 +117,11 @@ export async function parseClaudeHistory(
     try {
       record = JSON.parse(line) as Record<string, unknown>;
     } catch {
-      warnings.push(`行 ${lineNumber}: JSON が不正`);
+      warn("JSON が不正", lineNumber);
       continue;
     }
     if (!record || typeof record !== "object") {
-      warnings.push(`行 ${lineNumber}: 未対応形式`);
+      warn("未対応形式", lineNumber);
       continue;
     }
     if (record.type !== "user" && record.type !== "assistant") continue;
@@ -127,7 +134,7 @@ export async function parseClaudeHistory(
       message?.role !== record.type
     ) {
       if (record.type === "user") latest = undefined;
-      warnings.push(`行 ${lineNumber}: システム挿入文 / サブエージェントを除外`);
+      warn("システム挿入文 / サブエージェントを除外", lineNumber);
       continue;
     }
     const rawText = textContent(message?.content);
@@ -141,11 +148,11 @@ export async function parseClaudeHistory(
             .trim()
         : rawText;
     if (text !== rawText.trim() && record.type === "user")
-      warnings.push(`行 ${lineNumber}: システム挿入部分を除去`);
+      warn("システム挿入部分を除去", lineNumber);
     if (record.type === "assistant") {
       if (latest && text) {
         const answer = maskHistory(text);
-        if (answer.length > 200) warnings.push(`行 ${lineNumber}: 周辺回答を200文字に制限`);
+        if (answer.length > 200) warn("周辺回答を200文字に制限", lineNumber);
         latest.body += `\n周辺回答: ${answer.slice(0, 1_000)}`;
         latest.fingerprint = await historyDigest(latest.body);
         latest = undefined;
@@ -159,7 +166,7 @@ export async function parseClaudeHistory(
         text,
       )
     ) {
-      warnings.push(`行 ${lineNumber}: ツール出力 / システム文を除外`);
+      warn("ツール出力 / システム文を除外", lineNumber);
       continue;
     }
     if (
@@ -168,17 +175,16 @@ export async function parseClaudeHistory(
       typeof record.timestamp !== "string" ||
       !isIsoDateTime(record.timestamp)
     ) {
-      warnings.push(`行 ${lineNumber}: 安定した発話 ID / 日時がないため保留`);
+      warn("安定した発話 ID / 日時がないため保留", lineNumber);
       continue;
     }
     const session = typeof record.sessionId === "string" ? record.sessionId : fallbackSession;
     const key = await historyDigest(JSON.stringify(["claude-code", session, record.uuid]));
     const sanitized = maskHistory(text);
-    if (sanitized !== text) warnings.push(`行 ${lineNumber}: 個人情報 / 資格情報 / パスをマスク`);
-    if (sanitized.length > HISTORY_LIMITS.bodyChars)
-      warnings.push(`行 ${lineNumber}: 質問を4000文字に制限`);
+    if (sanitized !== text) warn("個人情報 / 資格情報 / パスをマスク", lineNumber);
+    if (sanitized.length > HISTORY_LIMITS.bodyChars) warn("質問を4000文字に制限", lineNumber);
     const body = `ユーザーの質問: ${sanitized.slice(0, HISTORY_LIMITS.bodyChars)}`;
-    if (questions.has(key)) warnings.push(`行 ${lineNumber}: 重複発話を更新`);
+    if (questions.has(key)) warn("重複発話を更新", lineNumber);
     latest = {
       key,
       project,
@@ -187,11 +193,12 @@ export async function parseClaudeHistory(
       fingerprint: await historyDigest(body),
     };
     questions.set(key, latest);
+    questionLines.set(key, lineNumber);
     if (questions.size > HISTORY_LIMITS.questions) throw new Error("質問件数の上限を超えています");
   }
   if (recognized === 0)
-    warnings.push(lineNumber === 0 ? "履歴なし" : "Claude Code の発話がない / 未対応形式");
-  else if (questions.size === 0) warnings.push("本人の質問として取り込める履歴なし");
+    warn(lineNumber === 0 ? "履歴なし" : "Claude Code の発話がない / 未対応形式");
+  else if (questions.size === 0) warn("本人の質問として取り込める履歴なし");
   const parts: HistoryQuestion[] = [];
   for (const question of questions.values()) {
     const [prompt, answer] = question.body.split("\n周辺回答:");
@@ -200,7 +207,10 @@ export async function parseClaudeHistory(
         .join("")
         .match(/[\s\S]{1,500}/gu) ?? [];
     if (chunks.length > 1)
-      warnings.push("長い質問を500文字ずつ分割。質問件数は元の発話単位で集計します");
+      warn(
+        "長い質問を500文字ずつ分割。質問件数は元の発話単位で集計します",
+        questionLines.get(question.key),
+      );
     for (const [index, chunk] of chunks.entries()) {
       const body = `ユーザーの質問 (${index + 1}/${chunks.length}): ${chunk}${answer ? `\n周辺回答: ${answer.trim().slice(0, 200)}` : ""}`;
       parts.push({
@@ -212,6 +222,10 @@ export async function parseClaudeHistory(
       });
     }
   }
+  const warnings = [...warningCounts].map(([reason, { count, lines }]) => {
+    if (count === 1) return lines.length ? `行 ${lines[0]}: ${reason}` : reason;
+    return `${reason}: ${count} 件${lines.length ? `（最初の行: ${lines.join(", ")}）` : ""}`;
+  });
   return { questions: parts, warnings };
 }
 

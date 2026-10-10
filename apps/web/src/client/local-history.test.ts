@@ -65,7 +65,8 @@ test("本人の質問に周辺回答を添え、ツール出力やシステム�
   expect(result.questions[0]!.body).toBe(
     "ユーザーの質問 (1/1): Go の defer は？\n周辺回答: 遅延実行です",
   );
-  expect(result.warnings).toHaveLength(3);
+  expect(result.warnings).toHaveLength(2);
+  expect(result.warnings[0]).toBe("ツール出力 / システム文を除外: 2 件（最初の行: 3, 5）");
 });
 
 test("本文のマスクやフォルダ移動で観測キーが変わらず、入力指紋だけが変わる", async () => {
@@ -95,6 +96,31 @@ test("形式不正、未対応、質問なしを成功の0件として隠さな�
   expect(empty.warnings).toEqual(["履歴なし"]);
   expect(missingId.questions).toEqual([]);
   expect(missingId.warnings[0]).toContain("安定した発話 ID");
+});
+
+test("大量の警告でも理由別の件数と最初の5行だけを保持する", async () => {
+  const records = Array.from({ length: 1_000 }, (_, index) =>
+    index % 2 === 0 ? "{broken" : { ...user(`meta${index}`), isMeta: true },
+  );
+  const result = await parseClaudeHistory(lines(records), "p", "s");
+  expect(result.questions).toEqual([]);
+  expect(result.warnings).toEqual([
+    "JSON が不正: 500 件（最初の行: 1, 3, 5, 7, 9）",
+    "システム挿入文 / サブエージェントを除外: 500 件（最初の行: 2, 4, 6, 8, 10）",
+    "本人の質問として取り込める履歴なし",
+  ]);
+});
+
+test("長い質問の分割警告も理由ごとに集約する", async () => {
+  const result = await parseClaudeHistory(
+    lines([user("a", "あ".repeat(501)), user("b", "い".repeat(501))]),
+    "p",
+    "s",
+  );
+  expect(result.questions).toHaveLength(4);
+  expect(result.warnings).toEqual([
+    "長い質問を500文字ずつ分割。質問件数は元の発話単位で集計します: 2 件（最初の行: 1, 2）",
+  ]);
 });
 
 test("資格情報、メール、Windows と POSIX パスを保存前にマスクする", () => {
