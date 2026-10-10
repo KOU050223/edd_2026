@@ -60,6 +60,8 @@ let treeResponse: (keys: string[]) => unknown;
 let objectivesResponse: (keys: string[]) => unknown;
 let candidateItems: unknown[];
 let tree: TreeEntry[];
+/** テストから進められる時計。 */
+let clock: Date;
 let seq: number;
 let keySeq: number;
 
@@ -116,7 +118,7 @@ function build() {
       maps,
       newKey: () => `k${String((keySeq += 1)).padStart(7, "0")}`,
       newId: () => `r${String((seq += 1)).padStart(8, "0")}`,
-      now: () => NOW,
+      now: () => clock,
       ai: {
         apiKey: "k",
         models: ["gemini-3.5-flash-lite"],
@@ -164,6 +166,7 @@ beforeEach(async () => {
     await consents.put(u, { version: MAP_GENERATION_CONSENT_VERSION, grantedAt: "t" } as never);
   }
   prompts = [];
+  clock = NOW;
   tree = TREE;
   seq = 0;
   keySeq = 0;
@@ -348,6 +351,30 @@ describe("POST /v1/repo-map-drafts/:id/confirm", () => {
     );
     expect(await maps.listByOwner("user-a")).toHaveLength(1);
     errors.mockRestore();
+  });
+
+  it("マップを作ったところで止まっても、やり直しで別のマップを作らない（同じ ID の 1 つだけ）", async () => {
+    const draft = await candidatesDraft();
+    const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    // マップの保存のあと、印と後始末の書き込みが全部失敗した（途中で止まったのと同じ）。
+    vi.spyOn(drafts, "markConfirmed").mockRejectedValueOnce(new Error("crash"));
+    vi.spyOn(drafts, "update").mockRejectedValueOnce(new Error("crash"));
+    const first = await confirm(draft.id, { accepted: [{ id: "C1" }] });
+    expect(first.status).toBe(201);
+    const firstId = ((await first.json()) as ConfirmRepoMapDraftResponse).mapId;
+    expect(firstId).toBe(`m${draft.id.slice(1)}`);
+    expect(await maps.listByOwner("user-a")).toHaveLength(1);
+    errors.mockRestore();
+
+    // 占有の期限が切れてから、やり直す。AI を呼ばず、同じマップを返す。
+    clock = new Date(NOW.getTime() + 10 * 60_000);
+    prompts.length = 0;
+    const retry = await confirm(draft.id, { accepted: [{ id: "C1" }] });
+    expect(retry.status).toBe(201);
+    expect(((await retry.json()) as ConfirmRepoMapDraftResponse).mapId).toBe(firstId);
+    expect(prompts).toHaveLength(0);
+    expect(await maps.listByOwner("user-a")).toHaveLength(1);
+    expect((await drafts.get("user-a", draft.id))!.confirmedMapId).toBe(firstId);
   });
 
   it("同時の 2 つ目は 409 で、マップは 1 つだけ", async () => {

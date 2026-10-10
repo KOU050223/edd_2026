@@ -366,6 +366,44 @@ export async function confirmDraft(
       updatedAt: stageNow,
       claim,
     });
+  /** 確定の印を書き、材料・要約・候補を消す。失敗しても、確定は成功（記録して、下書きは期限で消える）。 */
+  const finishConfirm = async (confirmedMapId: string) => {
+    const marked = await deps.drafts
+      .markConfirmed({ userId, id: draftId, claim, mapId: confirmedMapId })
+      .catch((markError: unknown) => {
+        console.error("failed to mark repo map draft as confirmed", {
+          draftId,
+          mapId: confirmedMapId,
+          markError,
+        });
+        return false;
+      });
+    if (!marked) {
+      console.error("repo map draft was not marked as confirmed", {
+        draftId,
+        mapId: confirmedMapId,
+      });
+    }
+    // 材料・要約・候補は消し、確定のマップの ID だけを期限まで残す（確定の応答を取り損ねても、
+    // もう一度呼べば同じマップの ID が返る。下書きの一覧には出ない）。
+    await deps.drafts
+      .update(userId, draftId, {
+        status: "candidates",
+        stageState: "{}",
+        stageStateVersion: draft.stageStateVersion,
+        failedStage: null,
+        failureCode: null,
+        updatedAt: stageNow,
+        claim,
+      })
+      .catch((updateError: unknown) => {
+        console.error("failed to clear a confirmed repo map draft", {
+          draftId,
+          mapId: confirmedMapId,
+          updateError,
+        });
+      });
+  };
   let flushAttempted = false;
   const flush = async () => {
     if (flushAttempted) return;
@@ -381,6 +419,14 @@ export async function confirmDraft(
   };
 
   let mapId: string;
+  // マップの ID は下書きから決める（`r` + 8 文字 → `m` + 同じ 8 文字）。確定が途中で止まって
+  // やり直しても、同じ ID の 1 つのマップになる（別の ID で二重に作らない）。
+  const derivedMapId = /^r[a-z0-9]{8}$/.test(draft.id) ? `m${draft.id.slice(1)}` : null;
+  if (derivedMapId !== null && (await maps.get(userId, derivedMapId)) !== null) {
+    // 前の確定がマップを作ったところで止まっていた。AI を呼ばず、後始末だけをして返す。
+    await finishConfirm(derivedMapId);
+    return { mapId: derivedMapId };
+  }
   try {
     // ---- 木
     const keys = nodes.map((n) => n.key);
@@ -444,7 +490,7 @@ export async function confirmDraft(
         return p === undefined ? [] : [{ from: `new:${p}`, to: `new:${n.key}` }];
       }),
     };
-    mapId = newMapId(newKey);
+    mapId = derivedMapId ?? newMapId(newKey);
     const resolved = resolveMapContent(mapId, content, new Set(), newKey);
     if (!resolved.ok) {
       // 検証済みの木が手作りの規則で拒否されるなら、2 つの規則が食い違っている。
@@ -466,19 +512,28 @@ export async function confirmDraft(
       }
       for (const s of n.sources) nodeSources.push({ ...s, conceptId });
     }
-    const { created } = await maps.create(userId, {
-      id: mapId,
-      content: resolved.content,
-      objectives,
-      repoSource: {
-        url: repoUrl({ owner: draft.repoOwner, name: draft.repoName }),
-        commitSha: draft.commitSha,
-        nodeSources,
-      },
-      nowIso: stageNow,
-      nowMs: now.getTime(),
-      maxMaps: MAX_MAPS_PER_USER,
-    });
+    let created = false;
+    try {
+      ({ created } = await maps.create(userId, {
+        id: mapId,
+        content: resolved.content,
+        objectives,
+        repoSource: {
+          url: repoUrl({ owner: draft.repoOwner, name: draft.repoName }),
+          commitSha: draft.commitSha,
+          nodeSources,
+        },
+        nowIso: stageNow,
+        nowMs: now.getTime(),
+        maxMaps: MAX_MAPS_PER_USER,
+      }));
+    } catch (createError) {
+      // 同じ ID のマップが先に保存されていた（別のリクエストが先に終えた）なら、それを使う。
+      // そうでなければ、元の失敗を隠さない。
+      const already = await maps.get(userId, mapId).catch(() => null);
+      if (already === null) throw createError;
+      created = true;
+    }
     if (!created) {
       // 確定の間に、別の端末でマップが作られて上限に達した。
       throw new RepoMapRefusal(
@@ -506,29 +561,6 @@ export async function confirmDraft(
   await flush().catch((flushError: unknown) => {
     console.error("failed to record repo map ai calls", { draftId, flushError });
   });
-  const marked = await deps.drafts
-    .markConfirmed({ userId, id: draftId, claim, mapId })
-    .catch((markError: unknown) => {
-      console.error("failed to mark repo map draft as confirmed", { draftId, mapId, markError });
-      return false;
-    });
-  if (!marked) {
-    console.error("repo map draft was not marked as confirmed", { draftId, mapId });
-  }
-  // 材料・要約・候補は消し、確定のマップの ID だけを期限まで残す（確定の応答を取り損ねても、
-  // もう一度呼べば同じマップの ID が返る。下書きの一覧には出ない）。
-  await deps.drafts
-    .update(userId, draftId, {
-      status: "candidates",
-      stageState: "{}",
-      stageStateVersion: draft.stageStateVersion,
-      failedStage: null,
-      failureCode: null,
-      updatedAt: stageNow,
-      claim,
-    })
-    .catch((updateError: unknown) => {
-      console.error("failed to clear a confirmed repo map draft", { draftId, mapId, updateError });
-    });
+  await finishConfirm(mapId);
   return { mapId };
 }

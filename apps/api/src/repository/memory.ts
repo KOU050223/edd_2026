@@ -1001,6 +1001,10 @@ export class InMemoryLearningMapRepository implements LearningMapRepository {
         .map((node) => node.conceptId),
     );
     this.dropChecks(ownerUserId, (check) => removed.has(check.conceptId));
+    // 消えたノードの根拠も消す（D1 の learning_map_node_sources は ON DELETE CASCADE）。
+    if (map.repoSource !== undefined) {
+      map.repoSource.nodeSources = map.repoSource.nodeSources.filter((s) => kept.has(s.conceptId));
+    }
     Object.assign(map, {
       title,
       description,
