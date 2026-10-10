@@ -60,6 +60,24 @@ test("日本語の名前も一意の場合だけ候補にし同名の別 ID は�
   ).toBe(false);
 });
 
+test("英文の前置詞 for を制御構文に分類せず、完全な名前と技術用語は照合する", () => {
+  const control = { ...concept, id: "go.control", label: "if / for / switch" };
+  const definitions = { ...target, concepts: [concept, control] };
+  const input = { ...question, body: "How do I use defer for cleanup?" };
+  expect(localHistoryNameMatch(input, control, definitions)).toBe(false);
+  expect(localHistoryNameMatch(input, concept, definitions)).toBe(true);
+  expect(localHistoryNameMatch({ ...input, body: "if / for / switch" }, control, definitions)).toBe(
+    true,
+  );
+  expect(
+    localHistoryNameMatch(
+      input,
+      { ...control, label: "for による反復" },
+      { ...target, concepts: [{ ...control, label: "for による反復" }] },
+    ),
+  ).toBe(false);
+});
+
 test("分割された質問を元の順序で1枚にまとめ、回答はカードに載せない", () => {
   const cards = questionCards([
     { ...question, key: "part2", body: "ユーザーの質問 (2/2): 実行順は？\n周辺回答: 応答" },

@@ -112,7 +112,7 @@ export interface HistoryProgress {
     fingerprints: Record<string, string>;
   };
 }
-export const HISTORY_ANALYSIS_VERSION = 3;
+export const HISTORY_ANALYSIS_VERSION = 4;
 export const HISTORY_CALL_LIMIT = 5;
 export const fetchHistoryTarget = (target: string) =>
   requestJson<HistoryTarget>(`/api/v1/history-targets/${encodeURIComponent(target)}`);
@@ -174,7 +174,14 @@ export function localHistoryNameMatch(
   )
     return false;
   const text = historyAnalysisBody(question).toLocaleLowerCase();
-  const names = [label, ...(label.match(/[a-z][a-z0-9_+.-]{2,}/g) ?? [])];
+  // Slash-separated English labels can contain ordinary words such as "for".
+  // Only abbreviate Japanese descriptions; require the whole label otherwise.
+  const tokens = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u.test(label)
+    ? (label.match(/[a-z][a-z0-9_+.-]{2,}/g) ?? []).filter(
+        (name) => !/^(?:for|and|the|with|from|into|not|get|add|set|use)$/i.test(name),
+      )
+    : [];
+  const names = [label, ...tokens];
   return names.some((name) => {
     if (
       target.concepts.some(
