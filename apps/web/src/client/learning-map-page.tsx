@@ -432,7 +432,6 @@ export function LearningMapPage({
           </Link>
         )}
       </p>
-      {own && <HistoryMapPanel key={mapId} target={mapId} onApplied={onSelectInMap} />}
       {map.description && <p className="muted">{map.description}</p>}
       {own ? (
         <>
@@ -533,6 +532,7 @@ export function LearningMapPage({
           labelOf={(conceptId) => definitionOf.get(conceptId)?.label ?? conceptId}
         />
       )}
+      {own && <HistoryMapPanel key={mapId} target={mapId} onApplied={onSelectInMap} />}
     </>
   );
 }
