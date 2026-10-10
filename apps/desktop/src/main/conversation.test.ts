@@ -41,6 +41,7 @@ describe("buildConversation", () => {
       ...base,
       userQuestion: "   ",
       question: "この選択テキストを初心者にも分かるように解説してください。",
+      complete: true,
     });
 
     expect(conversation.title).toBe("const x = 1;");

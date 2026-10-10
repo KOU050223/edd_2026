@@ -150,3 +150,7 @@ describe("normalizeSettings", () => {
     );
   });
 });
+
+// settings:save の検証は src/main/ipc/schemas.ts の desktopSettingsSchema が担う
+// （schemas.test.ts で検査）。ここでテストしていた「不正な入力を弾く」責務は
+// そちらの厳密なスキーマへ移った。

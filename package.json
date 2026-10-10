@@ -8,7 +8,7 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "concurrently --kill-others-on-fail --names api,desktop,web \"npm run dev --workspace=@gakushu-sochi/api\" \"npm run start --workspace=@gakushu-sochi/desktop\" \"npm run dev --workspace=@gakushu-sochi/web\"",
+    "dev": "concurrently --kill-others-on-fail --names api,desktop,web \"npm run dev --workspace=@gakushu-sochi/api\" \"npm run dev --workspace=@gakushu-sochi/desktop\" \"npm run dev --workspace=@gakushu-sochi/web\"",
     "compile": "npm run compile --workspace=@gakushu-sochi/domain && npm run compile --workspace=@gakushu-sochi/api && npm run compile --workspace=gakushu-sochi && npm run compile --workspace=@gakushu-sochi/desktop && npm run compile --workspace=@gakushu-sochi/web && npm run check:types --workspace=@gakushu-sochi/domain",
     "gen:concepts": "npm run gen:concepts --workspace=@gakushu-sochi/domain",
     "check:concepts": "npm run check:concepts --workspace=@gakushu-sochi/domain",
