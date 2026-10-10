@@ -343,6 +343,7 @@ export type TargetInput = {
 export type TargetError =
   | { code: "too_many"; field: "folders" | "files" | "issues"; max: number }
   | { code: "unknown_path"; field: "folders" | "files"; path: string }
+  | { code: "too_large"; field: "files"; path: string; size: number; max: number }
   | { code: "invalid_issue"; number: number };
 
 /**
@@ -351,7 +352,8 @@ export type TargetError =
  * 呼び出し側が確かめる（{@link GitHubClient.getIssue} の `isPullRequest`）。
  */
 export function validateTargets(entries: TreeEntry[], input: TargetInput): TargetError | null {
-  const files = new Set(entries.filter((e) => e.type === "blob").map((e) => e.path));
+  const blobs = new Map(entries.filter((e) => e.type === "blob").map((e) => [e.path, e.size ?? 0]));
+  const files = new Set(blobs.keys());
   const dirs = new Set(entries.filter((e) => e.type === "tree").map((e) => e.path));
   if (input.folders.length > 50) return { code: "too_many", field: "folders", max: 50 };
   if (input.files.length > MAX_HINTS) return { code: "too_many", field: "files", max: MAX_HINTS };
@@ -361,6 +363,11 @@ export function validateTargets(entries: TreeEntry[], input: TargetInput): Targe
   }
   for (const f of input.files) {
     if (!files.has(f)) return { code: "unknown_path", field: "files", path: f };
+    // 指定したファイルは捨てる規則を通さないが、サイズの上限は効く。黙って外さず、作る前に断る。
+    const size = blobs.get(f) ?? 0;
+    if (size > MAX_FILE_BYTES) {
+      return { code: "too_large", field: "files", path: f, size, max: MAX_FILE_BYTES };
+    }
   }
   for (const n of input.issues) {
     if (!Number.isInteger(n) || n <= 0) return { code: "invalid_issue", number: n };

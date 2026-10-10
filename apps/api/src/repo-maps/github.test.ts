@@ -3,6 +3,7 @@ import { createGitHubClient, GitHubError, type GitHubErrorKind } from "./github.
 
 const ref = { owner: "o", name: "r" };
 const SHA = "b".repeat(40);
+const REPO_JSON = { default_branch: "main", private: false, name: "R", owner: { login: "O" } };
 
 function json(body: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(body), {
@@ -35,9 +36,13 @@ async function kindOf(promise: Promise<unknown>): Promise<GitHubErrorKind> {
 
 describe("リクエスト", () => {
   test("トークンを載せ、リダイレクトを追わず、期限を付ける", async () => {
-    const f = fakeFetch(() => json({ default_branch: "main", private: false }));
+    const f = fakeFetch(() => json(REPO_JSON));
     const client = createGitHubClient({ token: "tkn", fetchFn: f.fn });
-    await expect(client.getRepo(ref)).resolves.toEqual({ defaultBranch: "main" });
+    await expect(client.getRepo(ref)).resolves.toEqual({
+      owner: "O",
+      name: "R",
+      defaultBranch: "main",
+    });
     const init = f.calls[0]?.init;
     expect(f.calls[0]?.url).toBe("https://api.github.com/repos/o/r");
     expect(init?.redirect).toBe("manual");
@@ -45,10 +50,11 @@ describe("リクエスト", () => {
     expect((init?.headers as Record<string, string>).authorization).toBe("Bearer tkn");
   });
 
-  test("トークンが無ければ Authorization を付けない", async () => {
-    const f = fakeFetch(() => json({ default_branch: "main", private: false }));
-    await createGitHubClient({ token: undefined, fetchFn: f.fn }).getRepo(ref);
-    expect((f.calls[0]?.init?.headers as Record<string, string>).authorization).toBeUndefined();
+  test("トークンが無ければ GitHub を呼ばずに失敗にする（未認証の上限へ黙って落ちない）", async () => {
+    const f = fakeFetch(() => json(REPO_JSON));
+    const client = createGitHubClient({ token: undefined, fetchFn: f.fn });
+    await expect(kindOf(client.getRepo(ref))).resolves.toBe("unauthorized");
+    expect(f.calls).toHaveLength(0);
   });
 });
 
@@ -62,6 +68,7 @@ describe("失敗の種類", () => {
       () => new Response("", { status: 403, headers: { "x-ratelimit-remaining": "0" } }),
       "rate-limited",
     ],
+    ["401（トークン失効）", () => new Response("", { status: 401 }), "unauthorized"],
     ["429", () => new Response("", { status: 429 }), "rate-limited"],
     ["301（移動）", () => new Response("", { status: 301 }), "moved"],
     ["500", () => new Response("", { status: 500 }), "unavailable"],
@@ -94,7 +101,7 @@ describe("失敗の種類", () => {
   });
 
   test("非公開のリポジトリは存在しないのと同じに扱う", async () => {
-    const f = fakeFetch(() => json({ default_branch: "main", private: true }));
+    const f = fakeFetch(() => json({ ...REPO_JSON, private: true }));
     const client = createGitHubClient({ token: "t", fetchFn: f.fn });
     await expect(kindOf(client.getRepo(ref))).resolves.toBe("not-found");
   });

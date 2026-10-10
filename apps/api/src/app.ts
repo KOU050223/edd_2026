@@ -39,6 +39,9 @@ import { createConversationLearningEventsRoute } from "./routes/conversation-lea
 import { createLearningMapsRoute } from "./routes/learning-maps.js";
 import { createFixedMapsRoute } from "./routes/fixed-maps.js";
 import { randomKey } from "./maps/content.js";
+import { createRepoMapsRoute } from "./routes/repo-maps.js";
+import { createGitHubClient } from "./repo-maps/github.js";
+import { D1RepoMapDraftRepository } from "./repo-maps/d1.js";
 
 /** Cloudflare Worker から提供する HTTP API。 */
 export const app = new Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>();
@@ -408,5 +411,23 @@ app.route(
       enforceUsageLimits: env.CHECK_GENERATION_LIMITS !== "off",
       now: () => new Date(),
     },
+  })),
+);
+
+// リポジトリからのマップ（#249）。GitHub の公開リポジトリを運営の読み取り専用トークンで読み、
+// 下書きを D1 に置く（migrations/0021_repo_maps.sql）。この段では AI を使わない。
+app.route(
+  "/v1",
+  createRepoMapsRoute((env) => ({
+    github: createGitHubClient({
+      token: env.GITHUB_TOKEN,
+      fetchFn: (input, init) => globalThis.fetch(input, init),
+    }),
+    drafts: new D1RepoMapDraftRepository(env.DB),
+    consents: new D1MapGenerationConsentRepository(env.DB),
+    plans: new D1UserPlanRepository(env.DB),
+    identity: new D1IdentityRepository(env.DB),
+    newId: () => `r${randomKey()}`,
+    now: () => new Date(),
   })),
 );
