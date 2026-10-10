@@ -92,6 +92,20 @@ export interface RepoMapDraftRepository {
   /** 持ち主の下書きを、期限が切れていないものだけ新しい順に。 */
   list(userId: string, nowIso: string): Promise<StoredRepoMapDraft[]>;
 
+  /**
+   * 段を占有する。同じ下書きの段を同時に 2 つ走らせない（両方が AI を呼び、後の失敗が先の成功を
+   * 上書きするのを防ぐ。PR #314 のレビュー）。`fetched`・`failed` の下書きで、別の占有が無いか、
+   * 占有が `leaseMs` より古いときだけ取れる。占有は `failure_code` に `claim:<時刻>:<トークン>` で置く。
+   * 取れなければ false。
+   */
+  claimStage(params: {
+    userId: string;
+    id: string;
+    claim: string;
+    nowMs: number;
+    leaseMs: number;
+  }): Promise<boolean>;
+
   /** 段の結果を書く。持ち主の下書きでなければ false。 */
   update(
     userId: string,
@@ -103,6 +117,11 @@ export interface RepoMapDraftRepository {
       failedStage: DraftStage | null;
       failureCode: string | null;
       updatedAt: string;
+      /**
+       * 段の占有（{@link RepoMapDraftRepository.claimStage}）を持っているときだけ書く。
+       * 持っていなければ（別のリクエストが占有した・期限が切れた）書かずに false を返す。
+       */
+      claim?: string;
     },
   ): Promise<boolean>;
 

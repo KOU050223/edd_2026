@@ -231,6 +231,7 @@ export class D1RepoMapDraftRepository implements RepoMapDraftRepository {
       failedStage: DraftStage | null;
       failureCode: string | null;
       updatedAt: string;
+      claim?: string;
     },
   ): Promise<boolean> {
     const result = await this.db
@@ -238,7 +239,8 @@ export class D1RepoMapDraftRepository implements RepoMapDraftRepository {
         `UPDATE repo_map_drafts
          SET status = ?, stage_state = ?, stage_state_version = ?,
              failed_stage = ?, failure_code = ?, updated_at = ?
-         WHERE id = ? AND user_id = ?`,
+         WHERE id = ? AND user_id = ?
+           AND (? IS NULL OR failure_code = ?)`,
       )
       .bind(
         patch.status,
@@ -249,7 +251,33 @@ export class D1RepoMapDraftRepository implements RepoMapDraftRepository {
         patch.updatedAt,
         id,
         userId,
+        patch.claim ?? null,
+        patch.claim ?? null,
       )
+      .run();
+    return result.meta.changes > 0;
+  }
+
+  async claimStage(params: {
+    userId: string;
+    id: string;
+    claim: string;
+    nowMs: number;
+    leaseMs: number;
+  }): Promise<boolean> {
+    // 1 文で、状態の確認と占有を行う（読んでから書くと、同時の 2 つが両方取れる）。
+    // 占有は `claim:<13 桁のミリ秒>:<トークン>`。古い占有（期限切れ）は取り直せる。
+    const result = await this.db
+      .prepare(
+        `UPDATE repo_map_drafts SET failure_code = ?
+         WHERE id = ? AND user_id = ? AND status IN ('fetched', 'failed')
+           AND (
+             failure_code IS NULL
+             OR failure_code NOT LIKE 'claim:%'
+             OR CAST(substr(failure_code, 7, 13) AS INTEGER) < ?
+           )`,
+      )
+      .bind(params.claim, params.id, params.userId, params.nowMs - params.leaseMs)
       .run();
     return result.meta.changes > 0;
   }

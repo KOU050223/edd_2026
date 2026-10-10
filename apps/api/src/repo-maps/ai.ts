@@ -31,8 +31,8 @@ export interface RepoMapAiConfig {
 /** AI の段の失敗。ルートが応答にする。 */
 export class AiStageFailure extends Error {
   constructor(
-    readonly kind: "not_configured" | "upstream" | "unusable",
-    readonly status: 502 | 503,
+    readonly kind: "not_configured" | "upstream" | "unusable" | "call_limit",
+    readonly status: 429 | 502 | 503,
     readonly body: object,
     message: string,
   ) {
@@ -83,7 +83,14 @@ export class AiSession {
     return this.config.retryDelaysMs ?? [];
   }
 
-  constructor(private readonly config: RepoMapAiConfig) {
+  /**
+   * `callLimit` は、この下書きがこのあと使ってよい AI の呼び出しの回数（上限から記録済みの分を引いた値）。
+   * 送る前に 1 回ずつ確かめるので、段の途中でも超えない。
+   */
+  constructor(
+    private readonly config: RepoMapAiConfig,
+    private readonly callLimit: number = Number.POSITIVE_INFINITY,
+  ) {
     const allowed = config.models.filter(isAllowedModel);
     if (allowed.length !== config.models.length || allowed.length === 0) {
       console.error("repo map models are not allowed or empty", { models: config.models });
@@ -99,6 +106,19 @@ export class AiSession {
     prompt: string,
     options: { maxOutputTokens: number; thinkingBudget?: number },
   ): Promise<unknown> {
+    if (this.calls.length >= this.callLimit) {
+      throw new AiStageFailure(
+        "call_limit",
+        429,
+        {
+          error: "quota_exceeded",
+          message:
+            "この下書きで使える AI の呼び出しの上限に達しました。新しい下書きを作ってください。",
+          limit: MAX_AI_CALLS_PER_DRAFT,
+        },
+        "draft ai call limit",
+      );
+    }
     if (!this.config.apiKey) {
       console.error("ai service is not configured", { label });
       throw new AiStageFailure("not_configured", 503, notConfiguredBody(), "no api key");

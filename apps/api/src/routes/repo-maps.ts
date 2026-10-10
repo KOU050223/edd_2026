@@ -36,8 +36,9 @@ export type RepoMapsDepsResolver = (env: CloudflareBindings) => RepoMapDeps;
 
 const NO_STORE = { "cache-control": "no-store" } as const;
 
-const REFUSAL_STATUS: Record<RepoMapRefusal["code"], 400 | 403 | 404 | 429> = {
+const REFUSAL_STATUS: Record<RepoMapRefusal["code"], 400 | 403 | 404 | 409 | 429> = {
   not_found: 404,
+  conflict: 409,
   invalid_url: 400,
   invalid_target: 400,
   invalid_issue: 400,

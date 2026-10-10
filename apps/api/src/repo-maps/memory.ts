@@ -112,11 +112,42 @@ export class InMemoryRepoMapDraftRepository implements RepoMapDraftRepository {
       failedStage: DraftStage | null;
       failureCode: string | null;
       updatedAt: string;
+      claim?: string;
     },
   ): Promise<boolean> {
     const draft = this.drafts.get(id);
     if (draft === undefined || draft.userId !== userId) return Promise.resolve(false);
-    this.drafts.set(id, { ...draft, ...patch });
+    if (patch.claim !== undefined && draft.failureCode !== patch.claim) {
+      return Promise.resolve(false);
+    }
+    this.drafts.set(id, {
+      ...draft,
+      status: patch.status,
+      stageState: patch.stageState,
+      stageStateVersion: patch.stageStateVersion,
+      failedStage: patch.failedStage,
+      failureCode: patch.failureCode,
+      updatedAt: patch.updatedAt,
+    });
+    return Promise.resolve(true);
+  }
+
+  claimStage(params: {
+    userId: string;
+    id: string;
+    claim: string;
+    nowMs: number;
+    leaseMs: number;
+  }): Promise<boolean> {
+    const draft = this.drafts.get(params.id);
+    if (draft === undefined || draft.userId !== params.userId) return Promise.resolve(false);
+    if (draft.status !== "fetched" && draft.status !== "failed") return Promise.resolve(false);
+    const held = draft.failureCode;
+    if (held?.startsWith("claim:")) {
+      const heldAt = Number(held.slice(6, 19));
+      if (heldAt >= params.nowMs - params.leaseMs) return Promise.resolve(false);
+    }
+    this.drafts.set(params.id, { ...draft, failureCode: params.claim });
     return Promise.resolve(true);
   }
 

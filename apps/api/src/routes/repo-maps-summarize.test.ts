@@ -60,6 +60,9 @@ let app: Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>;
 let h: Harness;
 let aiBehavior: (prompt: string) => Response | Promise<Response>;
 let blobFailure: GitHubError | null;
+/** 読めない（バイナリ）として返す blob SHA。 */
+let unreadableShas: Set<string>;
+let treeOverride: TreeEntry[] | null;
 /** テストごとに小さくできる、1 リクエストの外部呼び出しの上限。 */
 let budgetOverride: number | undefined;
 let seq: number;
@@ -91,10 +94,11 @@ function fakeGitHub(): GitHubClient {
   return {
     getRepo: () => Promise.resolve({ owner: "Owner", name: "Repo", defaultBranch: "main" }),
     getHeadSha: () => Promise.resolve(SHA),
-    getTree: () => Promise.resolve(TREE),
+    getTree: () => Promise.resolve(treeOverride ?? TREE),
     getBlobText: (_ref, sha, maxBytes) => {
       h.githubCalls.push(`blob:${sha}`);
       if (blobFailure !== null) return Promise.reject(blobFailure);
+      if (unreadableShas.has(sha)) return Promise.reject(new GitHubError("unreadable", sha));
       const body = BODIES[sha];
       if (body === undefined) return Promise.reject(new GitHubError("not-found", sha));
       return Promise.resolve({ text: headBytes(body, maxBytes), truncated: false });
@@ -194,6 +198,8 @@ beforeEach(async () => {
   h = { githubCalls: [], aiPrompts: [] };
   aiBehavior = defaultAi;
   blobFailure = null;
+  unreadableShas = new Set();
+  treeOverride = null;
   budgetOverride = undefined;
   seq = 0;
   build();
@@ -462,6 +468,117 @@ describe("POST /v1/repo-map-drafts/:id/summarize", () => {
     const res = await summarize(draft.id);
     expect(res.status).toBe(200);
     expect(h.githubCalls.length + h.aiPrompts.length).toBeLessThanOrEqual(36);
+  });
+
+  it("同じ下書きへの同時の要約は 1 つだけが走り、もう片方は 409 で AI を呼ばない", async () => {
+    const draft = await createDraft();
+    const [a, b] = await Promise.all([summarize(draft.id), summarize(draft.id)]);
+    expect([a.status, b.status].sort()).toEqual([200, 409]);
+    // 1 つ分の AI の呼び出しだけ（7 回）。
+    expect(h.aiPrompts).toHaveLength(7);
+    const view = (await (
+      await call("GET", `/v1/repo-map-drafts/${draft.id}`)
+    ).json()) as RepoMapDraftView;
+    expect(view.status).toBe("summarized");
+  });
+
+  it("古い占有（落ちたリクエストのもの）は取り直せる。新しい占有は 409", async () => {
+    const draft = await createDraft();
+    const fresh = `claim:${String(NOW.getTime() - 1000).padStart(13, "0")}:x`;
+    await drafts.claimStage({
+      userId: "user-a",
+      id: draft.id,
+      claim: fresh,
+      nowMs: NOW.getTime() - 1000,
+      leaseMs: 60_000,
+    });
+    expect((await summarize(draft.id)).status).toBe(409);
+    expect(h.aiPrompts).toHaveLength(0);
+
+    const draft2 = await createDraft();
+    const stale = `claim:${String(NOW.getTime() - 10 * 60_000).padStart(13, "0")}:x`;
+    await drafts.claimStage({
+      userId: "user-a",
+      id: draft2.id,
+      claim: stale,
+      nowMs: NOW.getTime() - 10 * 60_000,
+      leaseMs: 60_000,
+    });
+    expect((await summarize(draft2.id)).status).toBe(200);
+  });
+
+  it("下書きの AI の呼び出しの上限は、段の途中でも超えない", async () => {
+    const draft = await createDraft();
+    await drafts.recordAiCalls({
+      userId: "user-a",
+      draftId: draft.id,
+      monthKey: "2026-10",
+      dayKey: "2026-10-11",
+      updatedAt: NOW.toISOString(),
+      calls: Array.from({ length: MAX_AI_CALLS_PER_DRAFT - 2 }, () => ({
+        stage: "summarize" as const,
+        model: "m",
+        inputTokens: 1,
+        outputTokens: 1,
+        ok: true,
+      })),
+    });
+    const res = await summarize(draft.id);
+    expect(res.status).toBe(429);
+    expect(h.aiPrompts).toHaveLength(2);
+    const stored = await drafts.get("user-a", draft.id);
+    expect(stored!.aiCalls).toBe(MAX_AI_CALLS_PER_DRAFT);
+  });
+
+  it("読めない（バイナリ）材料は外して続ける", async () => {
+    unreadableShas.add("sha:README.md");
+    const draft = await createDraft();
+    const res = await summarize(draft.id);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as RepoMapDraftView;
+    expect(body.summary!.skipped).toContainEqual({ ref: "README.md", reason: "unreadable" });
+    expect(body.summary!.materials.map((m) => m.ref)).toContain("docs/orders.md");
+    expect(body.status).toBe("summarized");
+  });
+
+  it("同じ blob SHA のファイルは、同じ段の中でも 2 度要約しない。重複した指定も 1 回", async () => {
+    treeOverride = [
+      { path: "README.md", type: "blob", sha: "sha:README.md", size: 600 },
+      { path: "docs/README.md", type: "blob", sha: "sha:README.md", size: 600 },
+      ...TREE.slice(1),
+    ];
+    // 同じ内容の文書は分類の段で重複として外れるので、指定でも重複を入れる。
+    const draft = await createDraft({ files: ["README.md", "README.md"], issues: [7, 7] });
+    expect(draft.targets.files).toEqual(["README.md"]);
+    expect(draft.targets.issues).toEqual([7]);
+    const body = (await (await summarize(draft.id)).json()) as RepoMapDraftView;
+    const refs = body.summary!.materials.map((m) => m.ref);
+    expect(refs.filter((r) => r === "#7")).toHaveLength(1);
+    expect(h.aiPrompts.filter((p) => p.includes("<<<資料: README.md"))).toHaveLength(1);
+  });
+
+  it("記録の書き込みに失敗しても、完了した状態を失敗へ巻き戻さず、二重に記録しない", async () => {
+    const draft = await createDraft();
+    const original = drafts.recordAiCalls.bind(drafts);
+    let fail = true;
+    drafts.recordAiCalls = (params) => {
+      if (fail) {
+        fail = false;
+        return Promise.reject(new Error("transient"));
+      }
+      return original(params);
+    };
+    const first = await summarize(draft.id);
+    expect(first.status).toBe(500);
+    // 記録は 1 回しか試していない（二重に書かない）。状態は完了にしていない（失敗の段つき）。
+    expect(drafts.aiCallRows).toHaveLength(0);
+    const mid = await drafts.get("user-a", draft.id);
+    expect(mid!.status).toBe("failed");
+    expect(mid!.failedStage).toBe("summarize");
+    // 再実行で完了する。
+    const retried = await summarize(draft.id);
+    expect(retried.status).toBe(200);
+    expect(((await retried.json()) as RepoMapDraftView).status).toBe("summarized");
   });
 
   it("1 リクエストの外部呼び出しは上限に収まる", async () => {

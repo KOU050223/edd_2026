@@ -94,6 +94,7 @@ export class RepoMapRefusal extends Error {
       | "invalid_issue"
       | "consent_required"
       | "quota_exceeded"
+      | "conflict"
       | "not_found",
     message: string,
     readonly detail: Record<string, unknown> = {},
@@ -366,7 +367,11 @@ function toView(draft: StoredRepoMapDraft): RepoMapDraftView {
       outputTokens: draft.outputTokens,
     },
     failure:
-      draft.status === "failed" && draft.failedStage !== null && draft.failureCode !== null
+      draft.status === "failed" &&
+      draft.failedStage !== null &&
+      draft.failureCode !== null &&
+      // 再実行中（段の占有）の印は、失敗の理由ではない。
+      !draft.failureCode.startsWith("claim:")
         ? { stage: draft.failedStage, code: draft.failureCode }
         : null,
     createdAt: draft.createdAt,
@@ -488,9 +493,9 @@ export async function createDraft(
     repoName: source.ref.name,
     defaultBranch: source.repo.defaultBranch,
     commitSha: source.repo.commitSha,
-    targetFolders: [...input.folders],
-    hintFiles: [...input.files],
-    hintIssues: [...input.issues],
+    targetFolders: [...new Set(input.folders)],
+    hintFiles: [...new Set(input.files)],
+    hintIssues: [...new Set(input.issues)],
     status: "fetched",
     stageState,
     stageStateVersion: STATE_VERSION,

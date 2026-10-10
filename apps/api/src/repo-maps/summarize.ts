@@ -65,6 +65,9 @@ export const SCHEMA_READ_BYTES = 120_000;
  */
 export const MAX_SUBREQUESTS = 36;
 
+/** 段の占有の有効期間。これより古い占有は、落ちたリクエストのものとして取り直せる。 */
+export const CLAIM_LEASE_MS = 5 * 60 * 1000;
+
 /** 外部呼び出しの残りが足りない。段を止めて、続きから再開できる形で返す合図。 */
 class StageBudgetReached extends Error {
   constructor() {
@@ -161,19 +164,26 @@ export async function summarizeDraft(
     );
   }
   const budget = new SubrequestBudget(deps.subrequestBudget ?? MAX_SUBREQUESTS);
-  const ai = new AiSession({
-    ...aiConfig,
-    // 実際に送る回数を数える。送る前に最悪の回数の余裕を確かめるので、ここでは止めない。
-    fetch: (url, init) => {
-      budget.count();
-      return aiConfig.fetch(url, init);
+  const ai = new AiSession(
+    {
+      ...aiConfig,
+      // 実際に送る回数を数える。送る前に最悪の回数の余裕を確かめるので、ここでは止めない。
+      fetch: (url, init) => {
+        budget.count();
+        return aiConfig.fetch(url, init);
+      },
     },
-  });
+    // 下書きごとの上限を、送る前に 1 回ずつ確かめる（この段の途中で超えない）。
+    Math.max(0, MAX_AI_CALLS_PER_DRAFT - draft.aiCalls),
+  );
   const run: Run = { budget, ai, pending: [] };
   const stageNow = now.toISOString();
 
-  /** 保管・記録を書く。 */
+  /** 保管・記録を書く。1 回だけ試す（失敗の経路で同じ呼び出しを二重に記録しない）。 */
+  let flushAttempted = false;
   const flush = async (): Promise<void> => {
+    if (flushAttempted) return;
+    flushAttempted = true;
     await deps.drafts.putSummaries(run.pending);
     await deps.drafts.recordAiCalls({
       userId,
@@ -184,30 +194,59 @@ export async function summarizeDraft(
       calls: ai.calls,
     });
   };
-  const patch = (status: "fetched" | "summarized" | "failed", next: FetchedState, extra = {}) =>
-    deps.drafts.update(userId, draftId, {
+  /**
+   * 占有を持っているときだけ書く。持っていなければ（期限切れで別のリクエストが取った）、
+   * 新しい状態を古い写しで上書きしないよう、書かずに例外にする。
+   */
+  const patch = async (
+    status: "fetched" | "summarized" | "failed",
+    next: FetchedState,
+    extra: { failedStage?: DraftStage | null; failureCode?: string | null } = {},
+  ): Promise<void> => {
+    const written = await deps.drafts.update(userId, draftId, {
       status,
       stageState: JSON.stringify(next),
       stageStateVersion: draft.stageStateVersion,
-      failedStage: null,
-      failureCode: null,
+      failedStage: extra.failedStage ?? null,
+      failureCode: extra.failureCode === undefined ? claim : extra.failureCode,
       updatedAt: stageNow,
-      ...extra,
+      claim,
     });
+    if (!written) throw new Error("repo map draft stage claim was lost");
+  };
+
+  // 同じ下書きの段を同時に走らせない。取れなければ、AI も GitHub も呼ばずに断る。
+  const claim = `claim:${String(now.getTime()).padStart(13, "0")}:${deps.newId()}`;
+  const claimed = await deps.drafts.claimStage({
+    userId,
+    id: draftId,
+    claim,
+    nowMs: now.getTime(),
+    leaseMs: CLAIM_LEASE_MS,
+  });
+  if (!claimed) {
+    throw new RepoMapRefusal(
+      "conflict",
+      "この下書きは別の操作で要約中です。しばらくしてからもう一度お試しください。",
+      {},
+    );
+  }
 
   let progress: NonNullable<FetchedState["progress"]> = { ...state.progress };
   try {
     const summary = await runSummaries(deps, draft, state, run, async (next) => {
       progress = next;
+      // 途中の保存。占有（failure_code）は持ったままにする。
       await patch("fetched", { ...state, progress: next });
     });
-    await patch("summarized", { ...state, progress, summary });
+    // 記録を先に書く。状態の書き込みのあとで記録が失敗して、完了した状態を失敗に巻き戻さないため。
     await flush();
+    await patch("summarized", { ...state, progress, summary }, { failureCode: null });
   } catch (error) {
     if (error instanceof StageBudgetReached) {
-      // 外部呼び出しの上限の手前で止めた。選んだ結果と済んだ要約は保管したので、もう一度呼べば続きから進む。
-      await patch("fetched", { ...state, progress });
+      // 外部呼び出しの上限の手前で止めた。選んだ結果と済んだ要約は保管するので、もう一度呼べば続きから進む。
       await flush();
+      await patch("fetched", { ...state, progress }, { failureCode: null });
     } else {
       // 課金された呼び出しと済んだ要約を残し、失敗の段を書いてから、元の失敗を投げ直す。
       // 書けなくても、元の失敗を隠さない（記録して投げ直す）。
@@ -218,10 +257,7 @@ export async function summarizeDraft(
       await patch(
         "failed",
         { ...state, progress },
-        {
-          failedStage: stage,
-          failureCode: failureCodeOf(error),
-        },
+        { failedStage: stage, failureCode: failureCodeOf(error) },
       ).catch((updateError: unknown) => {
         console.error("failed to mark repo map draft as failed", { draftId, updateError });
       });
@@ -331,6 +367,22 @@ async function runSummaries(
     return summary;
   };
 
+  /**
+   * 読めない（バイナリ）材料は、その 1 件だけ外して続ける。外さないと、同じ材料で毎回止まり、
+   * 残りの材料に届かない（一時的な GitHub の失敗は外さず、そのまま失敗にする）。
+   */
+  const skipUnreadable = async (refText: string, fn: () => Promise<string>) => {
+    try {
+      return await fn();
+    } catch (error) {
+      if (error instanceof GitHubError && error.kind === "unreadable") {
+        skipped.push({ ref: refText, reason: "unreadable" });
+        return null;
+      }
+      throw error;
+    }
+  };
+
   const files = state.files;
 
   // ---- 1. 文書。指定されたものを先に、そのあと用語集 → README → 浅い順。
@@ -355,13 +407,16 @@ async function runSummaries(
   let docChars = 0;
   for (const file of docs) {
     const role: SummaryRole = file.cls === "glossary" ? "glossary" : "doc";
-    const summary = await summarizeOne({
-      cacheSha: file.sha,
-      role,
-      bytesLimit: FILE_HEAD_BYTES,
-      label: file.path,
-      readText: async () => (await github.blob(file, FILE_HEAD_BYTES)).text,
-    });
+    const summary = await skipUnreadable(file.path, () =>
+      summarizeOne({
+        cacheSha: file.sha,
+        role,
+        bytesLimit: FILE_HEAD_BYTES,
+        label: file.path,
+        readText: async () => (await github.blob(file, FILE_HEAD_BYTES)).text,
+      }),
+    );
+    if (summary === null) continue;
     docChars += summary.length;
     addMaterial(role, file.path, summary, file.pinned);
   }
@@ -407,13 +462,16 @@ async function runSummaries(
   const codeFiles = [...pinnedCode, ...picked];
   await loadCache(codeFiles.map((f) => f.sha));
   for (const file of codeFiles) {
-    const summary = await summarizeOne({
-      cacheSha: file.sha,
-      role: "code",
-      bytesLimit: FILE_HEAD_BYTES,
-      label: file.path,
-      readText: async () => (await github.blob(file, FILE_HEAD_BYTES)).text,
-    });
+    const summary = await skipUnreadable(file.path, () =>
+      summarizeOne({
+        cacheSha: file.sha,
+        role: "code",
+        bytesLimit: FILE_HEAD_BYTES,
+        label: file.path,
+        readText: async () => (await github.blob(file, FILE_HEAD_BYTES)).text,
+      }),
+    );
+    if (summary === null) continue;
     addMaterial("code", file.path, summary, file.pinned);
   }
 
@@ -452,7 +510,8 @@ async function runSummaries(
   }
   // 更新日時が一覧で分かるものは、保管のキーを先にまとめて引く。
   const updatedAt = new Map(state.issues.map((i) => [i.number, i.updatedAt]));
-  const chosen = [...pinnedNumbers, ...progress.issuePicks];
+  // 同じ番号は 1 回だけ（指定と選択の重複、指定どうしの重複で、同じ要約を二重に作らない）。
+  const chosen = [...new Set([...pinnedNumbers, ...progress.issuePicks])];
   await loadCache(
     chosen.flatMap((n) => {
       const at = updatedAt.get(n);
