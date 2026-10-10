@@ -19,6 +19,23 @@ const user = (uuid = "u1", text = "Go の defer は？", timestamp = "2025-01-01
   message: { role: "user", content: text },
 });
 
+test.each(["isMeta", "isSidechain", "isCompactSummary"])(
+  "%s の質問に続く回答を前の質問へ添えない",
+  async (flag) => {
+    const result = await parseClaudeHistory(
+      lines([
+        user(),
+        { ...user("meta", "context summary"), [flag]: true },
+        { type: "assistant", message: { role: "assistant", content: "unrelated summary" } },
+      ]),
+      "p",
+      "s",
+    );
+    expect(result.questions).toHaveLength(1);
+    expect(result.questions[0]!.body).toBe("ユーザーの質問 (1/1): Go の defer は？");
+  },
+);
+
 test("本人の質問に周辺回答を添え、ツール出力やシステム挿入文を質問にしない", async () => {
   const result = await parseClaudeHistory(
     lines([

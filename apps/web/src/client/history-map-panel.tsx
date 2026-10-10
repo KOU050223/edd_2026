@@ -14,6 +14,7 @@ import {
 } from "./local-history.js";
 import {
   analyzeHistoryBatch,
+  historyAnalysisBody,
   fetchHistoryTarget,
   historyEvidence,
   localHistoryMatch,
@@ -394,14 +395,14 @@ export function HistoryMapPanel({ target }: { target: string }) {
       <p>
         対象 {historyQuestionCount(selection)} 質問（解析素材 {selection.length} 分割）。Gakushu
         Managed AI（Google
-        Gemini）へ、マスク済み質問・周辺回答・このマップの候補定義を送信します。会話全文はサーバーに保存しません。1回の操作は最大{" "}
+        Gemini）へ、マスク済み質問・このマップの候補定義を送信します。周辺回答は送信しません。会話全文はサーバーに保存しません。1回の操作は最大{" "}
         {HISTORY_CALL_LIMIT} 呼び出し、現在の残り利用枠 {data ? remainingRequests(data.usage) : 0}{" "}
         回。マスクの限界があるため、送信前に素材を確認してください。
       </p>
       <details>
         <summary>送信する素材を確認</summary>
         {selection.map((question) => (
-          <pre key={question.key}>{question.body}</pre>
+          <pre key={question.key}>{historyAnalysisBody(question)}</pre>
         ))}
       </details>
       <p>

@@ -2,6 +2,11 @@ import type { HistoryAnalysisResult, LearningEvidence } from "@gakushu-sochi/dom
 import { postJsonBody, requestJson } from "./api.js";
 import type { HistoryQuestion } from "./local-history.js";
 
+/** Assistant text is never sent to the classifier, including previously saved history. */
+export function historyAnalysisBody(question: HistoryQuestion): string {
+  return question.body.split("\n周辺回答:")[0]!;
+}
+
 export interface HistoryConcept {
   id: string;
   label: string;
@@ -40,7 +45,7 @@ export function historyBatchBytes(
   const conversations = questions
     .map(
       (question) =>
-        `--- conversation ${question.key} ---\nobservedAt: ${question.observedAt}\n${question.body}\n`,
+        `--- conversation ${question.key} ---\nobservedAt: ${question.observedAt}\n${historyAnalysisBody(question)}\n`,
     )
     .join("");
   return (
@@ -107,7 +112,7 @@ export interface HistoryProgress {
     fingerprints: Record<string, string>;
   };
 }
-export const HISTORY_ANALYSIS_VERSION = 1;
+export const HISTORY_ANALYSIS_VERSION = 2;
 export const HISTORY_CALL_LIMIT = 5;
 export const fetchHistoryTarget = (target: string) =>
   requestJson<HistoryTarget>(`/api/v1/history-targets/${encodeURIComponent(target)}`);
@@ -149,7 +154,7 @@ export function pendingHistory(
 
 /** Only explicit IDs are certain locally; name similarity never shares observations. */
 export function localHistoryMatch(question: HistoryQuestion, concept: HistoryConcept): boolean {
-  const questionText = question.body.split("\n周辺回答:")[0]!;
+  const questionText = historyAnalysisBody(question);
   return questionText.split(/[^\p{L}\p{N}_.]+/u).includes(concept.id);
 }
 
@@ -170,7 +175,7 @@ export async function analyzeHistoryBatch(
       knownConceptIds: concepts.map((concept) => concept.id),
       conversations: questions.map((question) => ({
         sourceId: question.key,
-        body: question.body,
+        body: historyAnalysisBody(question),
         observedAt: question.observedAt,
       })),
     },

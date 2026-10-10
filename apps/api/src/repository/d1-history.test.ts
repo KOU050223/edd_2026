@@ -27,6 +27,12 @@ function repositories() {
       "utf8",
     ),
   );
+  sqlite.exec(
+    readFileSync(
+      new URL("../../migrations/0023_import_creation_tokens.sql", import.meta.url),
+      "utf8",
+    ),
+  );
   function prepare(sql: string) {
     let params: SQLInputValue[] = [];
     const statement = {
@@ -46,19 +52,27 @@ function repositories() {
     };
     return statement;
   }
+  let batchTail = Promise.resolve();
   const db = {
     prepare,
     async batch(statements: ReturnType<typeof prepare>[]) {
-      sqlite.exec("BEGIN");
-      try {
-        const results = [];
-        for (const statement of statements) results.push(await statement.run());
-        sqlite.exec("COMMIT");
-        return results;
-      } catch (error) {
-        sqlite.exec("ROLLBACK");
-        throw error;
-      }
+      const result = batchTail.then(async () => {
+        sqlite.exec("BEGIN");
+        try {
+          const results = [];
+          for (const statement of statements) results.push(await statement.run());
+          sqlite.exec("COMMIT");
+          return results;
+        } catch (error) {
+          sqlite.exec("ROLLBACK");
+          throw error;
+        }
+      });
+      batchTail = result.then(
+        () => undefined,
+        () => undefined,
+      );
+      return result;
     },
   } as unknown as D1Database;
   return {
@@ -89,6 +103,21 @@ const item = (id: string, conceptId = "go.defer"): LearningEvidence => ({
   confidence: 0.8,
   importSessionId: id,
   observedAt: "2025-01-01T00:00:00Z",
+});
+
+test("同じセッションを並行作成しても先に作った観測・件数だけを保持する", async () => {
+  const { sessions, evidence } = repositories();
+  const results = await Promise.all([
+    sessions.createWithEvidence("a", session("s1"), [item("s1")]),
+    sessions.createWithEvidence("a", session("s1"), [item("s1", "go.error")]),
+  ]);
+  expect(results.map((result) => result.alreadyExisted)).toEqual([false, true]);
+  expect((await evidence.listByUser("a")).map((entry) => entry.conceptIds)).toEqual([["go.defer"]]);
+  const saved = (await sessions.getById("a", "s1"))!.session;
+  expect(saved.evidenceCount).toBe(1);
+  expect(saved.conceptCount).toBe(1);
+  await sessions.undo("a", "s1", "2026-10-11T00:00:00Z");
+  expect(await evidence.listByUser("a")).toEqual([]);
 });
 
 test("SQL の一意制約で別セッションへの二重計上を防ぎ、実際の追加件数を返す", async () => {

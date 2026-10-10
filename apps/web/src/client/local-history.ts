@@ -126,6 +126,7 @@ export async function parseClaudeHistory(
       record.isCompactSummary === true ||
       message?.role !== record.type
     ) {
+      if (record.type === "user") latest = undefined;
       warnings.push(`行 ${lineNumber}: システム挿入文 / サブエージェントを除外`);
       continue;
     }
