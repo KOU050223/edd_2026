@@ -404,6 +404,100 @@ describe("POST /v1/repo-map-drafts/:id/candidates", () => {
     expect((await candidates(created.id)).status).toBe(200);
   });
 
+  it("候補用のモデルの設定が誤っていても、占有を残さない（直したらすぐ使える）", async () => {
+    const draft = await summarizedDraft();
+    // 許可されていないモデルを設定する。
+    const saved = build;
+    app = new Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>();
+    app.use("/v1/*", stubAuth(TOKENS));
+    app.route(
+      "/v1",
+      createRepoMapsRoute(() => ({
+        github: github(),
+        drafts,
+        consents,
+        plans,
+        identity: new InMemoryIdentityRepository(store),
+        newId: () => `r${String((seq += 1)).padStart(8, "0")}`,
+        now: () => NOW,
+        ai: {
+          apiKey: "k",
+          models: ["gemini-3.5-flash-lite"],
+          candidateModels: ["not-an-allowed-model"],
+          fetch: (() => Promise.reject(new Error("must not be called"))) as unknown as typeof fetch,
+        },
+      })),
+    );
+    const bad = await candidates(draft.id);
+    expect(bad.status).toBe(503);
+    // 設定を直したら、すぐ使える（409 にならない）。
+    saved();
+    expect((await candidates(draft.id)).status).toBe(200);
+  });
+
+  it("残した文書の大きさで薄さを見る（文書を外せば、薄い扱いになる）", async () => {
+    const draft = await summarizedDraft();
+    await candidates(draft.id);
+    prompts.length = 0;
+    // README・docs をどちらも外す。コードとデータの形だけが残る。
+    const res = await rebuild(draft.id, { excludeIds: ["E1", "E2"] });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as RepoMapDraftView;
+    expect(body.candidates!.thin).toBe(true);
+    expect(prompts.filter((p) => p.includes("文書が少ない")).length).toBeGreaterThan(0);
+  });
+
+  it("AI へ渡していない材料の ID は、根拠として受けない", async () => {
+    // 長い要約・長いパスの材料を多く作り、最後の材料が上限で入らないようにする。
+    const longSummary = "い".repeat(260);
+    aiOverride = (prompt) =>
+      prompt.includes("要約してください")
+        ? geminiOk(JSON.stringify({ summary: longSummary }))
+        : prompt.includes("パスの JSON 配列だけ")
+          ? geminiOk(
+              JSON.stringify(
+                Array.from({ length: 5 }, (_, i) => `app/models/${"m".repeat(200)}${String(i)}.rb`),
+              ),
+            )
+          : aiBase(prompt);
+    tree = [
+      blob("README.md", 2600),
+      blob("docs/orders.md", 2400),
+      ...Array.from({ length: 5 }, (_, i) =>
+        blob(`app/models/${"m".repeat(200)}${String(i)}.rb`, 700),
+      ),
+      ...TREE.slice(2, 3),
+    ];
+    for (let i = 0; i < 5; i += 1) {
+      BODIES[`sha:app/models/${"m".repeat(200)}${String(i)}.rb`] = `class M${String(i)}`;
+    }
+    const draft = await summarizedDraft();
+    const ids = draft.summary!.materials.map((m) => m.id);
+    const last = ids[ids.length - 1]!;
+    candidatesResponse = () => [
+      { name: "見えていない材料", original: "Unseen", description: "d", evidence: [last] },
+      { name: "見えている材料", original: "Seen", description: "d", evidence: ["E1"] },
+    ];
+    prompts.length = 0;
+    const body = (await (await candidates(draft.id)).json()) as RepoMapDraftView;
+    const sent = prompts.filter((p) => p.includes("候補を最大"))[0]!;
+    // 最後の材料の行は、入力の上限で渡していない。
+    expect(sent).not.toContain(`[${last}]`);
+    expect(body.candidates!.items.map((c) => c.original)).not.toContain("Unseen");
+    expect(body.candidates!.items.map((c) => c.original)).toContain("Seen");
+  });
+
+  it("機械で足した名前は、文書・コードに無いとは言わない", async () => {
+    const draft = await summarizedDraft();
+    const body = (await (await candidates(draft.id)).json()) as RepoMapDraftView;
+    const added = body.candidates!.items.filter((c) => c.schemaOnly);
+    expect(added.length).toBeGreaterThan(0);
+    for (const c of added) {
+      expect(c.description).not.toContain("出てこない");
+      expect(c.description).toContain("機械で足しました");
+    }
+  });
+
   it("候補の段は、設定した候補用のモデルで呼ぶ", async () => {
     const draft = await summarizedDraft();
     await candidates(draft.id);

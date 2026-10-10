@@ -180,6 +180,12 @@ export async function buildCandidates(
     );
   }
 
+  // 設定の誤り（モデルが許可されていない・空）は、占有を取る前に断る。占有したまま残さない。
+  const ai = new AiSession(
+    { ...aiConfig, models: aiConfig.candidateModels ?? aiConfig.models },
+    Math.max(0, MAX_AI_CALLS_PER_DRAFT - draft.aiCalls),
+  );
+
   // 段の占有。同じ下書きの段を同時に走らせない。
   const claim = `claim:${String(now.getTime()).padStart(13, "0")}:${deps.newId()}`;
   const claimed = await deps.drafts.claimStage({
@@ -213,10 +219,6 @@ export async function buildCandidates(
       ...extra,
     });
 
-  const ai = new AiSession(
-    { ...aiConfig, models: aiConfig.candidateModels ?? aiConfig.models },
-    Math.max(0, MAX_AI_CALLS_PER_DRAFT - draft.aiCalls),
-  );
   let flushAttempted = false;
   const flush = async () => {
     if (flushAttempted) return;
@@ -251,42 +253,60 @@ export async function buildCandidates(
       }
     }
 
-    // 文書が薄いかは、元のファイルの大きさで見る（要約の長さではなく）。
-    const docBytes = state.files
-      .filter((f) => f.cls === "doc" || f.cls === "glossary")
-      .reduce((n, f) => n + f.size, 0);
+    // 文書が薄いかは、残した（外していない）文書の元のファイルの大きさで見る（要約の長さではなく）。
+    const sizeOf = new Map(state.files.map((f) => [f.path, f.size]));
+    const docBytes = materials
+      .filter((m) => m.kind === "doc" || m.kind === "glossary")
+      .reduce((n, m) => n + (sizeOf.get(m.ref) ?? 0), 0);
     const thin = docBytes < THIN_DOC_BYTES;
 
-    const materialLines = materials.map((m) => `[${m.id}] ${m.kind} ${m.ref}: ${m.text}`);
     // データの形の名前は、文書が薄いときだけ AI へ渡す（docs/data-privacy.md）。薄くなければ、
-    // 名前のつき合わせと根拠は機械だけで行う。
-    const schemaLines = thin ? schema.map((f) => `[${f.id}] ${f.path}: ${f.names.join(", ")}`) : [];
-    const schemaText = headBytes(schemaLines.join("\n"), CANDIDATE_SCHEMA_BYTES);
-    // 入力の上限（バイト）に収める。固定の指示・見出し・データの形の分を先に測り、残りを材料に使う
-    // （材料だけを切ると、指示と合わせて上限を超えることがある）。
-    const skeleton = buildCandidatesPrompt({
-      materials: "",
-      schema: schemaText,
-      thin,
-      max: MAX_CANDIDATES,
-      materialsMaxBytes: 0,
-    });
-    const room = AI_USAGE_LIMITS.inputTokensPerRequest - byteLength(skeleton);
-    const prompt = buildCandidatesPrompt({
-      materials: materialLines.join("\n"),
-      schema: schemaText,
-      thin,
-      max: MAX_CANDIDATES,
-      materialsMaxBytes: Math.max(0, Math.min(CANDIDATE_MATERIAL_BYTES, room)),
-    });
+    // 名前のつき合わせと根拠は機械だけで行う。入る行だけを、丸ごと渡す（行の途中で切らない）。
+    const schemaLines = thin
+      ? schema.map((f) => ({ id: f.id, text: `[${f.id}] ${f.path}: ${f.names.join(", ")}` }))
+      : [];
+    while (
+      schemaLines.length > 0 &&
+      byteLength(schemaLines.map((l) => l.text).join("\n")) > CANDIDATE_SCHEMA_BYTES
+    ) {
+      schemaLines.pop();
+    }
+    const schemaText = schemaLines.map((l) => l.text).join("\n");
+
+    // 入力の上限（バイト）に収める。材料は、入る行だけを丸ごと渡す。AI が見ていない材料の ID は、
+    // 根拠として受けない（見ていないものを根拠にした候補を作らない）。
+    const materialLines = materials.map((m) => ({
+      id: m.id,
+      text: `[${m.id}] ${m.kind} ${m.ref}: ${m.text}`,
+    }));
+    const build = (lines: readonly { text: string }[]) =>
+      buildCandidatesPrompt({
+        materials: lines.map((l) => l.text).join("\n"),
+        schema: schemaText,
+        thin,
+        max: MAX_CANDIDATES,
+        materialsMaxBytes: Number.POSITIVE_INFINITY,
+      });
+    const fits = (lines: readonly { text: string }[]) =>
+      byteLength(lines.map((l) => l.text).join("\n")) <= CANDIDATE_MATERIAL_BYTES &&
+      byteLength(build(lines)) <= AI_USAGE_LIMITS.inputTokensPerRequest;
+    const sentMaterials = [...materialLines];
+    while (sentMaterials.length > 0 && !fits(sentMaterials)) sentMaterials.pop();
+    if (sentMaterials.length === 0 && materialLines.length > 0) {
+      // 1 行も入らない（長すぎる 1 件）。先頭の 1 件だけを切って渡す。
+      const first = materialLines[0]!;
+      sentMaterials.push({ id: first.id, text: headBytes(first.text, CANDIDATE_MATERIAL_BYTES) });
+    }
+    const prompt = build(sentMaterials);
+    const seenIds = new Set([...sentMaterials.map((l) => l.id), ...schemaLines.map((l) => l.id)]);
     const value = await ai.json("candidates", "candidates", prompt, {
       maxOutputTokens: CANDIDATES_MAX_OUTPUT_TOKENS,
       thinkingBudget: CANDIDATES_THINKING_BUDGET,
     });
     const raw = parseCandidates(value);
 
-    // 根拠は、残した材料の ID だけを受ける。根拠が 1 つも無い候補は、裏付けが無いので外す。
-    const allowed = new Set([...materials.map((m) => m.id), ...schema.map((f) => f.id)]);
+    // 根拠は、AI へ実際に渡した材料の ID だけを受ける。根拠が 1 つも無い候補は、裏付けが無いので外す。
+    const allowed = seenIds;
     const schemaNames = schema.flatMap((f) => f.names.map((n) => ({ name: n, id: f.id })));
     const seen = new Set<string>();
     const items: CandidateState[] = [];
@@ -314,7 +334,7 @@ export async function buildCandidates(
       });
       if (items.length >= MAX_CANDIDATES) break;
     }
-    // 文書・コードには無く、データの形にだけある名前を足す（機械で。AI は使わない）。
+    // AI の候補に当たらない、データの形の名前を足す（機械で。AI は使わない）。文書・コードに無いとは言わない。
     const covered = items.flatMap((c) => [normalizeName(c.original), normalizeName(c.name)]);
     let added = 0;
     for (const s of schemaNames) {
@@ -328,7 +348,7 @@ export async function buildCandidates(
         name: s.name,
         original: s.name,
         description:
-          "文書やコードの要約には出てこない、データの形（テーブル・モデル）にだけある名前です。",
+          "データの形（テーブル・モデル）に現れる名前です。AI の候補には選ばれなかったので、機械で足しました。",
         evidence: [s.id],
         fromSchema: true,
         schemaOnly: true,
