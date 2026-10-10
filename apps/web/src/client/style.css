@@ -468,9 +468,9 @@ a.area-card.complete {
   color: #92400e;
 }
 .history-map-stats .history-stat-unrelated {
-  background: #f1f5f9;
-  border-color: #64748b;
-  color: #334155;
+  background: #fef2f2;
+  border-color: #dc2626;
+  color: #991b1b;
 }
 @media (max-width: 600px) {
   .history-map-stats {
