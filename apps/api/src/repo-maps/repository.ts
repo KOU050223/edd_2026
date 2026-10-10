@@ -127,8 +127,8 @@ export interface RepoMapDraftRepository {
     blobShas: readonly string[];
   }): Promise<StoredSummary[]>;
 
-  /** 要約を保管する。同じキーがあれば置き換える。 */
-  putSummary(summary: StoredSummary): Promise<void>;
+  /** 要約をまとめて保管する（1 回の書き込み）。同じキーがあれば置き換える。 */
+  putSummaries(summaries: readonly StoredSummary[]): Promise<void>;
 
   /** 持ち主の下書きを消す。無ければ false。 */
   delete(userId: string, id: string): Promise<boolean>;

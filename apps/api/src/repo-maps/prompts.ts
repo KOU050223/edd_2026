@@ -36,8 +36,16 @@ function sanitize(text: string): string {
   return text.replaceAll("<<<", "＜＜＜").replaceAll(">>>", "＞＞＞");
 }
 
-function fence(label: string, text: string): string {
-  return [`<<<資料: ${sanitize(label)}`, sanitize(text), "資料>>>"].join("\n");
+/**
+ * 材料を区切りで囲む。**置き換えのあとで** `maxBytes` に切る（置き換えは 1 箇所で 6 バイト増える。
+ * 先に切ると、`>>>` の多い材料で入力の上限を超える。PR #314 のレビュー）。
+ */
+function fence(label: string, text: string, maxBytes: number): string {
+  return [
+    `<<<資料: ${headBytes(sanitize(label), 300)}`,
+    headBytes(sanitize(text), maxBytes),
+    "資料>>>",
+  ].join("\n");
 }
 
 export type SummaryRole = "glossary" | "doc" | "code" | "issue";
@@ -56,7 +64,7 @@ export function buildSummaryPrompt(role: SummaryRole, label: string, text: strin
     `下の資料は${SUMMARY_FOCUS[role]}日本語で 100 文字以内に要約してください。`,
     "実装の手順、環境構築、開発の作法は書かない。概念名は原文の表記（英語など）を括弧で残す。",
     '応答は {"summary": "要約"} の JSON だけを返す。',
-    fence(label, text),
+    fence(label, text, Math.max(FILE_HEAD_BYTES, ISSUE_HEAD_BYTES)),
   ].join("\n");
 }
 
@@ -66,8 +74,8 @@ export function buildPickCodePrompt(overview: string, listing: string, max: numb
     `あなたはソフトウェアのドメイン知識を読み取る人です。${GUARD}`,
     `下の一覧から、ドメイン（業務の概念・データの形・ルール）の中心になっていそうなファイルを最大 ${String(max)} 個選び、パスの JSON 配列だけを返してください。`,
     "ビルド設定・UI の見た目・テスト・ユーティリティは選ばない。一覧に無いパスは返さない。",
-    fence("概要", overview),
-    fence("ファイル一覧", listing),
+    fence("概要", overview, 600),
+    fence("ファイル一覧", listing, 4_600),
   ].join("\n");
 }
 
@@ -77,6 +85,6 @@ export function buildPickIssuePrompt(titles: string, max: number): string {
     `あなたはソフトウェアのドメイン知識を読み取る人です。${GUARD}`,
     `下の Issue のタイトルから、ドメイン知識（業務の概念・ルール・仕様の決定）の手がかりになりそうなものを最大 ${String(max)} 件選び、番号の JSON 配列だけを返してください。`,
     "不具合の報告、依存の更新、環境構築は選ばない。",
-    fence("Issue のタイトル", headBytes(titles, ISSUE_TITLES_BYTES)),
+    fence("Issue のタイトル", titles, ISSUE_TITLES_BYTES),
   ].join("\n");
 }

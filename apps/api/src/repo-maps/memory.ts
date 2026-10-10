@@ -169,7 +169,12 @@ export class InMemoryRepoMapDraftRepository implements RepoMapDraftRepository {
     );
   }
 
-  putSummary(summary: StoredSummary): Promise<void> {
+  putSummaries(summaries: readonly StoredSummary[]): Promise<void> {
+    for (const summary of summaries) this.putOne(summary);
+    return Promise.resolve();
+  }
+
+  private putOne(summary: StoredSummary): void {
     const key = [
       summary.repoOwner,
       summary.repoName,
@@ -178,7 +183,6 @@ export class InMemoryRepoMapDraftRepository implements RepoMapDraftRepository {
       String(summary.bytesLimit),
     ].join("|");
     this.summaries.set(key, { ...summary });
-    return Promise.resolve();
   }
 
   get(userId: string, id: string): Promise<StoredRepoMapDraft | null> {

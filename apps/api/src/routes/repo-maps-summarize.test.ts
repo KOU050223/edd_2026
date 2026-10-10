@@ -60,6 +60,8 @@ let app: Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>;
 let h: Harness;
 let aiBehavior: (prompt: string) => Response | Promise<Response>;
 let blobFailure: GitHubError | null;
+/** テストごとに小さくできる、1 リクエストの外部呼び出しの上限。 */
+let budgetOverride: number | undefined;
 let seq: number;
 
 function geminiOk(text: string, tokens = { prompt: 400, total: 520 }): Response {
@@ -142,6 +144,7 @@ function build() {
       identity: new InMemoryIdentityRepository(store),
       newId: () => `r${String((seq += 1)).padStart(8, "0")}`,
       now: () => NOW,
+      ...(budgetOverride === undefined ? {} : { subrequestBudget: budgetOverride }),
       ai: {
         apiKey: "test-key",
         models: ["gemini-3.5-flash-lite", "gemini-3.8-flash"],
@@ -191,6 +194,7 @@ beforeEach(async () => {
   h = { githubCalls: [], aiPrompts: [] };
   aiBehavior = defaultAi;
   blobFailure = null;
+  budgetOverride = undefined;
   seq = 0;
   build();
 });
@@ -405,6 +409,61 @@ describe("POST /v1/repo-map-drafts/:id/summarize", () => {
     expect(h.githubCalls).toHaveLength(0);
   });
 
+  it("指定したデータの形のファイルは AI へ送らず、機械で名前だけ取る", async () => {
+    const draft = await createDraft({ files: ["db/schema.rb"] });
+    const body = (await (await summarize(draft.id)).json()) as RepoMapDraftView;
+    expect(h.aiPrompts.some((p) => p.includes("create_table"))).toBe(false);
+    // 要約の対象（<<<資料: パス）にもならない。選択の一覧には載りうる。
+    expect(h.aiPrompts.some((p) => p.includes("<<<資料: db/schema.rb"))).toBe(false);
+    expect(body.summary!.materials.map((m) => m.ref)).not.toContain("db/schema.rb");
+    expect(body.summary!.schema).toEqual([
+      expect.objectContaining({ path: "db/schema.rb", names: ["orders", "customers"] }),
+    ]);
+  });
+
+  it("外部呼び出しの上限の手前で止まり、選んだ結果と済んだ要約を使って続きから完了する", async () => {
+    const draft = await createDraft();
+    // 1 リクエスト 7 回まで。モデル 2 つの最悪 2 回を次に送れないところで止まる。
+    budgetOverride = 7;
+    build();
+    let partials = 0;
+    let view: RepoMapDraftView | null = null;
+    for (let i = 0; i < 8 && view?.status !== "summarized"; i += 1) {
+      h.githubCalls.length = 0;
+      const before = h.aiPrompts.length;
+      const res = await summarize(draft.id);
+      expect(res.status).toBe(200);
+      view = (await res.json()) as RepoMapDraftView;
+      expect(h.githubCalls.length + (h.aiPrompts.length - before)).toBeLessThanOrEqual(7);
+      if (view.partial) partials += 1;
+    }
+    expect(partials).toBeGreaterThan(0);
+    expect(view?.status).toBe("summarized");
+    expect(view?.partial).toBe(false);
+    // 選択は 1 回ずつだけ（再開で選び直さない）。同じ材料の要約も 2 度作らない。
+    expect(h.aiPrompts.filter((p) => p.includes("パスの JSON 配列だけ"))).toHaveLength(1);
+    expect(h.aiPrompts.filter((p) => p.includes("番号の JSON 配列だけ"))).toHaveLength(1);
+    const summaryPrompts = h.aiPrompts.filter((p) => p.includes("要約してください"));
+    expect(new Set(summaryPrompts).size).toBe(summaryPrompts.length);
+    expect(view?.summary?.materials).toHaveLength(5);
+  });
+
+  it("最初の送信が毎回 503 でも、モデルを切り替えて完了し、上限を超えない", async () => {
+    const draft = await createDraft();
+    const seen = new Set<string>();
+    aiBehavior = (prompt) => {
+      if (!seen.has(prompt)) {
+        seen.add(prompt);
+        return new Response("{}", { status: 503 });
+      }
+      return defaultAi(prompt);
+    };
+    h.githubCalls.length = 0;
+    const res = await summarize(draft.id);
+    expect(res.status).toBe(200);
+    expect(h.githubCalls.length + h.aiPrompts.length).toBeLessThanOrEqual(36);
+  });
+
   it("1 リクエストの外部呼び出しは上限に収まる", async () => {
     // 指定を最大にしても、想定の最大が上限（40）を超えないことを、呼び出し回数で確かめる。
     const draft = await createDraft({
@@ -432,6 +491,13 @@ describe("プロンプト", () => {
     );
     expect(prompt.match(/資料>>>/g)).toHaveLength(1);
     expect(prompt.match(/<<<資料:/g)).toHaveLength(1);
+  });
+
+  it("置き換えで増えても、入力の上限を超えない（`>>>` だらけの材料）", () => {
+    const heavy = ">>> ".repeat(2000);
+    const prompt = buildSummaryPrompt("doc", "README.md", heavy);
+    expect(new TextEncoder().encode(prompt).length).toBeLessThanOrEqual(6_000);
+    expect(prompt.match(/資料>>>/g)).toHaveLength(1);
   });
 
   it("多バイト文字の途中で切らない", () => {

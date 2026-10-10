@@ -46,6 +46,9 @@ interface DraftRow {
   expires_at: string;
 }
 
+/** 要約の保管を引くときの 1 文あたりの blob SHA の数（D1 の束縛は 100 個まで）。 */
+const SUMMARY_LOOKUP_CHUNK = 50;
+
 const DRAFT_COLUMNS = `id, user_id, repo_owner, repo_name, default_branch, commit_sha,
   target_folders, hint_files, hint_issues, status, stage_state, stage_state_version,
   failed_stage, failure_code, ai_calls, input_tokens, output_tokens,
@@ -310,6 +313,19 @@ export class D1RepoMapDraftRepository implements RepoMapDraftRepository {
     blobShas: readonly string[];
   }): Promise<StoredSummary[]> {
     if (params.blobShas.length === 0) return [];
+    // D1 は 1 つの文に束縛できる値が 100 個まで。余裕を見て 50 件ずつに分ける。
+    if (params.blobShas.length > SUMMARY_LOOKUP_CHUNK) {
+      const out: StoredSummary[] = [];
+      for (let i = 0; i < params.blobShas.length; i += SUMMARY_LOOKUP_CHUNK) {
+        out.push(
+          ...(await this.getSummaries({
+            ...params,
+            blobShas: params.blobShas.slice(i, i + SUMMARY_LOOKUP_CHUNK),
+          })),
+        );
+      }
+      return out;
+    }
     const marks = params.blobShas.map(() => "?").join(", ");
     const { results } = await this.db
       .prepare(
@@ -342,28 +358,32 @@ export class D1RepoMapDraftRepository implements RepoMapDraftRepository {
     }));
   }
 
-  async putSummary(s: StoredSummary): Promise<void> {
-    await this.db
-      .prepare(
-        `INSERT INTO repo_file_summaries
-           (repo_owner, repo_name, blob_sha, role, bytes_limit, summary, model, prompt_version, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT (repo_owner, repo_name, blob_sha, role, bytes_limit) DO UPDATE SET
-           summary = excluded.summary, model = excluded.model,
-           prompt_version = excluded.prompt_version, created_at = excluded.created_at`,
-      )
-      .bind(
-        s.repoOwner,
-        s.repoName,
-        s.blobSha,
-        s.role,
-        s.bytesLimit,
-        s.summary,
-        s.model,
-        s.promptVersion,
-        s.createdAt,
-      )
-      .run();
+  async putSummaries(summaries: readonly StoredSummary[]): Promise<void> {
+    if (summaries.length === 0) return;
+    await this.db.batch(
+      summaries.map((s) =>
+        this.db
+          .prepare(
+            `INSERT INTO repo_file_summaries
+               (repo_owner, repo_name, blob_sha, role, bytes_limit, summary, model, prompt_version, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT (repo_owner, repo_name, blob_sha, role, bytes_limit) DO UPDATE SET
+               summary = excluded.summary, model = excluded.model,
+               prompt_version = excluded.prompt_version, created_at = excluded.created_at`,
+          )
+          .bind(
+            s.repoOwner,
+            s.repoName,
+            s.blobSha,
+            s.role,
+            s.bytesLimit,
+            s.summary,
+            s.model,
+            s.promptVersion,
+            s.createdAt,
+          ),
+      ),
+    );
   }
 
   async get(userId: string, id: string): Promise<StoredRepoMapDraft | null> {

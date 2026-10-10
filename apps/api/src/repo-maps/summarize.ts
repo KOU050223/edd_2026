@@ -2,14 +2,16 @@
  * 要約の段（#249 の PR C2a）。下書きの材料から、文書・コード・Issue を AI で要約し、データの形を機械で読む。
  *
  * 流れ（スパイクの ④⑤⑥⑧）:
- * 1. 文書（用語集 → README → 浅い文書）を最大 {@link DOC_SLOTS} 件、本文の先頭 4,000 バイトを要約
+ * 1. 文書（指定 → 用語集 → README → 浅い順）を最大 {@link DOC_SLOTS} 件、本文の先頭 4,000 バイトを要約
  * 2. 重要なコードを AI に選ばせ（指定されたファイルを先に入れ、残りを選ばせる）、最大 {@link CODE_SLOTS} 件を要約
  * 3. Issue のタイトルから選ばせ（指定を先に）、最大 {@link ISSUE_SLOTS} 件の本文の冒頭を要約
- * 4. データの形（`schema.rb` など）を AI なしで読み、名前だけ取る
+ * 4. データの形（`schema.rb` など。指定されたものを含む）を AI なしで読み、名前だけ取る
  *
- * 要約は `(リポジトリ, blob SHA, 役割, 読む上限)` で保管し、同じ中身を 2 度要約しない。途中で失敗しても
- * 済んだ分は保管済みなので、やり直しは続きから進む。1 リクエストの外部呼び出しは
- * {@link MAX_SUBREQUESTS} 回に収める（Workers 無料プランの 50 回に、D1 の呼び出しの分を残す）。
+ * **1 リクエストの外部呼び出しは {@link MAX_SUBREQUESTS} 回に収める**（Workers 無料プランは 50 回で、
+ * D1 の呼び出しも数える可能性がある）。実際に送る回数（Gemini の送り直し・モデルの切り替えを含む）を
+ * 数え、次の呼び出しの最悪の回数が残りに収まらなければ、**止めて続きから再開できる形で返す**
+ * （`partial`）。選んだ結果は先に下書きへ書き、要約は `(リポジトリ, blob SHA, 役割, 読む上限)` で保管する。
+ * 再開では、選び直さず、済んだ要約を使う。
  */
 
 import { utcDayKey, utcMonthKey } from "../contract/ai-usage.js";
@@ -53,67 +55,73 @@ export const DOC_SLOTS = 3;
 export const CODE_SLOTS = MAX_HINTS;
 /** Issue の要約の数の上限（指定された Issue を含む）。 */
 export const ISSUE_SLOTS = MAX_HINTS;
-/** 機械で読むデータの形のファイルの数の上限。 */
+/** 機械で読むデータの形のファイルの数の上限（指定されたものを含む）。 */
 export const SCHEMA_FILES = 4;
 /** データの形のファイルを読むバイト数の上限。 */
 export const SCHEMA_READ_BYTES = 120_000;
 /**
- * 1 リクエストで呼んでよい外部（GitHub・Gemini）の回数の上限。Workers 無料プランは 50 回で、
- * D1 の呼び出しも数えるので、10 回分を残す。想定の最大は 36 回（文書 5 + コード 5 + データの形 4 +
- * Issue 5 + 要約 15 + 選択 2 の内訳。docs/ai-limits.md）。
+ * 1 リクエストで送ってよい外部（GitHub・Gemini）の回数の上限。Workers 無料プランの 50 回から、
+ * D1 の呼び出し（約 11 回。保管の書き込みと記録は batch で 1 回）の分を残す。
  */
-export const MAX_SUBREQUESTS = 40;
+export const MAX_SUBREQUESTS = 36;
 
-/** 外部呼び出しの回数の管理。上限を超える設計の誤りは、送る前に例外にする。 */
+/** 外部呼び出しの残りが足りない。段を止めて、続きから再開できる形で返す合図。 */
+class StageBudgetReached extends Error {
+  constructor() {
+    super("repo map summarize reached its subrequest budget");
+    this.name = "StageBudgetReached";
+  }
+}
+
+/** 実際に送る外部呼び出し（送り直し・モデルの切り替えを含む）の数。 */
 class SubrequestBudget {
   private used = 0;
-  take(label: string): void {
+  constructor(private readonly limit: number) {}
+  /** 送る前に、最悪の回数の余裕があるか確かめる。足りなければ止める。 */
+  require(attempts: number): void {
+    if (this.used + attempts > this.limit) throw new StageBudgetReached();
+  }
+  /** 実際に送ったものを数える（送る直前に呼ぶ）。 */
+  count(): void {
     this.used += 1;
-    if (this.used > MAX_SUBREQUESTS) {
-      throw new Error(
-        `repo map summarize exceeded ${String(MAX_SUBREQUESTS)} subrequests: ${label}`,
-      );
-    }
   }
 }
 
 const depthOf = (path: string) => path.split("/").length;
 const isReadme = (path: string) => /(^|\/)readme/i.test(path);
 
-function isStringArray(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every((v) => typeof v === "string");
-}
-function isNumberArray(value: unknown): value is number[] {
-  return Array.isArray(value) && value.every((v) => typeof v === "number");
+const SHAPE_BODY = {
+  error: "ai_response_unusable",
+  reason: "shape",
+  message: "AI の応答を読み取れませんでした。もう一度お試しください。",
+};
+
+function shapeFailure(label: string): AiStageFailure {
+  return new AiStageFailure("unusable", 502, SHAPE_BODY, `shape: ${label}`);
 }
 
 /** 要約の応答（`{"summary": "..."}`）から本文を取る。形が違えば失敗にする。 */
 function summaryText(value: unknown, label: string): string {
-  if (
-    typeof value === "object" &&
-    value !== null &&
-    typeof (value as { summary?: unknown }).summary === "string" &&
-    (value as { summary: string }).summary.trim() !== ""
-  ) {
-    return (value as { summary: string }).summary.trim();
-  }
-  throw new AiStageFailure(
-    "unusable",
-    502,
-    {
-      error: "ai_response_unusable",
-      reason: "shape",
-      message: "AI の応答を読み取れませんでした。もう一度お試しください。",
-    },
-    `summary shape: ${label}`,
-  );
+  const summary =
+    typeof value === "object" && value !== null
+      ? (value as { summary?: unknown }).summary
+      : undefined;
+  if (typeof summary === "string" && summary.trim() !== "") return summary.trim();
+  throw shapeFailure(`summary ${label}`);
 }
 
-/** 失敗を下書きへ書き、応答にする失敗の種類。 */
+/** 失敗を下書きへ書くときのコード。 */
 function failureCodeOf(error: unknown): string {
   if (error instanceof AiStageFailure) return `ai_${error.kind}`;
   if (error instanceof GitHubError) return `github_${error.kind}`;
   return "internal";
+}
+
+/** 段の途中の状態。`pending` は終わりに（失敗・中断でも）まとめて保管する。 */
+interface Run {
+  budget: SubrequestBudget;
+  ai: AiSession;
+  pending: StoredSummary[];
 }
 
 export async function summarizeDraft(
@@ -143,7 +151,8 @@ export async function summarizeDraft(
       { limit: MAX_AI_CALLS_PER_DRAFT, used: draft.aiCalls },
     );
   }
-  if (deps.ai === undefined) {
+  const aiConfig = deps.ai;
+  if (aiConfig === undefined) {
     throw new AiStageFailure(
       "not_configured",
       503,
@@ -151,10 +160,21 @@ export async function summarizeDraft(
       "ai config missing",
     );
   }
-  const ai = new AiSession(deps.ai);
+  const budget = new SubrequestBudget(deps.subrequestBudget ?? MAX_SUBREQUESTS);
+  const ai = new AiSession({
+    ...aiConfig,
+    // 実際に送る回数を数える。送る前に最悪の回数の余裕を確かめるので、ここでは止めない。
+    fetch: (url, init) => {
+      budget.count();
+      return aiConfig.fetch(url, init);
+    },
+  });
+  const run: Run = { budget, ai, pending: [] };
   const stageNow = now.toISOString();
 
-  const record = async () => {
+  /** 保管・記録を書く。 */
+  const flush = async (): Promise<void> => {
+    await deps.drafts.putSummaries(run.pending);
     await deps.drafts.recordAiCalls({
       userId,
       draftId,
@@ -164,38 +184,49 @@ export async function summarizeDraft(
       calls: ai.calls,
     });
   };
-
-  try {
-    const summary = await runSummaries(deps, draft, state, ai);
-    const next: FetchedState = { ...state, summary };
-    await deps.drafts.update(userId, draftId, {
-      status: "summarized",
+  const patch = (status: "fetched" | "summarized" | "failed", next: FetchedState, extra = {}) =>
+    deps.drafts.update(userId, draftId, {
+      status,
       stageState: JSON.stringify(next),
       stageStateVersion: draft.stageStateVersion,
       failedStage: null,
       failureCode: null,
       updatedAt: stageNow,
+      ...extra,
     });
-    await record();
+
+  let progress: NonNullable<FetchedState["progress"]> = { ...state.progress };
+  try {
+    const summary = await runSummaries(deps, draft, state, run, async (next) => {
+      progress = next;
+      await patch("fetched", { ...state, progress: next });
+    });
+    await patch("summarized", { ...state, progress, summary });
+    await flush();
   } catch (error) {
-    // 呼び出しの記録と、失敗の状態を残してから投げ直す。記録に失敗しても元の失敗を隠さない。
-    const stage: DraftStage = "summarize";
-    await record().catch((recordError: unknown) => {
-      console.error("failed to record repo map ai calls", { draftId, recordError });
-    });
-    await deps.drafts
-      .update(userId, draftId, {
-        status: "failed",
-        stageState: draft.stageState,
-        stageStateVersion: draft.stageStateVersion,
-        failedStage: stage,
-        failureCode: failureCodeOf(error),
-        updatedAt: stageNow,
-      })
-      .catch((updateError: unknown) => {
+    if (error instanceof StageBudgetReached) {
+      // 外部呼び出しの上限の手前で止めた。選んだ結果と済んだ要約は保管したので、もう一度呼べば続きから進む。
+      await patch("fetched", { ...state, progress });
+      await flush();
+    } else {
+      // 課金された呼び出しと済んだ要約を残し、失敗の段を書いてから、元の失敗を投げ直す。
+      // 書けなくても、元の失敗を隠さない（記録して投げ直す）。
+      await flush().catch((flushError: unknown) => {
+        console.error("failed to flush repo map summaries", { draftId, flushError });
+      });
+      const stage: DraftStage = "summarize";
+      await patch(
+        "failed",
+        { ...state, progress },
+        {
+          failedStage: stage,
+          failureCode: failureCodeOf(error),
+        },
+      ).catch((updateError: unknown) => {
         console.error("failed to mark repo map draft as failed", { draftId, updateError });
       });
-    throw error;
+      throw error;
+    }
   }
 
   const saved = await deps.drafts.get(userId, draftId);
@@ -207,12 +238,14 @@ async function runSummaries(
   deps: RepoMapDeps,
   draft: StoredRepoMapDraft,
   state: FetchedState,
-  ai: AiSession,
+  run: Run,
+  saveProgress: (progress: NonNullable<FetchedState["progress"]>) => Promise<void>,
 ): Promise<SummaryState> {
   const ref = { owner: draft.repoOwner, name: draft.repoName };
-  const budget = new SubrequestBudget();
+  const { budget, ai } = run;
   const skipped: SummaryState["skipped"] = [];
   const materials: MaterialState[] = [];
+  const progress: NonNullable<FetchedState["progress"]> = { ...state.progress };
   const addMaterial = (
     kind: MaterialState["kind"],
     refText: string,
@@ -228,7 +261,25 @@ async function runSummaries(
     });
   };
 
-  // ---- 保管した要約を、まとめて 1 回で引く（ファイルの blob SHA が分かっている分）。
+  // GitHub の呼び出しは、送る前に 1 回分の余裕を確かめて数える。
+  const github = {
+    blob: (file: KeptFile, maxBytes: number) => {
+      budget.require(1);
+      budget.count();
+      return deps.github.getBlobText(ref, file.sha, maxBytes);
+    },
+    issue: (number: number) => {
+      budget.require(1);
+      budget.count();
+      return deps.github.getIssue(ref, number);
+    },
+  };
+  /** AI へ送る前に、最悪の回数（モデル × 巡）の余裕を確かめる。 */
+  const needAi = () => {
+    budget.require(ai.worstCaseAttempts);
+  };
+
+  // ---- 保管した要約。必要になる分だけを、まとめて引く（D1 の束縛は 100 個まで）。
   const cache = new Map<string, StoredSummary>();
   const cacheKey = (sha: string, role: SummaryRole, limit: number) =>
     `${sha}|${role}|${String(limit)}`;
@@ -242,7 +293,7 @@ async function runSummaries(
     for (const row of rows) cache.set(cacheKey(row.blobSha, row.role, row.bytesLimit), row);
   };
 
-  /** 保管があれば使い、無ければ AI で要約して保管する。 */
+  /** 保管があれば使い、無ければ AI で要約して（終わりにまとめて）保管する。 */
   const summarizeOne = async (params: {
     cacheSha: string;
     role: SummaryRole;
@@ -252,8 +303,11 @@ async function runSummaries(
   }): Promise<string> => {
     const hit = cache.get(cacheKey(params.cacheSha, params.role, params.bytesLimit));
     if (hit !== undefined) return hit.summary;
+    // 本文を取るより先に、AI へ送る余裕があるかを確かめる（取ったのに送れず、無駄にしない）。
+    // 本文の取得（1 回）と送信（最悪の回数）の合計で見る。
+    budget.require(1 + ai.worstCaseAttempts);
     const text = await params.readText();
-    budget.take(`summary ${params.label}`);
+    needAi();
     const value = await ai.json(
       "summarize",
       `summary:${params.label}`,
@@ -261,29 +315,23 @@ async function runSummaries(
       { maxOutputTokens: SUMMARY_MAX_OUTPUT_TOKENS, thinkingBudget: SUMMARY_THINKING_BUDGET },
     );
     const summary = summaryText(value, params.label);
-    const model = ai.calls[ai.calls.length - 1]?.model ?? "";
-    await deps.drafts.putSummary({
+    const stored: StoredSummary = {
       repoOwner: ref.owner,
       repoName: ref.name,
       blobSha: params.cacheSha,
       role: params.role,
       bytesLimit: params.bytesLimit,
       summary,
-      model,
+      model: ai.calls[ai.calls.length - 1]?.model ?? "",
       promptVersion: PROMPT_VERSION,
       createdAt: deps.now().toISOString(),
-    });
+    };
+    run.pending.push(stored);
+    cache.set(cacheKey(params.cacheSha, params.role, params.bytesLimit), stored);
     return summary;
   };
 
-  const readBlob = (file: KeptFile, maxBytes: number) => async () => {
-    budget.take(`blob ${file.path}`);
-    return (await deps.github.getBlobText(ref, file.sha, maxBytes)).text;
-  };
-
   const files = state.files;
-  const schemaFiles = files.filter((f) => f.cls === "schema" && !f.pinned).slice(0, SCHEMA_FILES);
-  await loadCache(files.map((f) => f.sha));
 
   // ---- 1. 文書。指定されたものを先に、そのあと用語集 → README → 浅い順。
   const docPool = files
@@ -303,6 +351,7 @@ async function runSummaries(
     ...pinnedDocs,
     ...docPool.filter((f) => !f.pinned).slice(0, Math.max(0, DOC_SLOTS - pinnedDocs.length)),
   ];
+  await loadCache(docs.map((f) => f.sha));
   let docChars = 0;
   for (const file of docs) {
     const role: SummaryRole = file.cls === "glossary" ? "glossary" : "doc";
@@ -311,14 +360,17 @@ async function runSummaries(
       role,
       bytesLimit: FILE_HEAD_BYTES,
       label: file.path,
-      readText: async () => headBytes(await readBlob(file, FILE_HEAD_BYTES)(), FILE_HEAD_BYTES),
+      readText: async () => (await github.blob(file, FILE_HEAD_BYTES)).text,
     });
     docChars += summary.length;
     addMaterial(role, file.path, summary, file.pinned);
   }
 
-  // ---- 2. コード。指定されたファイルを先に入れ、残りを AI に選ばせる。
-  const pinnedCode = files.filter((f) => f.pinned && f.cls !== "glossary" && f.cls !== "doc");
+  // ---- 2. コード。指定されたファイルを先に入れ、残りを AI に選ばせる（選んだ結果は先に書く）。
+  // データの形のファイルは、指定されていても AI へは渡さない（4. で機械で読む）。
+  const pinnedCode = files.filter(
+    (f) => f.pinned && f.cls !== "glossary" && f.cls !== "doc" && f.cls !== "schema",
+  );
   const candidates = files
     .filter((f) => !f.pinned && f.cls === "code")
     .sort(
@@ -326,90 +378,95 @@ async function runSummaries(
         codeScore(b.path) - codeScore(a.path) || b.size - a.size || a.path.localeCompare(b.path),
     );
   const codeSlots = Math.max(0, CODE_SLOTS - pinnedCode.length);
-  let picked: KeptFile[] = [];
-  if (codeSlots > 0 && candidates.length > 0) {
-    budget.take("pick code");
-    const overview = materials[0]?.text ?? "(文書なし)";
-    const value = await ai.json(
-      "select",
-      "pick-code",
-      buildPickCodePrompt(overview, state.listing, codeSlots),
-      { maxOutputTokens: SELECT_MAX_OUTPUT_TOKENS, thinkingBudget: SUMMARY_THINKING_BUDGET },
-    );
-    if (!isStringArray(value)) {
-      throw new AiStageFailure(
-        "unusable",
-        502,
-        {
-          error: "ai_response_unusable",
-          reason: "shape",
-          message: "AI の応答を読み取れませんでした。もう一度お試しください。",
-        },
-        "pick-code shape",
+  if (progress.codePicks === undefined) {
+    let picks: string[] = [];
+    if (codeSlots > 0 && candidates.length > 0) {
+      needAi();
+      const overview = materials[0]?.text ?? "(文書なし)";
+      const value = await ai.json(
+        "select",
+        "pick-code",
+        buildPickCodePrompt(overview, state.listing, codeSlots),
+        { maxOutputTokens: SELECT_MAX_OUTPUT_TOKENS, thinkingBudget: SUMMARY_THINKING_BUDGET },
       );
+      if (!Array.isArray(value) || !value.every((v) => typeof v === "string")) {
+        throw shapeFailure("pick-code");
+      }
+      const known = new Set(candidates.map((f) => f.path));
+      // 一覧に無いパスは捨てる（AI が作ったパスを読みに行かない）。
+      picks = [...new Set(value as string[])].filter((p) => known.has(p)).slice(0, codeSlots);
     }
-    const byPath = new Map(candidates.map((f) => [f.path, f]));
-    // 一覧に無いパスは捨てる（AI が作ったパスを読みに行かない）。
-    picked = [...new Set(value)]
-      .flatMap((p) => {
-        const f = byPath.get(p);
-        return f === undefined ? [] : [f];
-      })
-      .slice(0, codeSlots);
+    progress.codePicks = picks;
+    await saveProgress({ ...progress });
   }
-  for (const file of [...pinnedCode, ...picked]) {
+  const byPath = new Map(files.map((f) => [f.path, f]));
+  const picked = progress.codePicks.flatMap((p) => {
+    const f = byPath.get(p);
+    return f === undefined ? [] : [f];
+  });
+  const codeFiles = [...pinnedCode, ...picked];
+  await loadCache(codeFiles.map((f) => f.sha));
+  for (const file of codeFiles) {
     const summary = await summarizeOne({
       cacheSha: file.sha,
       role: "code",
       bytesLimit: FILE_HEAD_BYTES,
       label: file.path,
-      readText: async () => headBytes(await readBlob(file, FILE_HEAD_BYTES)(), FILE_HEAD_BYTES),
+      readText: async () => (await github.blob(file, FILE_HEAD_BYTES)).text,
     });
     addMaterial("code", file.path, summary, file.pinned);
   }
 
-  // ---- 3. Issue。指定を先に、残りを AI に選ばせる。
+  // ---- 3. Issue。指定を先に、残りを AI に選ばせる（選んだ結果は先に書く）。
   const pinnedNumbers = draft.hintIssues;
   const pinnedSet = new Set(pinnedNumbers);
   const issuePool = state.issues.filter((i) => !pinnedSet.has(i.number));
   const issueSlots = Math.max(0, ISSUE_SLOTS - pinnedNumbers.length);
-  let chosen: number[] = [...pinnedNumbers];
-  if (issueSlots > 0 && issuePool.length > 0) {
-    budget.take("pick issue");
-    const titles = issuePool
-      .map(
-        (i) =>
-          `#${String(i.number)} [${i.state}] ${i.title}${i.labels.length > 0 ? ` {${i.labels.join(",")}}` : ""}`,
-      )
-      .join("\n");
-    const value = await ai.json("select", "pick-issue", buildPickIssuePrompt(titles, issueSlots), {
-      maxOutputTokens: SELECT_MAX_OUTPUT_TOKENS,
-      thinkingBudget: SUMMARY_THINKING_BUDGET,
-    });
-    if (!isNumberArray(value)) {
-      throw new AiStageFailure(
-        "unusable",
-        502,
+  if (progress.issuePicks === undefined) {
+    let picks: number[] = [];
+    if (issueSlots > 0 && issuePool.length > 0) {
+      needAi();
+      const titles = issuePool
+        .map(
+          (i) =>
+            `#${String(i.number)} [${i.state}] ${i.title}${i.labels.length > 0 ? ` {${i.labels.join(",")}}` : ""}`,
+        )
+        .join("\n");
+      const value = await ai.json(
+        "select",
+        "pick-issue",
+        buildPickIssuePrompt(titles, issueSlots),
         {
-          error: "ai_response_unusable",
-          reason: "shape",
-          message: "AI の応答を読み取れませんでした。もう一度お試しください。",
+          maxOutputTokens: SELECT_MAX_OUTPUT_TOKENS,
+          thinkingBudget: SUMMARY_THINKING_BUDGET,
         },
-        "pick-issue shape",
       );
+      if (!Array.isArray(value) || !value.every((v) => typeof v === "number")) {
+        throw shapeFailure("pick-issue");
+      }
+      const known = new Set(issuePool.map((i) => i.number));
+      picks = [...new Set(value as number[])].filter((n) => known.has(n)).slice(0, issueSlots);
     }
-    const known = new Set(issuePool.map((i) => i.number));
-    chosen = [...chosen, ...[...new Set(value)].filter((n) => known.has(n)).slice(0, issueSlots)];
+    progress.issuePicks = picks;
+    await saveProgress({ ...progress });
   }
+  // 更新日時が一覧で分かるものは、保管のキーを先にまとめて引く。
+  const updatedAt = new Map(state.issues.map((i) => [i.number, i.updatedAt]));
+  const chosen = [...pinnedNumbers, ...progress.issuePicks];
+  await loadCache(
+    chosen.flatMap((n) => {
+      const at = updatedAt.get(n);
+      return at === undefined ? [] : [`issue:${String(n)}:${at}`];
+    }),
+  );
   for (const number of chosen) {
-    budget.take(`issue #${String(number)}`);
-    const issue = await deps.github.getIssue(ref, number);
+    const issue = await github.issue(number);
     if (issue.isPullRequest) {
       skipped.push({ ref: `#${String(number)}`, reason: "pull_request" });
       continue;
     }
     const cacheSha = `issue:${String(number)}:${issue.updatedAt}`;
-    await loadCache([cacheSha]);
+    if (updatedAt.get(number) !== issue.updatedAt) await loadCache([cacheSha]);
     const summary = await summarizeOne({
       cacheSha,
       role: "issue",
@@ -421,14 +478,18 @@ async function runSummaries(
   }
 
   // ---- 4. データの形。AI を使わず、名前だけ取る（ファイルそのものは AI へ渡さない）。
+  // 指定されたものを先に（捨てる規則は通っていない）。
+  const schemaFiles = files
+    .filter((f) => f.cls === "schema")
+    .sort((a, b) => Number(b.pinned) - Number(a.pinned) || a.path.localeCompare(b.path))
+    .slice(0, SCHEMA_FILES);
   const schema: SummaryState["schema"] = [];
   for (const file of schemaFiles) {
     let text: string;
     try {
-      budget.take(`schema ${file.path}`);
-      text = (await deps.github.getBlobText(ref, file.sha, SCHEMA_READ_BYTES)).text;
+      text = (await github.blob(file, SCHEMA_READ_BYTES)).text;
     } catch (error) {
-      // バイナリ・取得失敗は、その 1 ファイルだけ読まなかったものとして残す（段全体は止めない）。
+      // バイナリは、その 1 ファイルだけ読まなかったものとして残す（段全体は止めない）。
       if (error instanceof GitHubError && error.kind === "unreadable") {
         skipped.push({ ref: file.path, reason: "unreadable" });
         continue;

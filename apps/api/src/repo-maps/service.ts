@@ -76,6 +76,11 @@ export interface FetchedState {
   issues: IssueSummary[];
   /** 利用者が指定した Issue（検証済み）。 */
   pinnedIssues: { number: number; title: string }[];
+  /**
+   * 要約の段の途中の状態。AI が選んだ結果（コード・Issue）を先に書き、再開で選び直さない
+   * （選び直すと別のファイルになり、保管した要約が無駄になる）。
+   */
+  progress?: { codePicks?: string[]; issuePicks?: number[] };
   /** 要約の段が終わっていれば入る。 */
   summary?: SummaryState;
 }
@@ -110,6 +115,8 @@ export interface RepoMapDeps {
   now: () => Date;
   /** AI の段（要約・候補）が使う設定。無ければ AI の段は 503 を返す。 */
   ai?: RepoMapAiConfig;
+  /** 1 リクエストの外部呼び出しの上限。省略は `MAX_SUBREQUESTS`。テストだけが小さくする。 */
+  subrequestBudget?: number;
 }
 
 interface Source {
@@ -351,6 +358,8 @@ function toView(draft: StoredRepoMapDraft): RepoMapDraftView {
             skipped: summary.skipped,
             docChars: summary.docChars,
           },
+    // 外部呼び出しの上限で止まり、続きから再開できる（もう一度呼べば進む）。
+    partial: draft.status === "fetched" && state.progress !== undefined && summary === undefined,
     ai: {
       calls: draft.aiCalls,
       inputTokens: draft.inputTokens,

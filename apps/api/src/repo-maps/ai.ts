@@ -8,7 +8,7 @@
 
 import { upstreamFailureBody } from "../checks/errors.js";
 import { readGeneratedText } from "../checks/response.js";
-import { requestCheckGeneration, UPSTREAM_RETRY_DELAYS_MS } from "../checks/upstream.js";
+import { requestCheckGeneration } from "../checks/upstream.js";
 import { AI_USAGE_LIMITS, isAllowedModel, type AllowedModel } from "../contract/ai-usage.js";
 import { byteLength } from "./prompts.js";
 import type { AiCallRecord } from "./repository.js";
@@ -71,6 +71,18 @@ export class AiSession {
   readonly calls: AiCallRecord[] = [];
   private readonly models: AllowedModel[];
 
+  /**
+   * 1 回の呼び出しで送りうる最大の回数（モデルの数 × 巡の数）。外部呼び出しの上限に収めるため、
+   * 呼び出し側が送る前にこの分の余裕を確かめる。待って送り直すより、段を分けて続きから再開する。
+   */
+  get worstCaseAttempts(): number {
+    return this.models.length * (this.retryDelaysMs.length + 1);
+  }
+
+  private get retryDelaysMs(): readonly number[] {
+    return this.config.retryDelaysMs ?? [];
+  }
+
   constructor(private readonly config: RepoMapAiConfig) {
     const allowed = config.models.filter(isAllowedModel);
     if (allowed.length !== config.models.length || allowed.length === 0) {
@@ -104,7 +116,7 @@ export class AiSession {
       prompt,
       maxOutputTokens: options.maxOutputTokens,
       ...(options.thinkingBudget === undefined ? {} : { thinkingBudget: options.thinkingBudget }),
-      retryDelaysMs: this.config.retryDelaysMs ?? UPSTREAM_RETRY_DELAYS_MS,
+      retryDelaysMs: this.retryDelaysMs,
       conceptId: `repo-map:${label}`,
     });
     if (!upstream.ok) {

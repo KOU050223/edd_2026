@@ -173,6 +173,8 @@ export interface RepoMapDraftView {
   issues: { number: number; title: string }[];
   /** 要約の段が終わっていれば、その結果。 */
   summary: RepoMapSummaryView | null;
+  /** 要約の段が途中で止まっている。もう一度 summarize を呼ぶと続きから進む。 */
+  partial: boolean;
   ai: RepoMapAiUsageView;
   /** 失敗して止まっているとき、どの段から続けるか。 */
   failure: { stage: "fetch" | "summarize" | "candidates"; code: string } | null;
