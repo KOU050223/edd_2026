@@ -1,4 +1,5 @@
-import { beforeEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { loadHistoryTarget } from "../maps/history-target.js";
 import { Hono } from "hono";
 import { createAuth, type AuthVariables } from "../auth/middleware.js";
 import { AuthVerificationError, type AuthVerifier } from "../auth/verifier.js";
@@ -39,10 +40,12 @@ function verifierFor(sub: string): AuthVerifier {
 }
 
 let usage: InMemoryAiUsageRepository;
+let maps: InMemoryLearningMapRepository;
 let app: Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>;
 
 beforeEach(() => {
   const store = createInMemoryRepositoryStore();
+  maps = new InMemoryLearningMapRepository(store);
   usage = new InMemoryAiUsageRepository();
   app = new Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>();
   app.use(
@@ -61,10 +64,55 @@ beforeEach(() => {
       events: new InMemoryLearningEventRepository(store),
       evidence: new InMemoryLearningEvidenceRepository(store),
       overrides: new InMemoryMasteryOverrideRepository(),
-      maps: new InMemoryLearningMapRepository(store),
+      maps,
       now: () => new Date("2026-09-22T10:00:00.000Z"),
     })),
   );
+});
+afterEach(() => vi.unstubAllGlobals());
+
+async function scopedRequest() {
+  const target = await loadHistoryTarget(maps, "auth0|user-a", "language:go");
+  return {
+    ...REQUEST,
+    knownConceptIds: ["go.defer"],
+    mapTarget: {
+      target: "language:go",
+      fingerprints: Object.fromEntries(
+        target!.concepts.map((concept) => [concept.id, concept.fingerprint]),
+      ),
+    },
+  };
+}
+
+test("対象マップ外の候補と古い定義は上流 AI を呼ぶ前に拒否する", async () => {
+  const fetchMock = stubUpstream({ observations: [] });
+  const request = await scopedRequest();
+  request.mapTarget.fingerprints["go.defer"] = "0".repeat(64);
+  expect((await analyze(request)).status).toBe(409);
+  expect(
+    (await analyze({ ...(await scopedRequest()), knownConceptIds: ["typescript.error"] })).status,
+  ).toBe(409);
+  expect(fetchMock).not.toHaveBeenCalled();
+});
+
+test("現行の名前・分野・説明を送り、未知の候補を別 Concept へ押し込まない", async () => {
+  const fetchMock = stubUpstream({
+    observations: [
+      { sourceId: "s1", conceptCandidates: ["unknown.topic"], kind: "question", confidence: 0.8 },
+    ],
+  });
+  const request = await scopedRequest();
+  const response = await analyze(request);
+
+  expect(response.status).toBe(200);
+  const body = (await response.json()) as HistoryAnalysisResponse;
+  expect(body.observations[0]!.conceptCandidates).toEqual([]);
+  const call = fetchMock.mock.calls[0] as unknown as [RequestInfo, RequestInit];
+  const prompt = JSON.parse(call[1].body as string).contents[0].parts[0].text as string;
+  expect(prompt).toContain('"id":"go.defer"');
+  expect(prompt).toContain('"area":"go"');
+  expect(prompt).toContain('"summary":');
 });
 
 function analyze(body: unknown, token = "valid-token", env = ENV) {

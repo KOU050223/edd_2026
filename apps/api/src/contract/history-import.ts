@@ -91,6 +91,7 @@ const conceptIdSchema = v.pipe(
  * 場合は剥がして受理するのではなく拒否する。
  */
 export const learningEvidenceSchema = v.strictObject({
+  observationKey: v.optional(v.pipe(v.string(), v.regex(/^[a-f0-9]{64}$/))),
   id: v.pipe(v.string(), v.minLength(1), v.maxLength(MAX_EVIDENCE_ID_LENGTH)),
   // Concept の無い Evidence は Map に載らず判断材料にならないため受けない。
   conceptIds: v.pipe(v.array(conceptIdSchema), v.minLength(1), v.maxLength(16)),
@@ -115,7 +116,13 @@ export type LearningEvidenceInput = v.InferOutput<typeof learningEvidenceSchema>
  * 埋め込むため、サーバー側で採番すると Evidence 側と辻褄が合わない。
  * 冪等性（同じ `id` の再送を重複作成しない）もこの ID で担保する。
  */
+export const historyTargetSchema = v.strictObject({
+  target: v.pipe(v.string(), v.minLength(1), v.maxLength(128)),
+  fingerprints: v.record(v.string(), v.pipe(v.string(), v.regex(/^[a-f0-9]{64}$/))),
+});
+
 export const createImportSessionSchema = v.strictObject({
+  mapTarget: v.optional(historyTargetSchema),
   id: v.pipe(v.string(), v.minLength(1), v.maxLength(MAX_ID_LENGTH)),
   importedBy: v.picklist(IMPORTED_BY),
   providers: v.pipe(v.array(v.picklist(HISTORY_PROVIDERS)), v.minLength(1), v.maxLength(16)),
@@ -205,6 +212,7 @@ export const analysisConversationSchema = v.strictObject({
 });
 
 export const historyAnalysisRequestSchema = v.strictObject({
+  mapTarget: v.optional(historyTargetSchema),
   conversations: v.pipe(
     v.array(analysisConversationSchema),
     v.minLength(1),

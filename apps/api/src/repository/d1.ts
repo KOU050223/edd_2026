@@ -1159,11 +1159,12 @@ interface EvidenceRow {
   concept_ids: string;
   observed_at: string | null;
   confidence: number;
+  observation_key: string | null;
   external_ref_hash: string | null;
 }
 
 const EVIDENCE_COLUMNS = `id, import_session_id, provider, imported_by, kind, concept_ids,
-  observed_at, confidence, external_ref_hash`;
+  observed_at, confidence, external_ref_hash, observation_key`;
 
 /**
  * learning_evidence の行を `LearningEvidence` へ戻す。
@@ -1195,6 +1196,7 @@ function toLearningEvidence(row: EvidenceRow): LearningEvidence {
     ...(row.observed_at === null ? {} : { observedAt: row.observed_at }),
     confidence: row.confidence,
     importSessionId: row.import_session_id,
+    ...(row.observation_key == null ? {} : { observationKey: row.observation_key }),
     ...(row.external_ref_hash === null ? {} : { externalRefHash: row.external_ref_hash }),
   };
 }
@@ -1394,14 +1396,14 @@ export class D1ImportSessionRepository implements ImportSessionRepository {
             // applied な Session が存在するときだけ書く。
             `INSERT INTO learning_evidence (
                id, user_id, import_session_id, provider, imported_by, kind,
-               concept_ids, observed_at, confidence, external_ref_hash, received_at_ms
+               concept_ids, observed_at, confidence, external_ref_hash, received_at_ms, observation_key
              )
-             SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+             SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
              WHERE EXISTS (
                SELECT 1 FROM import_sessions
                WHERE user_id = ? AND id = ? AND status = 'applied'
              )
-             ON CONFLICT (user_id, id) DO NOTHING`,
+             ON CONFLICT DO NOTHING`,
           )
           .bind(
             item.id,
@@ -1415,11 +1417,22 @@ export class D1ImportSessionRepository implements ImportSessionRepository {
             item.confidence,
             item.externalRefHash ?? null,
             nowMs,
+            item.observationKey ?? null,
             userId,
             session.id,
           ),
       ),
     ];
+    statements.push(
+      this.db
+        .prepare(
+          `UPDATE import_sessions SET
+      evidence_count = (SELECT COUNT(*) FROM learning_evidence WHERE user_id = ? AND import_session_id = ?),
+      concept_count = (SELECT COUNT(DISTINCT j.value) FROM learning_evidence e, json_each(e.concept_ids) j WHERE e.user_id = ? AND e.import_session_id = ?)
+      WHERE user_id = ? AND id = ? AND status = 'applied'`,
+        )
+        .bind(userId, session.id, userId, session.id, userId, session.id),
+    );
     const results = await this.db.batch(statements);
 
     const sessionChanges = results[0]?.meta?.changes;

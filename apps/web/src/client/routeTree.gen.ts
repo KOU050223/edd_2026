@@ -13,6 +13,7 @@ import { Route as FramedRouteRouteImport } from './routes/_framed/route'
 import { Route as LoginFailedRouteImport } from './routes/login-failed'
 import { Route as FramedIndexRouteImport } from './routes/_framed/index'
 import { Route as FramedActivityRouteImport } from './routes/_framed/activity'
+import { Route as FramedLocalHistoryRouteImport } from './routes/_framed/local-history'
 import { Route as FramedSettingsRouteRouteImport } from './routes/_framed/settings/route'
 import { Route as FramedCheckConceptIdRouteImport } from './routes/_framed/check.$conceptId'
 import { Route as FramedExploreIndexRouteImport } from './routes/_framed/explore.index'
@@ -51,6 +52,11 @@ const FramedIndexRoute = FramedIndexRouteImport.update({
 const FramedActivityRoute = FramedActivityRouteImport.update({
   id: '/activity',
   path: '/activity',
+  getParentRoute: () => FramedRouteRoute,
+} as any)
+const FramedLocalHistoryRoute = FramedLocalHistoryRouteImport.update({
+  id: '/local-history',
+  path: '/local-history',
   getParentRoute: () => FramedRouteRoute,
 } as any)
 const FramedSettingsRouteRoute = FramedSettingsRouteRouteImport.update({
@@ -161,6 +167,7 @@ export interface FileRoutesByFullPath {
   '/login-failed': typeof LoginFailedRoute
   '/settings': typeof FramedSettingsRouteRouteWithChildren
   '/activity': typeof FramedActivityRoute
+  '/local-history': typeof FramedLocalHistoryRoute
   '/check/$conceptId': typeof FramedCheckConceptIdRoute
   '/history/$conversationId': typeof FramedHistoryConversationIdRoute
   '/map/$language': typeof FramedMapLanguageRoute
@@ -184,6 +191,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/login-failed': typeof LoginFailedRoute
   '/activity': typeof FramedActivityRoute
+  '/local-history': typeof FramedLocalHistoryRoute
   '/': typeof FramedIndexRoute
   '/check/$conceptId': typeof FramedCheckConceptIdRoute
   '/history/$conversationId': typeof FramedHistoryConversationIdRoute
@@ -211,6 +219,7 @@ export interface FileRoutesById {
   '/login-failed': typeof LoginFailedRoute
   '/_framed/settings': typeof FramedSettingsRouteRouteWithChildren
   '/_framed/activity': typeof FramedActivityRoute
+  '/_framed/local-history': typeof FramedLocalHistoryRoute
   '/_framed/': typeof FramedIndexRoute
   '/_framed/check/$conceptId': typeof FramedCheckConceptIdRoute
   '/_framed/history/$conversationId': typeof FramedHistoryConversationIdRoute
@@ -239,6 +248,7 @@ export interface FileRouteTypes {
     | '/login-failed'
     | '/settings'
     | '/activity'
+    | '/local-history'
     | '/check/$conceptId'
     | '/history/$conversationId'
     | '/map/$language'
@@ -262,6 +272,7 @@ export interface FileRouteTypes {
   to:
     | '/login-failed'
     | '/activity'
+    | '/local-history'
     | '/'
     | '/check/$conceptId'
     | '/history/$conversationId'
@@ -288,6 +299,7 @@ export interface FileRouteTypes {
     | '/login-failed'
     | '/_framed/settings'
     | '/_framed/activity'
+    | '/_framed/local-history'
     | '/_framed/'
     | '/_framed/check/$conceptId'
     | '/_framed/history/$conversationId'
@@ -343,6 +355,13 @@ declare module '@tanstack/react-router' {
       path: '/activity'
       fullPath: '/activity'
       preLoaderRoute: typeof FramedActivityRouteImport
+      parentRoute: typeof FramedRouteRoute
+    }
+    '/_framed/local-history': {
+      id: '/_framed/local-history'
+      path: '/local-history'
+      fullPath: '/local-history'
+      preLoaderRoute: typeof FramedLocalHistoryRouteImport
       parentRoute: typeof FramedRouteRoute
     }
     '/_framed/settings': {
@@ -508,6 +527,7 @@ const FramedSettingsRouteRouteWithChildren =
 interface FramedRouteRouteChildren {
   FramedSettingsRouteRoute: typeof FramedSettingsRouteRouteWithChildren
   FramedActivityRoute: typeof FramedActivityRoute
+  FramedLocalHistoryRoute: typeof FramedLocalHistoryRoute
   FramedIndexRoute: typeof FramedIndexRoute
   FramedCheckConceptIdRoute: typeof FramedCheckConceptIdRoute
   FramedHistoryConversationIdRoute: typeof FramedHistoryConversationIdRoute
@@ -529,6 +549,7 @@ interface FramedRouteRouteChildren {
 const FramedRouteRouteChildren: FramedRouteRouteChildren = {
   FramedSettingsRouteRoute: FramedSettingsRouteRouteWithChildren,
   FramedActivityRoute: FramedActivityRoute,
+  FramedLocalHistoryRoute: FramedLocalHistoryRoute,
   FramedIndexRoute: FramedIndexRoute,
   FramedCheckConceptIdRoute: FramedCheckConceptIdRoute,
   FramedHistoryConversationIdRoute: FramedHistoryConversationIdRoute,

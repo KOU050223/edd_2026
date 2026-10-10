@@ -336,7 +336,9 @@ export function createWebApp(
       c.env.SESSIONS,
       cookieValue(c.req.header("cookie"), "session"),
     );
-    return c.json({ loggedIn: session !== undefined }, 200, { "cache-control": "no-store" });
+    return c.json({ loggedIn: session !== undefined, userId: session?.sub ?? null }, 200, {
+      "cache-control": "no-store",
+    });
   });
 
   /**

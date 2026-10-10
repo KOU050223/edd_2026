@@ -211,6 +211,8 @@ export type AnalysisMode = "auto" | "user-ai" | "managed";
  * 会話本文そのものは含まず、Concept・種別・時刻・確からしさ・来歴だけを持つ。
  */
 export interface LearningEvidence {
+  /** Stable source observation identity, independent of import sessions and masked text. */
+  observationKey?: string;
   /** Evidence の一意な ID。Import 単位で追跡できるよう、Session ID を含める。 */
   id: string;
   /** 対象の Concept。対応付けられなかった話題は unmapped として別に残し、ここには入らない。 */

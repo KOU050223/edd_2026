@@ -37,6 +37,8 @@ import {
   type LearningObjective,
   type ProfileSummary,
 } from "@gakushu-sochi/domain";
+import { buildHistoryAnalysisPrompt } from "../maps/history-prompt.js";
+import { loadHistoryTarget, type HistoryConcept } from "../maps/history-target.js";
 import { loadUserConceptCatalog } from "../maps/catalog.js";
 import type { AuthVariables } from "../auth/middleware.js";
 import {
@@ -65,7 +67,6 @@ import type {
   UserPlanRepository,
 } from "../repository/types.js";
 import {
-  MAX_CONVERSATIONS_PER_ANALYSIS,
   historyAnalysisRequestSchema,
   historyObservationSchema,
   type HistoryAnalysisResponse,
@@ -497,7 +498,25 @@ export function createAiRoute(resolve: AiDepsResolver) {
     "/ai/history-analysis",
     vValidator("json", historyAnalysisRequestSchema),
     async (c) => {
-      const { conversations, knownConceptIds } = c.req.valid("json");
+      const { conversations, knownConceptIds, mapTarget } = c.req.valid("json");
+      let definitions: HistoryConcept[] = [];
+      if (mapTarget !== undefined) {
+        const target = await loadHistoryTarget(
+          resolve(c.env).maps,
+          c.get("user").userId,
+          mapTarget.target,
+        );
+        if (target === null) return c.json({ error: "map not found" }, 404);
+        const byId = new Map(target.concepts.map((concept) => [concept.id, concept]));
+        if (
+          knownConceptIds.some(
+            (id) => !byId.has(id) || byId.get(id)!.fingerprint !== mapTarget.fingerprints[id],
+          )
+        ) {
+          return c.json({ error: "map definition changed; analyze again" }, 409);
+        }
+        definitions = knownConceptIds.map((id) => byId.get(id)!);
+      }
       const deps = resolve(c.env);
       if (!deps.apiKey) {
         console.error("ai service is not configured", { path: c.req.path });
@@ -510,7 +529,7 @@ export function createAiRoute(resolve: AiDepsResolver) {
         return c.json({ error: "model is not allowed" }, 503);
       }
 
-      const prompt = buildHistoryAnalysisPrompt(conversations, knownConceptIds);
+      const prompt = buildHistoryAnalysisPrompt(conversations, knownConceptIds, definitions);
       const estimatedInputTokens = estimateInputTokens(prompt);
       if (estimatedInputTokens > AI_USAGE_LIMITS.inputTokensPerRequest) {
         return c.json(
@@ -623,7 +642,20 @@ export function createAiRoute(resolve: AiDepsResolver) {
       let dropped = 0;
       for (const item of rawObservations) {
         const observation = v.safeParse(historyObservationSchema, item);
-        if (observation.success) observations.push(observation.output);
+        if (
+          observation.success &&
+          (mapTarget === undefined ||
+            conversations.some(
+              (conversation) => conversation.sourceId === observation.output.sourceId,
+            ))
+        )
+          observations.push({
+            ...observation.output,
+            conceptCandidates:
+              mapTarget === undefined
+                ? observation.output.conceptCandidates
+                : observation.output.conceptCandidates.filter((id) => knownConceptIds.includes(id)),
+          });
         else dropped += 1;
       }
 
@@ -667,34 +699,6 @@ export function createAiRoute(resolve: AiDepsResolver) {
  * 既存 Concept へ押し込まないよう、一覧に無い候補は自然言語の名前のまま
  * 返してよいことを明示する。
  */
-function buildHistoryAnalysisPrompt(
-  conversations: readonly { sourceId: string; title?: string; body: string; observedAt?: string }[],
-  knownConceptIds: readonly string[],
-): string {
-  const lines = conversations.map((conversation) =>
-    [
-      `--- conversation ${conversation.sourceId} ---`,
-      conversation.title === undefined ? "" : `title: ${conversation.title}`,
-      conversation.observedAt === undefined ? "" : `observedAt: ${conversation.observedAt}`,
-      conversation.body,
-    ]
-      .filter((line) => line.length > 0)
-      .join("\n"),
-  );
-  return [
-    "あなたは学習履歴の分析器です。以下の会話履歴を読み、各会話で学習者が触れた概念を抽出してください。",
-    '出力は JSON オブジェクト1つだけで、{"observations": [...]} の形にしてください。',
-    "observations の各要素は次の形です:",
-    '{ "sourceId": "会話のID（入力のものをそのまま）", "conceptCandidates": ["概念の候補"], "kind": "question|debugging|explanation|implementation|verification", "confidence": 0.0〜1.0, "observedAt": "ISO 8601（分かれば）" }',
-    "conceptCandidates には、分かる場合は次の既知の Concept ID を使ってください:",
-    knownConceptIds.join(", "),
-    '一覧に合うものが無い場合は、無理に当てはめず短い名前（例: "kubernetes"）をそのまま返してください。',
-    `会話数の上限は ${String(MAX_CONVERSATIONS_PER_ANALYSIS)} 件です。1会話につき観測は最大3件まで。`,
-    "プログラミングと無関係な会話からは観測を作らないでください。",
-    "",
-    ...lines,
-  ].join("\n");
-}
 
 /**
  * 利用者の学習データから、プロンプトへ載せる「現在地」の要約を導出する（Issue #216）。

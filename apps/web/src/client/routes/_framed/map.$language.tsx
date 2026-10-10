@@ -1,3 +1,4 @@
+import { HistoryMapPanel } from "../../history-map-panel.js";
 import { createFileRoute, Link, useNavigate, useRouter } from "@tanstack/react-router";
 import { useEffect, useRef } from "react";
 import {
@@ -102,6 +103,7 @@ function LanguageMap() {
           </Link>
         )}
       </p>
+      {loggedIn && <HistoryMapPanel key={language} target={`language:${language}`} />}
       {summary.complete && (
         <section className="celebrate" role="status">
           <CompleteBadge />
