@@ -430,6 +430,76 @@ describe("POST /v1/repo-map-drafts/:id/confirm", () => {
     }
   });
 
+  it("種類は AI の提案を使い、直したものを優先する。知らない値は種類なしで、応答は断らない (#322)", async () => {
+    candidateItems = [
+      {
+        name: "注文",
+        original: "Order",
+        description: "顧客が確定する購入の単位。",
+        kind: "core",
+        evidence: ["E1", "E3"],
+      },
+      {
+        name: "顧客",
+        original: "Customer",
+        description: "注文をする人。",
+        kind: "person",
+        evidence: ["E2"],
+      },
+      {
+        name: "支払い",
+        original: "Payment",
+        description: "代金の支払い。",
+        kind: "event",
+        evidence: ["E1"],
+      },
+    ];
+    const draft = await candidatesDraft();
+    const items = draft.candidates!.items.filter((c) => !c.schemaOnly);
+    expect(items.map((c) => c.kind)).toEqual(["core", null, "event"]);
+    const [order, customer, payment] = items;
+    const res = await confirm(draft.id, {
+      accepted: [
+        { id: order!.id, kind: "record" }, // 直した
+        { id: customer!.id }, // 省く = 候補のまま（種類なし）
+        { id: payment!.id, kind: null }, // 種類なしに直した
+      ],
+    });
+    expect(res.status).toBe(201);
+    const { mapId } = (await res.json()) as ConfirmRepoMapDraftResponse;
+    const source = await maps.getRepoSource("user-a", mapId);
+    const map = await maps.get("user-a", mapId);
+    const idOf = (label: string) =>
+      map!.nodes.find((n) => n.kind === "own" && n.label === label)!.conceptId;
+    expect(source!.nodeKinds).toEqual([{ conceptId: idOf("注文"), kind: "record" }]);
+
+    const sources = await call("GET", `/v1/repo-maps/${mapId}/sources`);
+    const body = (await sources.json()) as { nodes: { conceptId: string; kind: string | null }[] };
+    expect(body.nodes.find((n) => n.conceptId === idOf("注文"))?.kind).toBe("record");
+    expect(body.nodes.find((n) => n.conceptId === idOf("顧客"))?.kind).toBeNull();
+  });
+
+  it("古い下書き（種類を持たない候補）も確定できる (#322)", async () => {
+    const draft = await candidatesDraft();
+    // 種類が無い候補（版を上げずに足した項目なので、省かれている）。
+    const stored = await drafts.get("user-a", draft.id);
+    const state = JSON.parse(stored!.stageState) as {
+      candidates: { items: Record<string, unknown>[] };
+    };
+    for (const item of state.candidates.items) delete item.kind;
+    await drafts.update("user-a", draft.id, {
+      status: stored!.status,
+      stageState: JSON.stringify(state),
+      stageStateVersion: stored!.stageStateVersion,
+      failedStage: stored!.failedStage,
+      failureCode: stored!.failureCode,
+      updatedAt: stored!.updatedAt,
+    });
+    const ids = draft.candidates!.items.filter((c) => !c.schemaOnly).map((c) => c.id);
+    const res = await confirm(draft.id, { accepted: ids.map((id) => ({ id })) });
+    expect(res.status).toBe(201);
+  });
+
   it("保存できる長さを超える題名・表示名・説明は、切らずに 400", async () => {
     const draft = await candidatesDraft();
     expect(

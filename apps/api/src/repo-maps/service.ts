@@ -11,6 +11,9 @@ import {
   REPO_MAP_DRAFT_TTL_DAYS,
   REPO_MAP_LIMITS,
   type CreateRepoMapDraftInput,
+  INSPECT_FILE_LIST_MAX,
+  INSPECT_PATH_LIST_MAX,
+  type RepoMapNodeKind,
   type InspectRepoResponse,
   type RepoMapDraftView,
   type RepoMapMaterialView,
@@ -25,6 +28,7 @@ import {
   compressListing,
   detectMonorepo,
   filterByFolders,
+  MAX_FILE_BYTES,
   validateTargets,
   type Analysis,
   type KeptFile,
@@ -75,6 +79,8 @@ export interface CandidateState {
   evidence: string[];
   fromSchema: boolean;
   schemaOnly: boolean;
+  /** AI が提案した種類（#322）。古い下書きには無い（版は上げない）。 */
+  kind?: RepoMapNodeKind | null;
 }
 
 /** 候補の段（PR C2b）の結果。 */
@@ -324,8 +330,44 @@ export async function inspectRepo(
     repo: source.repo,
     monorepo: detectMonorepo(source.entries),
     folders: topFolders(source.entries),
+    ...inspectFiles(analysis),
+    ...inspectPaths(source.entries),
     scan: scanOf(analysis),
     usage: usageView(usage, plan),
+  };
+}
+
+/** 指定できるパス（API の `validateTargets` が受けるもの: ツリーの blob で、サイズの上限以下）。 */
+function inspectPaths(entries: TreeEntry[]): Pick<InspectRepoResponse, "paths" | "pathsTruncated"> {
+  const all = entries
+    .filter((e) => e.type === "blob" && (e.size ?? 0) <= MAX_FILE_BYTES)
+    .map((e) => e.path);
+  return {
+    paths: all.slice(0, INSPECT_PATH_LIST_MAX),
+    pathsTruncated: all.length > INSPECT_PATH_LIST_MAX,
+  };
+}
+
+const INSPECT_KIND_ORDER = { glossary: 0, doc: 1, schema: 2, code: 3 } as const;
+
+/** 下見の木から、参考ファイルとして選べる一覧を作る（用語集・文書・データの形・コードの順、浅い順）。 */
+function inspectFiles(analysis: Analysis): Pick<InspectRepoResponse, "files" | "filesTruncated"> {
+  const all = analysis.kept
+    // 大きすぎるファイルは、自動では読めても、指定すると API が断る（`validateTargets`）。選ばせない。
+    .filter(
+      (f): f is typeof f & { cls: keyof typeof INSPECT_KIND_ORDER } =>
+        f.cls !== "other" && f.size <= MAX_FILE_BYTES,
+    )
+    .map((f) => ({ path: f.path, kind: f.cls }))
+    .sort(
+      (a, b) =>
+        INSPECT_KIND_ORDER[a.kind] - INSPECT_KIND_ORDER[b.kind] ||
+        a.path.split("/").length - b.path.split("/").length ||
+        a.path.localeCompare(b.path),
+    );
+  return {
+    files: all.slice(0, INSPECT_FILE_LIST_MAX),
+    filesTruncated: all.length > INSPECT_FILE_LIST_MAX,
   };
 }
 

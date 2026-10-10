@@ -24,6 +24,7 @@ import {
   validateHints,
   type InspectRepoResult,
 } from "../../repo-maps.js";
+import { HintFilePicker } from "../../repo-map-hints.js";
 import { takeLoginRetry } from "../../session.js";
 
 const MONOREPO_NOTICE =
@@ -79,7 +80,10 @@ function RepoMapStartPage() {
       .finally(() => setBusy(undefined));
   };
 
-  const hintFiles = parseHintFiles(filesText);
+  const hintFiles = parseHintFiles(
+    filesText,
+    inspected?.paths === undefined ? undefined : new Set(inspected.paths),
+  );
   const hintIssues = parseHintIssues(issuesText);
   const hintError = validateHints(hintFiles, hintIssues);
   const canCreate =
@@ -291,16 +295,15 @@ function RepoMapStartPage() {
             )
           )}
 
-          <label>
-            参考にしてほしいファイル（任意・1 行に 1 つ・{REPO_MAP_LIMITS.hints} 個まで）
-            <textarea
-              rows={3}
-              value={filesText}
-              placeholder="docs/glossary.md"
-              disabled={locked}
-              onChange={(event) => setFilesText(event.target.value)}
-            />
-          </label>
+          <HintFilePicker
+            options={inspected.files ?? []}
+            truncated={inspected.filesTruncated ?? false}
+            knownPaths={inspected.paths}
+            knownTruncated={inspected.pathsTruncated ?? false}
+            text={filesText}
+            onChange={setFilesText}
+            disabled={locked}
+          />
           <label>
             参考にしてほしい Issue（任意・番号か URL・1 行に 1 つ・{REPO_MAP_LIMITS.hints} 個まで）
             <textarea

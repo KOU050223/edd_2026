@@ -9,7 +9,12 @@ import {
   type LearningObjective,
 } from "@gakushu-sochi/domain";
 import { Link, useNavigate, useRouter } from "@tanstack/react-router";
-import { useEffect, useRef, useState, type RefObject } from "react";
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import {
+  REPO_MAP_NODE_KIND_LABELS,
+  REPO_MAP_NODE_KINDS,
+  type RepoMapNodeKind,
+} from "./repo-maps.js";
 import {
   ApiError,
   createOperationQueue,
@@ -368,6 +373,8 @@ export function SkillTree({
   selected,
   onSelect,
   followSelected = false,
+  kinds,
+  focusKind = null,
 }: {
   tree: MapTree;
   /** 見出し。省略すると領域名。手で作ったマップは題名を渡す（#242）。 */
@@ -382,6 +389,13 @@ export function SkillTree({
    * 一覧から選ぶ編集画面（#286）で使う。地図の画面では、押したノードはもう見えているので使わない。
    */
   followSelected?: boolean;
+  /**
+   * ノードの種類（#322。リポジトリから作ったマップだけ）。あれば塗りと種類名で見せる。
+   * 理解度は枠線とバッジのままで、色の意味は割らない。
+   */
+  kinds?: ReadonlyMap<string, RepoMapNodeKind>;
+  /** 凡例で選んだ種類。それ以外のノードを薄くする。 */
+  focusKind?: RepoMapNodeKind | null;
 }) {
   const width = nodeX(tree.depths - 1) + NODE_WIDTH;
   const height = nodeY(tree.rows - 1) + NODE_HEIGHT;
@@ -450,8 +464,11 @@ export function SkillTree({
             const concept = concepts.get(node.conceptId);
             if (!concept) return null;
             const isCurrent = node.conceptId === current;
+            const kind = kinds?.get(node.conceptId);
             const classes = [
               "node",
+              kind !== undefined && `kind-${kind}`,
+              focusKind !== null && kind !== focusKind && "dim",
               isCurrent ? "current" : concept.status,
               next.has(node.conceptId) && "next",
               node.conceptId === selected && "selected",
@@ -464,7 +481,7 @@ export function SkillTree({
                 style={{ left: nodeX(node.depth), top: nodeY(node.row), width: NODE_WIDTH }}
                 title={nameOf(concept)}
                 aria-pressed={node.conceptId === selected}
-                aria-label={`${nameOf(concept)}：${isCurrent ? "現在地・" : ""}${statusLabel[concept.status]}${concept.familiarity ? `・履歴あり ${concept.familiarity.observationCount} 件` : ""}`}
+                aria-label={`${nameOf(concept)}：${kind === undefined ? "" : `${REPO_MAP_NODE_KIND_LABELS[kind]}・`}${isCurrent ? "現在地・" : ""}${statusLabel[concept.status]}${concept.familiarity ? `・履歴あり ${concept.familiarity.observationCount} 件` : ""}`}
                 onClick={() => onSelect(node.conceptId)}
               >
                 <span className="node-name">
@@ -472,6 +489,9 @@ export function SkillTree({
                   {nameOf(concept)}
                 </span>
                 <span className="node-status">
+                  {kind !== undefined && (
+                    <em className="kind-label">{REPO_MAP_NODE_KIND_LABELS[kind]}</em>
+                  )}
                   {isCurrent && <em className="badge">現在地</em>}
                   {statusLabel[concept.status]}
                   {concept.manual && <em className="manual">手動</em>}
@@ -488,6 +508,40 @@ export function SkillTree({
         </div>
       </div>
     </section>
+  );
+}
+
+/**
+ * ノードの種類の凡例（#322）。押すとその種類だけを強調する（もう一度押すと戻す）。
+ * 色だけに頼らず、種類名を文字で出す。マップにある種類だけを並べる。
+ */
+export function KindLegend({
+  kinds,
+  focus,
+  onFocus,
+}: {
+  kinds: ReadonlyMap<string, RepoMapNodeKind>;
+  focus: RepoMapNodeKind | null;
+  onFocus: (kind: RepoMapNodeKind | null) => void;
+}) {
+  const counts = new Map<RepoMapNodeKind, number>();
+  for (const kind of kinds.values()) counts.set(kind, (counts.get(kind) ?? 0) + 1);
+  if (counts.size === 0) return null;
+  return (
+    <ul className="kind-legend" aria-label="ノードの種類">
+      {REPO_MAP_NODE_KINDS.filter((kind) => counts.has(kind)).map((kind) => (
+        <li key={kind}>
+          <button
+            type="button"
+            className={`kind-chip kind-${kind}${focus === kind ? " active" : ""}`}
+            aria-pressed={focus === kind}
+            onClick={() => onFocus(focus === kind ? null : kind)}
+          >
+            {REPO_MAP_NODE_KIND_LABELS[kind]} {counts.get(kind)}
+          </button>
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -539,6 +593,8 @@ export function ConceptDetail({
   onChange,
   onSelect,
   panel,
+  evidence,
+  kind,
 }: {
   concept: OverlaidConcept;
   /** 概要。定義に無ければ出さない。 */
@@ -562,6 +618,10 @@ export function ConceptDetail({
   onChange: (status: MasteryStatus | null) => void;
   onSelect: (conceptId: string) => void;
   panel: RefObject<HTMLElement | null>;
+  /** 右パネルの最後に出す根拠（リポジトリから作ったマップだけ。#322）。 */
+  evidence?: ReactNode;
+  /** ノードの種類（#322）。 */
+  kind?: RepoMapNodeKind;
 }) {
   // 手動修正は status だけを変えるので、項目の割合は自動算出のまま見せる。
   const objectives = objectiveProgress(definedObjectives, {
@@ -570,95 +630,116 @@ export function ConceptDetail({
   });
   return (
     <aside className="detail" aria-label="Concept の詳細" ref={panel}>
-      <h2>{nameOf(concept)}</h2>
+      <header className="detail-head">
+        <h2>{nameOf(concept)}</h2>
+        <p className="detail-status">
+          {isCurrent && <em className="badge">現在地</em>}
+          <span className={`status ${concept.status}`}>{statusLabel[concept.status]}</span>
+          {concept.manual && <em className="manual">手動</em>}
+          {kind !== undefined && (
+            <span className={`kind-chip kind-${kind}`}>{REPO_MAP_NODE_KIND_LABELS[kind]}</span>
+          )}
+        </p>
+      </header>
       {note && <p className="muted">{note}</p>}
       {summary && <p className="detail-summary">{summary}</p>}
-      {objectives.length > 0 && (
-        <section className="detail-objectives" aria-label="理解すること">
-          <h3>
-            理解すること {objectivesNote && <span className="muted">（{objectivesNote}）</span>}
-          </h3>
-          <ul>
-            {objectives.map((objective) => (
-              <li key={objective.id}>
-                <span>{objective.label}</span>
-                <span className="detail-objective-value">{percent(objective.value)}</span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
-      <p className="detail-status">
-        {isCurrent && <em className="badge">現在地</em>}
-        <span className={`status ${concept.status}`}>{statusLabel[concept.status]}</span>
-        {concept.manual && <em className="manual">手動</em>}
-      </p>
-      <dl>
-        <dt>理解度</dt>
-        <dd>{percent(concept.score)}</dd>
-        <dt>自力解決</dt>
-        <dd>{concept.evidence.solvedIndependentlyCount} 回</dd>
-        <dt>手動修正</dt>
-        <dd>
-          {concept.manual
-            ? `あり（自動算出では ${statusLabel[concept.derived.status]}・${percent(
-                concept.derived.status === "unobserved" ? null : concept.derived.score,
-              )}）`
-            : "なし"}
-        </dd>
-      </dl>
-      {concept.status === "unobserved" && !concept.manual && (
-        <p className="muted">まだ判断材料がありません。0% という意味ではありません。</p>
-      )}
-      {concept.familiarity && (
-        <>
-          <h3>過去の学習履歴から</h3>
-          <p className="muted">
-            {describeFamiliarity(concept.familiarity)}
-            {concept.familiarity.observationCount > 0 &&
-              `（観測 ${concept.familiarity.observationCount} 件）`}
-          </p>
-          {concept.derived.status === "unobserved" && (
+
+      <section className="detail-block" aria-label="学ぶこと">
+        <h3 className="detail-block-title">学ぶこと</h3>
+        {objectives.length > 0 ? (
+          <>
+            {objectivesNote && <p className="muted">（{objectivesNote}）</p>}
+            <ul className="detail-objective-list">
+              {objectives.map((objective) => (
+                <li key={objective.id}>
+                  <span>{objective.label}</span>
+                  <span
+                    className={`detail-objective-value${objective.value === null ? " none" : ""}`}
+                  >
+                    {objective.value === null ? "未確認" : percent(objective.value)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </>
+        ) : (
+          <p className="muted">このノードの「理解すること」はまだありません。</p>
+        )}
+      </section>
+
+      <section className="detail-block" aria-label="確かめる">
+        <h3 className="detail-block-title">確かめる</h3>
+        <dl>
+          <dt>理解度</dt>
+          <dd>{concept.score === null ? "未確認" : percent(concept.score)}</dd>
+          <dt>自力解決</dt>
+          <dd>{concept.evidence.solvedIndependentlyCount} 回</dd>
+          <dt>手動修正</dt>
+          <dd>
+            {concept.manual
+              ? `あり（自動算出では ${statusLabel[concept.derived.status]}・${percent(
+                  concept.derived.status === "unobserved" ? null : concept.derived.score,
+                )}）`
+              : "なし"}
+          </dd>
+        </dl>
+        {concept.status === "unobserved" && !concept.manual && (
+          <p className="muted">まだ判断材料がありません。0% という意味ではありません。</p>
+        )}
+        {concept.familiarity && (
+          <>
+            <h4>過去の学習履歴から</h4>
             <p className="muted">
-              過去に触れた形跡はありますが、学習の記録では確認されていません。
+              {describeFamiliarity(concept.familiarity)}
+              {concept.familiarity.observationCount > 0 &&
+                `（観測 ${concept.familiarity.observationCount} 件）`}
             </p>
-          )}
-        </>
-      )}
-      <h3>前提 Concept</h3>
-      <ConceptLinksList
-        ids={links?.prerequisites ?? []}
-        concepts={concepts}
-        empty="前提はありません"
-        onSelect={onSelect}
-      />
-      <h3>次に接続する Concept</h3>
-      <ConceptLinksList
-        ids={links?.next ?? []}
-        concepts={concepts}
-        empty="この先に続く Concept はありません"
-        onSelect={onSelect}
-      />
-      {loggedIn && (
-        <>
-          <h3>確認問題</h3>
-          <p className="muted">
-            概要問題と実践問題の2問に両方正解すると、理解の確認として記録します。
-          </p>
-          {/* 先読みしない。この loader は問題が無ければ AI に生成させるので、
-              ポインタを乗せただけで生成を走らせないようにする。 */}
-          <Link
-            to="/check/$conceptId"
-            params={{ conceptId: concept.conceptId }}
-            search={fromMapId === undefined ? {} : { from: fromMapId }}
-            preload={false}
-            className="check-link"
-          >
-            確認問題を解く
-          </Link>
-          <MasteryPicker concept={concept} pending={pending} onChange={onChange} />
-        </>
-      )}
+            {concept.derived.status === "unobserved" && (
+              <p className="muted">
+                過去に触れた形跡はありますが、学習の記録では確認されていません。
+              </p>
+            )}
+          </>
+        )}
+        {loggedIn && (
+          <>
+            <p className="muted">
+              概要問題と実践問題の2問に両方正解すると、理解の確認として記録します。
+            </p>
+            {/* 先読みしない。この loader は問題が無ければ AI に生成させるので、
+                ポインタを乗せただけで生成を走らせないようにする。 */}
+            <Link
+              to="/check/$conceptId"
+              params={{ conceptId: concept.conceptId }}
+              search={fromMapId === undefined ? {} : { from: fromMapId }}
+              preload={false}
+              className="check-link"
+            >
+              確認問題を解く
+            </Link>
+            <MasteryPicker concept={concept} pending={pending} onChange={onChange} />
+          </>
+        )}
+      </section>
+
+      <section className="detail-block" aria-label="つながり">
+        <h3 className="detail-block-title">つながり</h3>
+        <h4>前提 Concept</h4>
+        <ConceptLinksList
+          ids={links?.prerequisites ?? []}
+          concepts={concepts}
+          empty="前提はありません"
+          onSelect={onSelect}
+        />
+        <h4>次に接続する Concept</h4>
+        <ConceptLinksList
+          ids={links?.next ?? []}
+          concepts={concepts}
+          empty="この先に続く Concept はありません"
+          onSelect={onSelect}
+        />
+      </section>
+      {evidence}
     </aside>
   );
 }

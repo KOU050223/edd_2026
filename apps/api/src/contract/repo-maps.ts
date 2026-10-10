@@ -19,6 +19,28 @@ import {
   MAX_NODE_SUMMARY_LENGTH,
 } from "./learning-maps.js";
 
+/**
+ * ノードの「種類」（#322）。リポジトリから作ったマップだけが持つ。色分けと凡例に使う。
+ * 当てはまらない・AI が返さない・知らない値は `null`（種類なし）にする。
+ */
+export const REPO_MAP_NODE_KINDS = ["core", "event", "state", "record", "system"] as const;
+export type RepoMapNodeKind = (typeof REPO_MAP_NODE_KINDS)[number];
+
+export const REPO_MAP_NODE_KIND_LABELS: Record<RepoMapNodeKind, string> = {
+  core: "中心の概念",
+  event: "出来事・操作",
+  state: "状態・指標",
+  record: "記録・データ",
+  system: "仕組み・外部",
+};
+
+/** 外から来た値（AI の応答など）を種類にする。知らない値は `null`。 */
+export function normalizeNodeKind(value: unknown): RepoMapNodeKind | null {
+  return typeof value === "string" && (REPO_MAP_NODE_KINDS as readonly string[]).includes(value)
+    ? (value as RepoMapNodeKind)
+    : null;
+}
+
 /** リポジトリからのマップの回数の上限（プランごと）。正本は docs/ai-limits.md。 */
 export interface RepoMapLimits {
   /** 暦月（UTC）に作れる下書き（マップ）の数。作った時点で数える。 */
@@ -126,8 +148,32 @@ export interface InspectRepoResponse {
   monorepo: RepoMapWorkspaceFolder[] | null;
   /** 深さ 2 までのフォルダ（対象のフォルダの候補）。 */
   folders: string[];
+  /**
+   * 「参考にしてほしいファイル」を選ぶための、読めるファイルの一覧（用語集・文書・データの形・コード。
+   * {@link INSPECT_FILE_LIST_MAX} 件まで）。下見の木から作る（GitHub の追加呼び出しは無い）。
+   */
+  files: InspectFileView[];
+  /** `files` が上限で切れたか。 */
+  filesTruncated: boolean;
+  /**
+   * 参考ファイルとして指定できるパスの全体（捨てる規則に当たるものも含む。大きすぎるファイルは除く）。
+   * 手で書いたパスの照合に使う。{@link INSPECT_PATH_LIST_MAX} 件まで。
+   */
+  paths: string[];
+  /** `paths` が上限で切れたか。切れているときは、無いパスも「無い」と言い切らない。 */
+  pathsTruncated: boolean;
   scan: RepoMapScan;
   usage: RepoMapUsageView;
+}
+
+/** 下見で出すファイルの一覧（選ぶ用）の上限。 */
+export const INSPECT_FILE_LIST_MAX = 300;
+/** 下見で出すパスの一覧（照合用）の上限。 */
+export const INSPECT_PATH_LIST_MAX = 5_000;
+
+export interface InspectFileView {
+  path: string;
+  kind: "glossary" | "doc" | "schema" | "code";
 }
 
 /** 要約した材料 1 件。`id`（E1…）が候補の根拠の参照になる。 */
@@ -178,6 +224,8 @@ export interface RepoMapCandidateView {
   fromSchema: boolean;
   /** 文書・コードには無く、データの形にだけある名前（機械で足した候補）。 */
   schemaOnly: boolean;
+  /** AI が提案した種類（#322）。無い・当てはまらないときは `null`。古い下書きでは省かれる。 */
+  kind?: RepoMapNodeKind | null;
 }
 
 export interface RepoMapCandidatesView {
@@ -226,6 +274,8 @@ export const confirmRepoMapDraftSchema = v.strictObject({
         description: v.optional(
           v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(MAX_NODE_SUMMARY_LENGTH)),
         ),
+        // 候補の種類を直したとき。`null` は「種類なし」にする。省くと候補のまま。
+        kind: v.optional(v.nullable(v.picklist(REPO_MAP_NODE_KINDS))),
       }),
     ),
     v.minLength(1),
@@ -239,6 +289,8 @@ export interface RepoMapSourcesResponse {
   repo: { url: string; commitSha: string };
   nodes: {
     conceptId: string;
+    /** ノードの種類（#322）。種類なし・古いマップは `null`。 */
+    kind: RepoMapNodeKind | null;
     sources: {
       kind: "doc" | "glossary" | "code" | "issue" | "schema";
       /** ファイルのパス。Issue は null。 */

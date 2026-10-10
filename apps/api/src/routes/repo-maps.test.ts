@@ -43,6 +43,7 @@ const TREE: TreeEntry[] = [
   dir("packages"),
   dir("packages/domain"),
   blob("README.md", 500),
+  blob("docs/huge.md", 300_000),
   blob("apps/web/package.json", 200),
   blob("apps/api/package.json", 200),
   blob("packages/domain/package.json", 200),
@@ -190,6 +191,20 @@ describe("POST /v1/repo-maps:inspect", () => {
     expect(body.folders).toEqual(["apps", "apps/api", "apps/web", "packages", "packages/domain"]);
     expect(body.scan.dropped).toEqual({ dependency_dir: 1, binary: 1 });
     expect(body.usage).toMatchObject({ monthlyDrafts: 0, monthlyDraftsLimit: 3 });
+    // 参考ファイルを選ぶための一覧。捨てるファイル（依存・バイナリ）は入らない。
+    expect(body.files.length).toBeGreaterThan(0);
+    expect(body.filesTruncated).toBe(false);
+    // 照合用のパスは、選ぶ用の一覧と違い、捨てる規則に当たるものも含む（API は指定を受ける）。
+    expect(body.pathsTruncated).toBe(false);
+    for (const file of body.files) expect(body.paths).toContain(file.path);
+    expect(body.paths.length).toBeGreaterThanOrEqual(body.files.length);
+    expect(body.files.map((f) => f.path)).not.toContain("node_modules/x/index.js");
+    // 大きすぎる文書は、自動では読めても、指定すると断られる。選ぶ一覧にも照合用にも入れない。
+    expect(body.files.map((f) => f.path)).not.toContain("docs/huge.md");
+    expect(body.paths).not.toContain("docs/huge.md");
+    for (const file of body.files) {
+      expect(["glossary", "doc", "schema", "code"]).toContain(file.kind);
+    }
 
     const list = (await (
       await call("GET", "/v1/repo-map-drafts")

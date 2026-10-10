@@ -45,7 +45,7 @@ import type {
   StoredLearningObjective,
   StoredMapContent,
   MapSourceInput,
-  RepoMapNodeSource,
+  RepoMapSourceRecord,
   RepoMapSourceInput,
   StoredMapSource,
   StoredMapVersion,
@@ -124,7 +124,7 @@ export interface InMemoryLearningMap extends StoredLearningMap {
   /** 取り込んだ版の公開の確認問題（0020 の imported_map_checks）。 */
   importedChecks: PersonalConceptCheck[];
   /** リポジトリから作ったマップの取り込み元と根拠（0021）。 */
-  repoSource?: { url: string; commitSha: string; nodeSources: RepoMapNodeSource[] };
+  repoSource?: RepoMapSourceRecord;
 }
 
 export function createInMemoryRepositoryStore(): InMemoryRepositoryStore {
@@ -873,16 +873,14 @@ export class InMemoryLearningMapRepository implements LearningMapRepository {
               url: params.repoSource.url,
               commitSha: params.repoSource.commitSha,
               nodeSources: params.repoSource.nodeSources.map((s) => ({ ...s })),
+              nodeKinds: (params.repoSource.nodeKinds ?? []).map((k) => ({ ...k })),
             },
           }),
     });
     return Promise.resolve({ created: true });
   }
 
-  getRepoSource(
-    ownerUserId: string,
-    mapId: string,
-  ): Promise<{ url: string; commitSha: string; nodeSources: RepoMapNodeSource[] } | null> {
+  getRepoSource(ownerUserId: string, mapId: string): Promise<RepoMapSourceRecord | null> {
     const map = this.store.learningMaps.get(mapId);
     if (map === undefined || map.ownerUserId !== ownerUserId || map.repoSource === undefined) {
       return Promise.resolve(null);
@@ -1004,6 +1002,7 @@ export class InMemoryLearningMapRepository implements LearningMapRepository {
     // 消えたノードの根拠も消す（D1 の learning_map_node_sources は ON DELETE CASCADE）。
     if (map.repoSource !== undefined) {
       map.repoSource.nodeSources = map.repoSource.nodeSources.filter((s) => kept.has(s.conceptId));
+      map.repoSource.nodeKinds = map.repoSource.nodeKinds.filter((k) => kept.has(k.conceptId));
     }
     Object.assign(map, {
       title,

@@ -1,6 +1,6 @@
 import { HistoryMapPanel } from "./history-map-panel.js";
-import { RepoMapSourcesPanel } from "./repo-map-sources.js";
-import type { RepoMapSourcesState } from "./repo-maps.js";
+import { RepoMapNodeSources, RepoMapSourcesFailure } from "./repo-map-sources.js";
+import { nodeKindsOf, type RepoMapNodeKind, type RepoMapSourcesState } from "./repo-maps.js";
 /**
  * 学習マップ1件の画面の中身（#242・#244・#302）。`/maps/<ID>`（手元のマップ・他人の共有マップ）と
  * `/shared/<ID>`（持ち主が見る自分の共有の版）が使う。
@@ -14,6 +14,7 @@ import {
   ConceptDetail,
   NARROW_LAYOUT,
   overlaidConcepts,
+  KindLegend,
   SkillTree,
   useGoToConcept,
   useMasteryChange,
@@ -385,6 +386,11 @@ export function LearningMapPage({
   const selectedNode = selectedNodeId === undefined ? undefined : nodeOf.get(selectedNodeId);
 
   // マップの中の選択は同じ画面のまま。前提・次の Concept もこのマップのノードなので、ここで選ぶ。
+  const kinds = nodeKindsOf(sources);
+  const [pickedKind, setFocusKind] = useState<RepoMapNodeKind | null>(null);
+  // 別のマップへ移ったとき、前のマップで選んだ種類がこのマップに無ければ、強調しない（全部が薄くならない）。
+  const focusKind =
+    pickedKind !== null && [...kinds.values()].includes(pickedKind) ? pickedKind : null;
   const select = (conceptId: string) => {
     if (!inMap.has(conceptId)) {
       goToConcept(conceptId);
@@ -491,6 +497,7 @@ export function LearningMapPage({
         )
       ) : (
         <div className={selected ? "map-layout" : undefined}>
+          {kinds.size > 0 && <KindLegend kinds={kinds} focus={focusKind} onFocus={setFocusKind} />}
           <div className="map" id="learning-map">
             <SkillTree
               tree={tree}
@@ -500,6 +507,8 @@ export function LearningMapPage({
               next={next}
               selected={selected?.conceptId}
               onSelect={select}
+              kinds={kinds}
+              focusKind={focusKind}
             />
           </div>
           {selected && selectedNode && (
@@ -521,17 +530,13 @@ export function LearningMapPage({
               onChange={(status) => changeStatus(selected.conceptId, status)}
               onSelect={select}
               panel={detail}
+              kind={kinds.get(selected.conceptId)}
+              evidence={<RepoMapNodeSources state={sources} conceptId={selected.conceptId} />}
             />
           )}
         </div>
       )}
-      {sources !== undefined && sources.kind !== "none" && (
-        <RepoMapSourcesPanel
-          state={sources}
-          selectedId={selected?.conceptId}
-          labelOf={(conceptId) => definitionOf.get(conceptId)?.label ?? conceptId}
-        />
-      )}
+      {sources !== undefined && <RepoMapSourcesFailure state={sources} />}
       {own && <HistoryMapPanel key={mapId} target={mapId} onApplied={onSelectInMap} />}
     </>
   );
