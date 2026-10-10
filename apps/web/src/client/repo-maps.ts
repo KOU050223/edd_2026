@@ -834,6 +834,8 @@ export interface KindColumn<T> {
 export function groupByKind<T>(
   items: readonly T[],
   kindOf: (item: T) => RepoMapNodeKind | null,
+  /** 「種類なし」の列を、空でも出す（ドロップ先にする）。 */
+  alwaysNone = false,
 ): KindColumn<T>[] {
   const columns: KindColumn<T>[] = REPO_MAP_NODE_KINDS.map((kind) => ({ kind, items: [] }));
   const none: KindColumn<T> = { kind: null, items: [] };
@@ -841,7 +843,15 @@ export function groupByKind<T>(
     const kind = kindOf(item);
     (columns.find((c) => c.kind === kind) ?? none).items.push(item);
   }
-  return none.items.length > 0 ? [...columns, none] : columns;
+  return alwaysNone || none.items.length > 0 ? [...columns, none] : columns;
+}
+
+/** 候補の種類。直した種類があればそれ（`null` は種類なしに直した）。 */
+export function effectiveKind(
+  candidate: Pick<RepoMapCandidate, "kind">,
+  edit: { kind?: RepoMapNodeKind | null } | undefined,
+): RepoMapNodeKind | null {
+  return edit?.kind !== undefined ? edit.kind : (candidate.kind ?? null);
 }
 
 /** ドラッグで運んでいる候補の ID を、dataTransfer に載せる／取り出すときの型名。 */

@@ -226,6 +226,8 @@ describe("作成の手順と種類の列（#322）", () => {
     ]);
     expect(columns[2]?.items.map((i) => i.id)).toEqual(["a", "c"]);
     expect(groupByKind([], () => null)).toHaveLength(5);
+    // 種類なしの列は、頼めば空でも出る（ドロップ先）。
+    expect(groupByKind([], () => null, true).map((c) => c.kind)).toContain(null);
   });
 });
 

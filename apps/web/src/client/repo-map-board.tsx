@@ -9,6 +9,7 @@ import { EvidenceLink } from "./repo-map-ui.js";
 import {
   asNodeKind,
   CANDIDATE_DRAG_TYPE,
+  effectiveKind,
   groupByKind,
   REPO_MAP_LIMITS,
   REPO_MAP_NODE_KIND_LABELS,
@@ -44,6 +45,9 @@ interface Edit {
   kind?: RepoMapNodeKind | null;
 }
 
+/** 種類の絞り込み。`all` は全部、`null` は種類なし。 */
+export type KindFilter = RepoMapNodeKind | null | "all";
+
 const NONE_LABEL = "種類なし";
 
 function kindLabel(kind: RepoMapNodeKind | null): string {
@@ -62,6 +66,8 @@ export function KindBoard({
   edits,
   disabled,
   max,
+  filter,
+  onFilter,
   onToggle,
   onEdit,
 }: {
@@ -73,21 +79,24 @@ export function KindBoard({
   edits: Readonly<Record<string, Edit | undefined>>;
   disabled: boolean;
   max: number;
+  /** 見せる種類（`"all"` は全部）。「表示中を選ぶ」と同じ範囲を親が知るため、親が持つ。 */
+  filter: KindFilter;
+  onFilter: (filter: KindFilter) => void;
   onToggle: (id: string) => void;
   onEdit: (id: string, patch: Edit) => void;
 }) {
-  const [filter, setFilter] = useState<RepoMapNodeKind | null | "all">("all");
   const [focusId, setFocusId] = useState<string>();
   const [over, setOver] = useState<RepoMapNodeKind | null | "none">();
 
-  const kindOf = (c: RepoMapCandidate): RepoMapNodeKind | null =>
-    edits[c.id]?.kind !== undefined ? (edits[c.id]?.kind ?? null) : (c.kind ?? null);
+  const kindOf = (c: RepoMapCandidate): RepoMapNodeKind | null => effectiveKind(c, edits[c.id]);
   const nameOf = (c: RepoMapCandidate) => edits[c.id]?.name ?? c.name;
   const descriptionOf = (c: RepoMapCandidate) => edits[c.id]?.description ?? c.description;
 
-  const columns = groupByKind(candidates, kindOf);
+  const columns = groupByKind(candidates, kindOf, true);
   const shown = filter === "all" ? columns : columns.filter((c) => c.kind === filter);
-  const focused = candidates.find((c) => c.id === focusId) ?? candidates[0];
+  // 詳細は、いま見えている列の中の 1 件。見えなくなったら、見えている先頭に移る。
+  const shownItems = shown.flatMap((c) => c.items);
+  const focused = shownItems.find((c) => c.id === focusId) ?? shownItems[0];
 
   const counts = groupByKind(all, kindOf).map((column) => ({
     kind: column.kind,
@@ -111,7 +120,7 @@ export function KindBoard({
         <button
           type="button"
           className={filter === "all" ? "active" : undefined}
-          onClick={() => setFilter("all")}
+          onClick={() => onFilter("all")}
         >
           <span>すべて</span>
           <em>
@@ -125,7 +134,7 @@ export function KindBoard({
               key={c.kind ?? "none"}
               type="button"
               className={`${kindClass(c.kind)}${filter === c.kind ? " active" : ""}`}
-              onClick={() => setFilter(c.kind)}
+              onClick={() => onFilter(c.kind)}
             >
               <span className="kind-swatch" aria-hidden="true" />
               <span>{kindLabel(c.kind)}</span>
@@ -196,7 +205,7 @@ export function KindBoard({
             </ul>
           </section>
         ))}
-        {shown.length === 0 && <p className="muted">一致する候補がありません。</p>}
+        {shownItems.length === 0 && <p className="muted">一致する候補がありません。</p>}
         {filter === "all" && (
           <p className="kind-hint muted">
             カードを別の列へドラッグすると、種類を変えられます。選んだ数は、上限 {max} 個までです。

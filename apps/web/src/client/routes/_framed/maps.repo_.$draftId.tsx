@@ -4,7 +4,7 @@ import { createSubmitGuard } from "../../api.js";
 import { fetchGenerationConsent } from "../../check.js";
 import { ConsentPrompt } from "../../map-consent.js";
 import { MAP_GENERATION_CONSENT_PATH } from "../../map-generation.js";
-import { KindBoard, WizardSteps } from "../../repo-map-board.js";
+import { KindBoard, WizardSteps, type KindFilter } from "../../repo-map-board.js";
 import { CandidateRow, MaterialGroups } from "../../repo-map-lists.js";
 import {
   isConsentRequired,
@@ -14,6 +14,7 @@ import {
 } from "../../repo-map-ui.js";
 import {
   arrangeCandidates,
+  effectiveKind,
   buildConfirmRequest,
   buildRepoMapCandidates,
   confirmRepoMapDraft,
@@ -73,6 +74,7 @@ function RepoMapDraftPage({ loaded }: { loaded: ReturnType<typeof Route.useLoade
   const [editing, setEditing] = useState<ReadonlySet<string>>(new Set());
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<CandidateSort>("default");
+  const [kindFilter, setKindFilter] = useState<KindFilter>("all");
 
   const step = nextStep(draft);
   const busy = phase !== "idle";
@@ -199,14 +201,19 @@ function RepoMapDraftPage({ loaded }: { loaded: ReturnType<typeof Route.useLoade
     sort,
     names: Object.fromEntries(Object.entries(edits).map(([id, e]) => [id, e?.name])),
   });
+  // 種類を持つ候補なら、種類ごとの列で見せる。種類に未対応の API・古い下書きは、これまでの一覧のまま。
+  const hasKinds = candidates.some((c) => c.kind !== undefined);
+
+  // 「表示中を選ぶ／外す」は、画面に見えている範囲（検索語＋選んだ種類）だけに効かせる。
+  const inScope =
+    hasKinds && kindFilter !== "all"
+      ? visible.filter((c) => effectiveKind(c, edits[c.id]) === kindFilter)
+      : visible;
   const materials = draft.summary?.materials ?? [];
   const schemaFiles = draft.summary?.schema ?? [];
   const unread = draft.targets.files.filter(
     (f) => !materials.some((m) => m.ref === f) && !schemaFiles.some((s) => s.path === f),
   );
-
-  // 種類を持つ候補なら、種類ごとの列で見せる。種類に未対応の API・古い下書きは、これまでの一覧のまま。
-  const hasKinds = candidates.some((c) => c.kind !== undefined);
 
   return (
     <>
@@ -337,7 +344,7 @@ function RepoMapDraftPage({ loaded }: { loaded: ReturnType<typeof Route.useLoade
                     disabled={locked}
                     onClick={() =>
                       setSelected(
-                        new Set([...selected, ...visible.map((c) => c.id)].slice(0, MAX_NODES)),
+                        new Set([...selected, ...inScope.map((c) => c.id)].slice(0, MAX_NODES)),
                       )
                     }
                   >
@@ -349,7 +356,7 @@ function RepoMapDraftPage({ loaded }: { loaded: ReturnType<typeof Route.useLoade
                     disabled={locked}
                     onClick={() =>
                       setSelected(
-                        new Set([...selected].filter((id) => !visible.some((c) => c.id === id))),
+                        new Set([...selected].filter((id) => !inScope.some((c) => c.id === id))),
                       )
                     }
                   >
@@ -364,6 +371,8 @@ function RepoMapDraftPage({ loaded }: { loaded: ReturnType<typeof Route.useLoade
                     edits={edits}
                     disabled={locked}
                     max={MAX_NODES}
+                    filter={kindFilter}
+                    onFilter={setKindFilter}
                     onToggle={(id) => toggle(selected, id, setSelected)}
                     onEdit={edit}
                   />
