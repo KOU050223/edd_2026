@@ -62,7 +62,13 @@ export function rateLimit(selectLimiter: (env: CloudflareBindings) => RateLimit)
 export function useMapRateLimit(
   app: Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>,
 ) {
-  for (const path of ["/v1/learning-maps*", "/v1/shared-maps*", "/v1/fixed-maps*"]) {
+  for (const path of [
+    "/v1/learning-maps*",
+    "/v1/shared-maps*",
+    "/v1/fixed-maps*",
+    "/v1/repo-maps*",
+    "/v1/repo-map-drafts*",
+  ]) {
     app.use(
       path,
       rateLimit((env) => env.MAP_RATE_LIMITER),

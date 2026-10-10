@@ -20,6 +20,8 @@ export type GitHubErrorKind =
   /** 別の場所へ移っている（3xx）。 */
   | "moved"
   | "rate-limited"
+  /** トークンが無い・GitHub に拒否された（期限切れ・取り消し）。運営側の設定の問題。 */
+  | "unauthorized"
   | "timeout"
   | "unreachable"
   | "unavailable"
@@ -45,7 +47,8 @@ export type TreeEntry = {
   size?: number;
 };
 
-export type RepoInfo = { defaultBranch: string };
+/** GitHub が返す正式な名前（大文字小文字は GitHub の綴り）。保存とキャッシュのキーにはこちらを使う。 */
+export type RepoInfo = { owner: string; name: string; defaultBranch: string };
 
 export type IssueSummary = {
   number: number;
@@ -112,6 +115,10 @@ export function createGitHubClient(options: GitHubClientOptions) {
 
   /** 状態コードの検査までを行い、本文は読まずに返す。 */
   async function send(path: string, accept: string): Promise<Response> {
+    // トークン無しで続けると、共有 IP の未認証の上限（1 時間 60 回）に黙って落ちる。
+    if (!options.token) {
+      throw new GitHubError("unauthorized", "GITHUB_TOKEN が設定されていません");
+    }
     let res: Response;
     try {
       res = await fetchFn(`${API_ORIGIN}${path}`, {
@@ -122,7 +129,7 @@ export function createGitHubClient(options: GitHubClientOptions) {
           accept,
           "x-github-api-version": "2022-11-28",
           "user-agent": "gakushu-sochi",
-          ...(options.token ? { authorization: `Bearer ${options.token}` } : {}),
+          authorization: `Bearer ${options.token}`,
         },
       });
     } catch (cause) {
@@ -135,6 +142,9 @@ export function createGitHubClient(options: GitHubClientOptions) {
     }
     if (res.status >= 300 && res.status < 400) {
       throw new GitHubError("moved", `GitHub が別の場所を返しました（${res.status}）`);
+    }
+    if (res.status === 401) {
+      throw new GitHubError("unauthorized", "GitHub がトークンを受け付けませんでした（401）");
     }
     if (res.status === 404) throw new GitHubError("not-found", "リポジトリが見つかりません");
     if (
@@ -169,12 +179,15 @@ export function createGitHubClient(options: GitHubClientOptions) {
       if (
         !isObject(body) ||
         typeof body.default_branch !== "string" ||
-        typeof body.private !== "boolean"
+        typeof body.private !== "boolean" ||
+        typeof body.name !== "string" ||
+        !isObject(body.owner) ||
+        typeof body.owner.login !== "string"
       ) {
         throw unreadable("repo");
       }
       if (body.private) throw new GitHubError("not-found", "リポジトリが見つかりません");
-      return { defaultBranch: body.default_branch };
+      return { owner: body.owner.login, name: body.name, defaultBranch: body.default_branch };
     },
 
     /** 既定のブランチの先頭 commit SHA。根拠のリンクをこの SHA で固定する。 */

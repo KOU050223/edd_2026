@@ -27,6 +27,12 @@ npm run --workspace=@gakushu-sochi/api dev
 `apps/api/.dev.vars` に `GEMINI_API_KEY` を設定すると、`POST /v1/ai/responses` が
 Gemini の `streamGenerateContent` を中継します。Gemini キーは desktop に保存しません。
 
+`GITHUB_TOKEN`（リポジトリからのマップ、#249）も `.dev.vars` に置きます。公開リポジトリだけを読む
+fine-grained token（Repository access は Public repositories、権限なし）で足ります。無い・失効しているときは
+`POST /v1/repo-maps:inspect` などが 503（`github_not_configured`）を返します。本番は
+`wrangler secret put GITHUB_TOKEN`、またはダッシュボードの Variables and Secrets で入れます。
+有効期限があるので、切れる日を控えておいてください。
+
 API の認証は Auth0 のアクセストークン検証です（docs/auth.md §4）。各クライアントは
 自分でログインして得たトークンを送ります。開発用の共有トークン `DEV_AUTH_TOKEN` は
 Auth/06 で廃止したので、手で貼り付ける共有の値はもうありません。
