@@ -2650,3 +2650,106 @@ button.kind-chip.active {
     max-height: none;
   }
 }
+
+/* 読む範囲（#322 改①）: フォルダを選ぶと、その場で何を読むかが変わる */
+.scope-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  border: 0;
+  padding: 0;
+}
+.scope-chips legend,
+.scope-chips > p {
+  flex: 1 0 100%;
+}
+.scope-chips label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1.5px solid #cbd5e1;
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 0.85rem;
+  color: #64748b;
+}
+.scope-chips label:has(input:checked) {
+  border-color: #0f766e;
+  background: #f0fdfa;
+  color: #1f2937;
+}
+.scope-panel {
+  margin: 0.75rem 0;
+  padding: 12px 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #fff;
+}
+.scope-panel h3 {
+  margin: 0 0 4px;
+  font-size: 0.95rem;
+}
+.scope-summary {
+  margin: 0 0 8px;
+  font-size: 0.85rem;
+}
+.scope-panel ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.scope-panel li {
+  padding: 8px 10px;
+  margin-bottom: 6px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+}
+.scope-panel li.skipped {
+  border-style: dashed;
+  color: #94a3b8;
+}
+.scope-row-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+.scope-badge {
+  padding: 1px 9px;
+  border-radius: 999px;
+  background: #f1f5f9;
+  color: #64748b;
+  font-size: 0.75rem;
+}
+.scope-badge.on {
+  background: #dcfce7;
+  color: #166534;
+}
+.scope-bar {
+  display: flex;
+  gap: 4px;
+  height: 8px;
+  margin-top: 6px;
+}
+.scope-bar span {
+  border-radius: 999px;
+  min-width: 2px;
+}
+.scope-bar .doc,
+.swatch.doc {
+  background: #38bdf8;
+}
+.scope-bar .code,
+.swatch.code {
+  background: #a5b4fc;
+}
+.scope-panel li .muted {
+  margin: 4px 0 0;
+  font-size: 0.8rem;
+}
+.scope-legend .swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 4px;
+  border-radius: 3px;
+}

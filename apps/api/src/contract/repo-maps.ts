@@ -162,6 +162,11 @@ export interface InspectRepoResponse {
   paths: string[];
   /** `paths` が上限で切れたか。切れているときは、無いパスも「無い」と言い切らない。 */
   pathsTruncated: boolean;
+  /**
+   * 対象にできるフォルダごとの、読める材料の件数（文書・コード・データの形）。
+   * 「読む範囲」の画面で、選んだフォルダが何を読むかをその場で見せる。切れ目なく数える（一覧の上限とは別）。
+   */
+  folderStats: Record<string, InspectFolderStat>;
   scan: RepoMapScan;
   usage: RepoMapUsageView;
 }
@@ -170,6 +175,12 @@ export interface InspectRepoResponse {
 export const INSPECT_FILE_LIST_MAX = 300;
 /** 下見で出すパスの一覧（照合用）の上限。 */
 export const INSPECT_PATH_LIST_MAX = 5_000;
+
+export interface InspectFolderStat {
+  doc: number;
+  code: number;
+  schema: number;
+}
 
 export interface InspectFileView {
   path: string;

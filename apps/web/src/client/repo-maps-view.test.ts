@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  scopeSummary,
   groupByKind,
   wizardStepOf,
   wizardSteps,
@@ -225,5 +226,59 @@ describe("作成の手順と種類の列（#322）", () => {
     ]);
     expect(columns[2]?.items.map((i) => i.id)).toEqual(["a", "c"]);
     expect(groupByKind([], () => null)).toHaveLength(5);
+  });
+});
+
+describe("読む範囲（#322 改①）", () => {
+  const inspected = {
+    monorepo: [
+      { path: "apps/api", shared: false },
+      { path: "apps/web", shared: false },
+      { path: "packages/domain", shared: true },
+    ],
+    folders: [],
+    folderStats: {
+      "apps/api": { doc: 1, code: 120, schema: 0 },
+      "apps/web": { doc: 0, code: 98, schema: 0 },
+      "packages/domain": { doc: 2, code: 33, schema: 1 },
+    },
+    scan: { blobTotal: 310, kept: { doc: 3, glossary: 1, code: 251, schema: 1 }, dropped: {} },
+  };
+
+  it("何も選ばなければ全体を読む（合計は走査の件数）", () => {
+    const s = scopeSummary(inspected, new Set(), []);
+    expect(s.readsAll).toBe(true);
+    expect(s.rows.every((r) => r.reading)).toBe(true);
+    expect(s.totals).toEqual({ doc: 4, code: 251, schema: 1 });
+  });
+
+  it("選んだフォルダだけを読み、合計はその分。フォルダの外の参考ファイルも数える", () => {
+    const s = scopeSummary(inspected, new Set(["apps/api", "packages/domain"]), [
+      "apps/api/src/a.ts",
+      "docs/idea.md",
+    ]);
+    expect(s.rows.map((r) => r.reading)).toEqual([true, false, true]);
+    expect(s.totals).toEqual({ doc: 3, code: 153, schema: 1 });
+    expect(s.rows[0]?.pinned).toBe(1);
+    expect(s.outsidePinned).toBe(1);
+  });
+
+  it("入れ子のフォルダを両方選んでも二重に数えない。古い API では合計を出さない", () => {
+    const nested = {
+      monorepo: null,
+      folders: ["apps", "apps/api"],
+      folderStats: {
+        apps: { doc: 1, code: 10, schema: 0 },
+        "apps/api": { doc: 1, code: 4, schema: 0 },
+      },
+      scan: inspected.scan,
+    };
+    expect(scopeSummary(nested, new Set(["apps", "apps/api"]), []).totals).toEqual({
+      doc: 1,
+      code: 10,
+      schema: 0,
+    });
+    const old = { ...inspected, folderStats: undefined };
+    expect(scopeSummary(old, new Set(["apps/api"]), []).totals).toBeNull();
   });
 });

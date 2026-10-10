@@ -77,6 +77,12 @@ export interface RepoMapScan {
 }
 
 /** 下見が返す、参考ファイルとして選べるファイル。 */
+export interface RepoMapFolderStat {
+  doc: number;
+  code: number;
+  schema: number;
+}
+
 export interface RepoMapFileOption {
   path: string;
   kind: "glossary" | "doc" | "schema" | "code";
@@ -92,6 +98,8 @@ export interface InspectRepoResult {
   /** 指定できるパスの全体（照合用）。古い API では無い。 */
   paths?: string[];
   pathsTruncated?: boolean;
+  /** 対象にできるフォルダごとの、読める材料の件数（古い API では無い）。 */
+  folderStats?: Record<string, RepoMapFolderStat>;
   scan: RepoMapScan;
   usage: RepoMapUsage;
 }
@@ -838,3 +846,73 @@ export function groupByKind<T>(
 
 /** ドラッグで運んでいる候補の ID を、dataTransfer に載せる／取り出すときの型名。 */
 export const CANDIDATE_DRAG_TYPE = "application/x-repo-map-candidate";
+
+export interface ScopeRow {
+  path: string;
+  shared: boolean;
+  /** このフォルダを読むか（何も選ばなければ全体を読むので、全部 true）。 */
+  reading: boolean;
+  /** 件数。古い API（`folderStats` なし）では `null`。 */
+  stat: RepoMapFolderStat | null;
+  /** このフォルダの中の、参考ファイルの数。 */
+  pinned: number;
+}
+
+export interface ScopeSummary {
+  rows: ScopeRow[];
+  /** 何も選んでいない（全体を読む）。 */
+  readsAll: boolean;
+  /** 読む材料の合計。数えられないとき（古い API）は `null`。 */
+  totals: RepoMapFolderStat | null;
+  /** 選んだフォルダの外にある参考ファイル（それでも読む）。 */
+  outsidePinned: number;
+}
+
+/**
+ * 「読む範囲」の表示を作る。フォルダの選び方を変えるたびに、何をどれだけ読むかがその場で変わる。
+ * 入れ子のフォルダを両方選んでも、合計は二重に数えない。
+ */
+export function scopeSummary(
+  inspected: Pick<InspectRepoResult, "monorepo" | "folders" | "folderStats" | "scan">,
+  selected: ReadonlySet<string>,
+  hintFiles: readonly string[],
+  maxFolders: number = REPO_MAP_LIMITS.folders,
+): ScopeSummary {
+  const readsAll = selected.size === 0;
+  const candidates: { path: string; shared: boolean }[] =
+    inspected.monorepo ??
+    inspected.folders.slice(0, maxFolders).map((path) => ({ path, shared: false }));
+  const inside = (file: string, folder: string) => file.startsWith(`${folder}/`);
+  const rows = candidates.map((c) => ({
+    path: c.path,
+    shared: c.shared,
+    reading: readsAll || selected.has(c.path),
+    stat: inspected.folderStats?.[c.path] ?? null,
+    pinned: hintFiles.filter((f) => inside(f, c.path)).length,
+  }));
+  let totals: RepoMapFolderStat | null = null;
+  if (readsAll) {
+    const kept = inspected.scan.kept;
+    totals = {
+      doc: (kept.doc ?? 0) + (kept.glossary ?? 0),
+      code: kept.code ?? 0,
+      schema: kept.schema ?? 0,
+    };
+  } else if (inspected.folderStats !== undefined) {
+    const chosen = [...selected].filter(
+      (p) => !selected.has(p) || ![...selected].some((o) => o !== p && inside(p, o)),
+    );
+    totals = { doc: 0, code: 0, schema: 0 };
+    for (const path of chosen) {
+      const stat = inspected.folderStats[path];
+      if (stat === undefined) continue;
+      totals.doc += stat.doc;
+      totals.code += stat.code;
+      totals.schema += stat.schema;
+    }
+  }
+  const outsidePinned = readsAll
+    ? 0
+    : hintFiles.filter((f) => ![...selected].some((folder) => inside(f, folder))).length;
+  return { rows, readsAll, totals, outsidePinned };
+}
