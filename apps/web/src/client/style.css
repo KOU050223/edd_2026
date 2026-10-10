@@ -2041,3 +2041,61 @@ button.link.danger {
   color: #64748b;
   font-size: 0.8rem;
 }
+
+/* 右パネルの区切り（#322）: 学ぶこと / 確かめる / つながり / 根拠 */
+.detail {
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+}
+.detail-head h2 {
+  margin-bottom: 4px;
+}
+.detail-block {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid #e2e8f0;
+}
+.detail .detail-block-title {
+  margin: 0 0 8px;
+  font-size: 14px;
+  color: #0f172a;
+}
+.detail h4 {
+  margin: 12px 0 4px;
+  font-size: 12px;
+  color: #64748b;
+}
+.detail-objective-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 14px;
+  line-height: 1.6;
+}
+.detail-objective-list li {
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  padding: 4px 0;
+  border-bottom: 1px dashed #e2e8f0;
+}
+.detail-objective-value.none {
+  font-size: 12px;
+  color: #94a3b8;
+}
+.repo-sources ul {
+  list-style: none;
+  padding-left: 0;
+  margin: 0;
+}
+.repo-sources li {
+  padding: 4px 0;
+  overflow-wrap: anywhere;
+}
+.repo-source-summary {
+  margin: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}

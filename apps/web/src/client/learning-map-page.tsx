@@ -1,5 +1,5 @@
 import { HistoryMapPanel } from "./history-map-panel.js";
-import { RepoMapSourcesPanel } from "./repo-map-sources.js";
+import { RepoMapNodeSources, RepoMapSourcesFailure } from "./repo-map-sources.js";
 import type { RepoMapSourcesState } from "./repo-maps.js";
 /**
  * 学習マップ1件の画面の中身（#242・#244・#302）。`/maps/<ID>`（手元のマップ・他人の共有マップ）と
@@ -522,17 +522,12 @@ export function LearningMapPage({
               onChange={(status) => changeStatus(selected.conceptId, status)}
               onSelect={select}
               panel={detail}
+              evidence={<RepoMapNodeSources state={sources} conceptId={selected.conceptId} />}
             />
           )}
         </div>
       )}
-      {sources !== undefined && sources.kind !== "none" && (
-        <RepoMapSourcesPanel
-          state={sources}
-          selectedId={selected?.conceptId}
-          labelOf={(conceptId) => definitionOf.get(conceptId)?.label ?? conceptId}
-        />
-      )}
+      {sources !== undefined && <RepoMapSourcesFailure state={sources} />}
     </>
   );
 }
