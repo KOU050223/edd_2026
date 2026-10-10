@@ -53,6 +53,8 @@ function RepoMapStartPage() {
 
   const usage = inspected?.usage ?? loaded.usage;
   const slotsLeft = usage.monthlyDraftsLimit - usage.monthlyDrafts;
+  // 同意の確認中に入力を変えると、同意した内容と違うものを送ってしまう。確認中は入力を止める。
+  const locked = busy !== undefined || consentFlow.asking;
   const mapsFull = loaded.mapCount >= MAP_LIMITS.maps;
 
   const inspect = () => {
@@ -200,12 +202,12 @@ function RepoMapStartPage() {
             value={url}
             required
             maxLength={200}
-            disabled={busy !== undefined || consentFlow.asking}
+            disabled={locked || consentFlow.asking}
             onChange={(event) => setUrl(event.target.value)}
           />
         </label>
         <div className="actions">
-          <button type="submit" disabled={busy !== undefined || url.trim() === ""}>
+          <button type="submit" disabled={locked || url.trim() === ""}>
             {busy === "inspect" ? "確認しています…" : "リポジトリを確認する"}
           </button>
         </div>
@@ -243,7 +245,7 @@ function RepoMapStartPage() {
           )}
 
           {inspected.monorepo !== null ? (
-            <fieldset disabled={busy !== undefined}>
+            <fieldset disabled={locked}>
               <legend>対象のフォルダ</legend>
               <p className="muted">{MONOREPO_NOTICE}</p>
               {inspected.monorepo.map((folder) => (
@@ -263,7 +265,7 @@ function RepoMapStartPage() {
             inspected.folders.length > 0 && (
               <details>
                 <summary>対象のフォルダを絞る（任意）</summary>
-                <fieldset disabled={busy !== undefined}>
+                <fieldset disabled={locked}>
                   {inspected.folders.slice(0, REPO_MAP_LIMITS.folders).map((path) => (
                     <label key={path} className="check-consent-remember">
                       <input
@@ -285,7 +287,7 @@ function RepoMapStartPage() {
               rows={3}
               value={filesText}
               placeholder="docs/glossary.md"
-              disabled={busy !== undefined}
+              disabled={locked}
               onChange={(event) => setFilesText(event.target.value)}
             />
           </label>
@@ -295,7 +297,7 @@ function RepoMapStartPage() {
               rows={3}
               value={issuesText}
               placeholder="#12"
-              disabled={busy !== undefined}
+              disabled={locked}
               onChange={(event) => setIssuesText(event.target.value)}
             />
           </label>
@@ -345,7 +347,7 @@ export const Route = createFileRoute("/_framed/maps/repo")({
   loader: async () => {
     const retry = takeLoginRetry();
     const [{ drafts, usage }, consent, { maps }] = await Promise.all([
-      fetchRepoMapDrafts(),
+      fetchRepoMapDrafts(fetch, retry),
       fetchGenerationConsent(fetch, retry, MAP_GENERATION_CONSENT_PATH),
       fetchLearningMaps(fetch, retry),
     ]);

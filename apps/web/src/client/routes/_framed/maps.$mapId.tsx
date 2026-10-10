@@ -5,8 +5,7 @@ import { parseConceptSearch, type MapProfile } from "../../learning-map-view.js"
 import { fetchLearningMap, findOwnMapOf } from "../../learning-maps.js";
 import { fetchSharedMap } from "../../map-sharing.js";
 import type { MasteryOverrides } from "../../overrides.js";
-import type { RepoMapSourcesState } from "../../repo-map-sources.js";
-import { fetchRepoMapSources } from "../../repo-maps.js";
+import { loadRepoMapSources } from "../../repo-maps.js";
 import { takeLoginRetry } from "../../session.js";
 
 /** `/maps/<ID>`。ノードを選ぶと `?concept=` を変える。 */
@@ -67,23 +66,6 @@ async function loadMap(
   return { kind: "shared", map: await fetchSharedMap(mapId, search.key, fetch, retry) };
 }
 
-/**
- * リポジトリから作ったマップの根拠（#249）。自分のマップだけが持つ。読めなくても、マップの閲覧は止めない
- * （失敗は画面に出す。「根拠が無い」のと区別する）。
- */
-async function loadSources(mapId: string, kind: LoadedMap["kind"]): Promise<RepoMapSourcesState> {
-  if (kind !== "own") return { kind: "none" };
-  try {
-    const sources = await fetchRepoMapSources(mapId, fetch);
-    return sources === null ? { kind: "none" } : { kind: "ok", sources };
-  } catch (error: unknown) {
-    // ログイン切れは、マップ自体の読み込みと同じ扱い（loader の失敗にする）。
-    if (error instanceof ApiError && error.kind === "session_expired") throw error;
-    console.error("failed to load repo map sources", error);
-    return { kind: "failed" };
-  }
-}
-
 export const Route = createFileRoute("/_framed/maps/$mapId")({
   // `key` は「リンクだけ」の共有の鍵（#244 の決定 U1）。
   validateSearch: (search: Record<string, unknown>): { concept?: string; key?: string } => ({
@@ -99,12 +81,16 @@ export const Route = createFileRoute("/_framed/maps/$mapId")({
   loader: async ({ params, deps, location }) => {
     const retry = takeLoginRetry();
     const { concept } = parseConceptSearch(location.search as Record<string, unknown>);
-    const [loaded, profile, overrides] = await Promise.all([
-      loadMap(params.mapId, { key: deps.key, concept }, retry),
+    const loadedPromise = loadMap(params.mapId, { key: deps.key, concept }, retry);
+    const [loaded, profile, overrides, sources] = await Promise.all([
+      loadedPromise,
       requestJson<MapProfile>("/api/v1/learning-profile", fetch, retry),
       requestJson<MasteryOverrides>("/api/v1/mastery-overrides", fetch, retry),
+      // 根拠は、自分のマップのときだけ読む（マップの読み込みと並べて、直列の 1 回を増やさない）。
+      loadedPromise.then((value) =>
+        loadRepoMapSources(params.mapId, value.kind === "own", fetch, retry),
+      ),
     ]);
-    const sources = await loadSources(params.mapId, loaded.kind);
     return { loaded, profile, overrides, sources };
   },
   component: MapRoutePage,

@@ -3,10 +3,7 @@
  * リンクは、読んだ時点の commit SHA で固定されている（リポジトリが変わっても、根拠の指す中身は変わらない）。
  */
 
-import { EVIDENCE_KIND_LABELS, type RepoMapSources } from "./repo-maps.js";
-
-export type RepoMapSourcesState =
-  { kind: "none" } | { kind: "ok"; sources: RepoMapSources } | { kind: "failed" };
+import { EVIDENCE_KIND_LABELS, type RepoMapSourcesState } from "./repo-maps.js";
 
 export function RepoMapSourcesPanel({
   state,

@@ -7,6 +7,7 @@ import {
   defaultFolderSelection,
   fetchRepoMapSources,
   inspectRepo,
+  loadRepoMapSources,
   MAX_SUMMARIZE_ROUNDS,
   nextStep,
   parseHintFiles,
@@ -127,6 +128,18 @@ describe("API の呼び出し", () => {
     expect((error as RepoMapConsentRequiredError).version).toBe(3);
   });
 
+  it("Worker の送信の同意（版も文も無い）は、共通の同意の文面の種別にする", async () => {
+    const fetcher = (async () =>
+      json({ error: "consent_required" }, 403)) as unknown as typeof fetch;
+    const error = await createRepoMapDraft(
+      { url: "github.com/o/r", folders: [], files: [], issues: [] },
+      fetcher,
+    ).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).not.toBeInstanceOf(RepoMapError);
+    expect((error as ApiError).kind).toBe("consent_required");
+  });
+
   it("2xx でも本文が読めなければ失敗にする", async () => {
     const fetcher = (async () =>
       new Response("<html>", { status: 200 })) as unknown as typeof fetch;
@@ -152,6 +165,38 @@ describe("API の呼び出し", () => {
     await expect(fetchRepoMapSources("m1", notFound)).resolves.toBeNull();
     const broken = (async () => json({ error: "x" }, 500)) as unknown as typeof fetch;
     await expect(fetchRepoMapSources("m1", broken)).rejects.toBeInstanceOf(ApiError);
+  });
+});
+
+describe("根拠の読み込み（マップの画面）", () => {
+  const sources = { repo: { url: "github.com/o/r", commitSha: "c".repeat(40) }, nodes: [] };
+
+  it("共有のマップ（自分のマップでない）は読まない", async () => {
+    const fetcher = vi.fn() as unknown as typeof fetch;
+    await expect(loadRepoMapSources("m1", false, fetcher)).resolves.toEqual({ kind: "none" });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("読めたら ok、リポジトリから作っていなければ none（404）", async () => {
+    const ok = (async () => json(sources)) as unknown as typeof fetch;
+    await expect(loadRepoMapSources("m1", true, ok)).resolves.toEqual({ kind: "ok", sources });
+    const none = (async () =>
+      json({ error: "repo map source not found" }, 404)) as unknown as typeof fetch;
+    await expect(loadRepoMapSources("m1", true, none)).resolves.toEqual({ kind: "none" });
+  });
+
+  it("読めなかったときは failed にして記録する（「根拠が無い」と区別する）。ログイン切れは投げる", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const broken = (async () => json({ error: "x" }, 500)) as unknown as typeof fetch;
+    await expect(loadRepoMapSources("m1", true, broken)).resolves.toEqual({ kind: "failed" });
+    expect(errors).toHaveBeenCalledTimes(1);
+    errors.mockRestore();
+
+    const expired = (async () =>
+      json({ error: "session_expired" }, 401)) as unknown as typeof fetch;
+    await expect(loadRepoMapSources("m1", true, expired)).rejects.toMatchObject({
+      kind: "session_expired",
+    });
   });
 });
 
@@ -257,6 +302,14 @@ describe("確定の入力", () => {
       title: "題名",
       accepted: [{ id: "C1", name: "新しい名前" }, { id: "C3" }],
     });
+  });
+
+  it("名前・説明を空に直したものは、元に戻さず、送る前に断る", () => {
+    const request = buildConfirmRequest(items, new Set(["C1"]), { C1: { name: "  " } }, "");
+    expect(request.accepted).toEqual([{ id: "C1", name: "" }]);
+    expect(validateConfirm(request)).toContain("空");
+    const request2 = buildConfirmRequest(items, new Set(["C1"]), { C1: { description: "" } }, "");
+    expect(validateConfirm(request2)).toContain("空");
   });
 
   it("題名が空なら送らない（リポジトリ名から付く）", () => {

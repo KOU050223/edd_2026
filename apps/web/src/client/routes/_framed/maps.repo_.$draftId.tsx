@@ -61,6 +61,8 @@ function RepoMapDraftPage() {
 
   const step = nextStep(draft);
   const busy = phase !== "idle";
+  // 同意の確認中に入力を変えると、同意した内容と違うものを送ってしまう。確認中は入力を止める。
+  const locked = busy || consentFlow.asking;
   const candidates = draft.candidates?.items ?? [];
 
   /** 候補を受け取ったら、選び方と直しを最初に戻す（候補の ID は作り直しで変わる）。 */
@@ -242,7 +244,7 @@ function RepoMapDraftPage() {
                 <div className="actions">
                   <button
                     type="button"
-                    disabled={busy}
+                    disabled={locked}
                     onClick={() => consentFlow.request(advance)}
                   >
                     {phase === "summarize"
@@ -286,7 +288,7 @@ function RepoMapDraftPage() {
                           <input
                             type="checkbox"
                             checked={selected.has(candidate.id)}
-                            disabled={busy}
+                            disabled={locked}
                             onChange={() => toggle(selected, candidate.id, setSelected)}
                           />
                           <strong>{edit1?.name ?? candidate.name}</strong>
@@ -311,7 +313,7 @@ function RepoMapDraftPage() {
                               <input
                                 value={edit1?.name ?? candidate.name}
                                 maxLength={REPO_MAP_LIMITS.name}
-                                disabled={busy}
+                                disabled={locked}
                                 onChange={(event) =>
                                   edit(candidate.id, { name: event.target.value })
                                 }
@@ -323,7 +325,7 @@ function RepoMapDraftPage() {
                                 rows={2}
                                 value={edit1?.description ?? candidate.description}
                                 maxLength={REPO_MAP_LIMITS.description}
-                                disabled={busy}
+                                disabled={locked}
                                 onChange={(event) =>
                                   edit(candidate.id, { description: event.target.value })
                                 }
@@ -352,7 +354,7 @@ function RepoMapDraftPage() {
                   <input
                     value={title}
                     maxLength={REPO_MAP_LIMITS.title}
-                    disabled={busy}
+                    disabled={locked}
                     onChange={(event) => setTitle(event.target.value)}
                   />
                 </label>
@@ -401,7 +403,7 @@ function RepoMapDraftPage() {
                         <input
                           type="checkbox"
                           checked={excluded.has(m.id)}
-                          disabled={busy}
+                          disabled={locked}
                           onChange={() => toggle(excluded, m.id, setExcluded)}
                         />
                         外す
@@ -419,7 +421,7 @@ function RepoMapDraftPage() {
                           <input
                             type="checkbox"
                             checked={excluded.has(id)}
-                            disabled={busy}
+                            disabled={locked}
                             onChange={() => toggle(excluded, id, setExcluded)}
                           />
                           外す
@@ -470,7 +472,7 @@ export const Route = createFileRoute("/_framed/maps/repo_/$draftId")({
   loader: async ({ params }) => {
     const retry = takeLoginRetry();
     const [draft, consent] = await Promise.all([
-      fetchRepoMapDraft(params.draftId),
+      fetchRepoMapDraft(params.draftId, fetch, retry),
       fetchGenerationConsent(fetch, retry, MAP_GENERATION_CONSENT_PATH),
     ]);
     return { draft, consent };

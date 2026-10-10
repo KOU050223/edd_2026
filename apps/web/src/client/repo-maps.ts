@@ -9,7 +9,7 @@
  * 候補を選んで確定 → マップ。確定したマップには根拠（パス・要約・リンク）が付く。
  */
 
-import { ApiError, writeErrorOf } from "./api.js";
+import { ApiError, requestJson, writeErrorOf } from "./api.js";
 
 const BASE = "/api/v1";
 export const REPO_MAP_INSPECT_PATH = `${BASE}/repo-maps:inspect`;
@@ -147,6 +147,8 @@ function failureOf(status: number, body: Record<string, unknown>): ApiError {
   if (body.error === "consent_required" && typeof body.version === "number") {
     return new RepoMapConsentRequiredError(body.version);
   }
+  // 版も文も無い consent_required は、Worker の「送信の同意」。共通の文面（設定画面で同意する）にする。
+  if (common.kind === "consent_required") return common;
   if (common.kind === "login_required" || common.kind === "session_expired") return common;
   if (common.kind === "auth_unavailable") return common;
   // API が画面向けの文を添えた失敗（枠の超過は 429 でも、短時間の要求過多ではない）。
@@ -248,14 +250,9 @@ export async function createRepoMapDraft(
 
 export async function fetchRepoMapDrafts(
   fetcher: typeof fetch = fetch,
+  sessionRetries: boolean | number = false,
 ): Promise<{ drafts: RepoMapDraft[]; usage: RepoMapUsage }> {
-  const body = await send(
-    "GET",
-    REPO_MAP_DRAFTS_PATH,
-    undefined,
-    fetcher,
-    REPO_MAP_FETCH_TIMEOUT_MS,
-  );
+  const body = await requestJson<unknown>(REPO_MAP_DRAFTS_PATH, fetcher, sessionRetries);
   if (!isObject(body) || !Array.isArray(body.drafts) || !isObject(body.usage)) {
     throw new ApiError("unavailable");
   }
@@ -265,13 +262,12 @@ export async function fetchRepoMapDrafts(
 export async function fetchRepoMapDraft(
   id: string,
   fetcher: typeof fetch = fetch,
+  sessionRetries: boolean | number = false,
 ): Promise<RepoMapDraft> {
-  const body = await send(
-    "GET",
+  const body = await requestJson<unknown>(
     `${REPO_MAP_DRAFTS_PATH}/${encodeURIComponent(id)}`,
-    undefined,
     fetcher,
-    REPO_MAP_FETCH_TIMEOUT_MS,
+    sessionRetries,
   );
   if (!isObject(body) || typeof body.id !== "string") throw new ApiError("unavailable");
   return body as unknown as RepoMapDraft;
@@ -366,14 +362,13 @@ export async function confirmRepoMapDraft(
 export async function fetchRepoMapSources(
   mapId: string,
   fetcher: typeof fetch = fetch,
+  sessionRetries: boolean | number = false,
 ): Promise<RepoMapSources | null> {
   try {
-    const body = await send(
-      "GET",
+    const body = await requestJson<unknown>(
       `${BASE}/repo-maps/${encodeURIComponent(mapId)}/sources`,
-      undefined,
       fetcher,
-      REPO_MAP_FETCH_TIMEOUT_MS,
+      sessionRetries,
     );
     if (!isObject(body) || !isObject(body.repo) || !Array.isArray(body.nodes)) {
       throw new ApiError("unavailable");
@@ -382,6 +377,31 @@ export async function fetchRepoMapSources(
   } catch (error: unknown) {
     if (error instanceof ApiError && error.kind === "not_found") return null;
     throw error;
+  }
+}
+
+/** マップの画面が出す、根拠の状態。 */
+export type RepoMapSourcesState =
+  { kind: "none" } | { kind: "ok"; sources: RepoMapSources } | { kind: "failed" };
+
+/**
+ * 自分のマップの根拠を読む。読めなくても、マップの閲覧は止めない（失敗は画面に出す）。
+ * ログイン切れだけは、マップ自体の読み込みと同じ扱い（呼び出し側の loader の失敗にする）。
+ */
+export async function loadRepoMapSources(
+  mapId: string,
+  own: boolean,
+  fetcher: typeof fetch = fetch,
+  sessionRetries: boolean | number = false,
+): Promise<RepoMapSourcesState> {
+  if (!own) return { kind: "none" };
+  try {
+    const sources = await fetchRepoMapSources(mapId, fetcher, sessionRetries);
+    return sources === null ? { kind: "none" } : { kind: "ok", sources };
+  } catch (error: unknown) {
+    if (error instanceof ApiError && error.kind === "session_expired") throw error;
+    console.error("failed to load repo map sources", error);
+    return { kind: "failed" };
   }
 }
 
@@ -515,12 +535,11 @@ export function buildConfirmRequest(
       const edit = edits[c.id];
       const name = edit?.name?.trim();
       const description = edit?.description?.trim();
+      // 空に直したものは、元に戻さずそのまま送る（validateConfirm が断る）。
       return {
         id: c.id,
-        ...(name !== undefined && name !== "" && name !== c.name ? { name } : {}),
-        ...(description !== undefined && description !== "" && description !== c.description
-          ? { description }
-          : {}),
+        ...(name !== undefined && name !== c.name ? { name } : {}),
+        ...(description !== undefined && description !== c.description ? { description } : {}),
       };
     });
   const trimmed = title.trim();
@@ -537,6 +556,10 @@ export function validateConfirm(request: ConfirmRequest, maxNodes = 30): string 
     return `題名は ${String(REPO_MAP_LIMITS.title)} 文字までです。`;
   }
   for (const item of request.accepted) {
+    if (item.name !== undefined && item.name === "") return "表示名を空にはできません。";
+    if (item.description !== undefined && item.description === "") {
+      return "説明を空にはできません。";
+    }
     if ([...(item.name ?? "")].length > REPO_MAP_LIMITS.name) {
       return `表示名は ${String(REPO_MAP_LIMITS.name)} 文字までです。`;
     }

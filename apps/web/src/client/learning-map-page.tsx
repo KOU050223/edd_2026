@@ -1,5 +1,6 @@
 import { HistoryMapPanel } from "./history-map-panel.js";
-import { RepoMapSourcesPanel, type RepoMapSourcesState } from "./repo-map-sources.js";
+import { RepoMapSourcesPanel } from "./repo-map-sources.js";
+import type { RepoMapSourcesState } from "./repo-maps.js";
 /**
  * 学習マップ1件の画面の中身（#242・#244・#302）。`/maps/<ID>`（手元のマップ・他人の共有マップ）と
  * `/shared/<ID>`（持ち主が見る自分の共有の版）が使う。
