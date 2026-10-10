@@ -7,10 +7,13 @@
 
 import { ACCOUNT_DELETION_TOMBSTONE_TTL_MS } from "../repository/types.js";
 import type {
+  AiCallRecord,
+  DraftStage,
   DraftStatus,
   RepoMapDraftRepository,
   RepoMapUsage,
   StoredRepoMapDraft,
+  StoredSummary,
 } from "./repository.js";
 
 interface UsageRow {
@@ -33,6 +36,11 @@ interface DraftRow {
   status: DraftStatus;
   stage_state: string;
   stage_state_version: number;
+  failed_stage: DraftStage | null;
+  failure_code: string | null;
+  ai_calls: number;
+  input_tokens: number;
+  output_tokens: number;
   created_at: string;
   updated_at: string;
   expires_at: string;
@@ -40,6 +48,7 @@ interface DraftRow {
 
 const DRAFT_COLUMNS = `id, user_id, repo_owner, repo_name, default_branch, commit_sha,
   target_folders, hint_files, hint_issues, status, stage_state, stage_state_version,
+  failed_stage, failure_code, ai_calls, input_tokens, output_tokens,
   created_at, updated_at, expires_at`;
 
 function toUsage(row: UsageRow | null, dayKey: string): RepoMapUsage {
@@ -78,6 +87,11 @@ function toDraft(row: DraftRow): StoredRepoMapDraft {
     status: row.status,
     stageState: row.stage_state,
     stageStateVersion: row.stage_state_version,
+    failedStage: row.failed_stage,
+    failureCode: row.failure_code,
+    aiCalls: row.ai_calls,
+    inputTokens: row.input_tokens,
+    outputTokens: row.output_tokens,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     expiresAt: row.expires_at,
@@ -170,7 +184,7 @@ export class D1RepoMapDraftRepository implements RepoMapDraftRepository {
     const result = await this.db
       .prepare(
         `INSERT INTO repo_map_drafts (${DRAFT_COLUMNS})
-         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
          WHERE NOT EXISTS (
            SELECT 1 FROM account_deletions
            WHERE user_id = ? AND started_at_ms > ?
@@ -189,6 +203,11 @@ export class D1RepoMapDraftRepository implements RepoMapDraftRepository {
         draft.status,
         draft.stageState,
         draft.stageStateVersion,
+        draft.failedStage,
+        draft.failureCode,
+        draft.aiCalls,
+        draft.inputTokens,
+        draft.outputTokens,
         draft.createdAt,
         draft.updatedAt,
         draft.expiresAt,
@@ -197,6 +216,154 @@ export class D1RepoMapDraftRepository implements RepoMapDraftRepository {
       )
       .run();
     if (result.meta.changes === 0) throw new Error("user deletion is in progress");
+  }
+
+  async update(
+    userId: string,
+    id: string,
+    patch: {
+      status: DraftStatus;
+      stageState: string;
+      stageStateVersion: number;
+      failedStage: DraftStage | null;
+      failureCode: string | null;
+      updatedAt: string;
+    },
+  ): Promise<boolean> {
+    const result = await this.db
+      .prepare(
+        `UPDATE repo_map_drafts
+         SET status = ?, stage_state = ?, stage_state_version = ?,
+             failed_stage = ?, failure_code = ?, updated_at = ?
+         WHERE id = ? AND user_id = ?`,
+      )
+      .bind(
+        patch.status,
+        patch.stageState,
+        patch.stageStateVersion,
+        patch.failedStage,
+        patch.failureCode,
+        patch.updatedAt,
+        id,
+        userId,
+      )
+      .run();
+    return result.meta.changes > 0;
+  }
+
+  async recordAiCalls(params: {
+    userId: string;
+    draftId: string;
+    monthKey: string;
+    dayKey: string;
+    updatedAt: string;
+    calls: readonly AiCallRecord[];
+  }): Promise<void> {
+    if (params.calls.length === 0) return;
+    const { userId, draftId, monthKey, dayKey, updatedAt, calls } = params;
+    const input = calls.reduce((n, c) => n + c.inputTokens, 0);
+    const output = calls.reduce((n, c) => n + c.outputTokens, 0);
+    // 1 つの batch（トランザクション）で、呼び出しの行・下書きの合計・月のトークンを揃えて書く。
+    await this.db.batch([
+      ...calls.map((c) =>
+        this.db
+          .prepare(
+            `INSERT INTO repo_map_ai_calls
+               (user_id, draft_id, stage, model, input_tokens, output_tokens, ok, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .bind(
+            userId,
+            draftId,
+            c.stage,
+            c.model,
+            c.inputTokens,
+            c.outputTokens,
+            c.ok ? 1 : 0,
+            updatedAt,
+          ),
+      ),
+      this.db
+        .prepare(
+          `UPDATE repo_map_drafts
+           SET ai_calls = ai_calls + ?, input_tokens = input_tokens + ?, output_tokens = output_tokens + ?
+           WHERE id = ? AND user_id = ?`,
+        )
+        .bind(calls.length, input, output, draftId, userId),
+      this.db
+        .prepare(
+          `INSERT INTO repo_map_usage
+             (user_id, month_key, monthly_drafts, day_key, daily_rebuilds, monthly_tokens, updated_at)
+           VALUES (?, ?, 0, ?, 0, ?, ?)
+           ON CONFLICT (user_id, month_key) DO UPDATE SET
+             monthly_tokens = repo_map_usage.monthly_tokens + excluded.monthly_tokens,
+             updated_at = excluded.updated_at`,
+        )
+        .bind(userId, monthKey, dayKey, input + output, updatedAt),
+    ]);
+  }
+
+  async getSummaries(params: {
+    repoOwner: string;
+    repoName: string;
+    promptVersion: number;
+    blobShas: readonly string[];
+  }): Promise<StoredSummary[]> {
+    if (params.blobShas.length === 0) return [];
+    const marks = params.blobShas.map(() => "?").join(", ");
+    const { results } = await this.db
+      .prepare(
+        `SELECT repo_owner, repo_name, blob_sha, role, bytes_limit, summary, model, prompt_version, created_at
+         FROM repo_file_summaries
+         WHERE repo_owner = ? AND repo_name = ? AND prompt_version = ? AND blob_sha IN (${marks})`,
+      )
+      .bind(params.repoOwner, params.repoName, params.promptVersion, ...params.blobShas)
+      .all<{
+        repo_owner: string;
+        repo_name: string;
+        blob_sha: string;
+        role: StoredSummary["role"];
+        bytes_limit: number;
+        summary: string;
+        model: string;
+        prompt_version: number;
+        created_at: string;
+      }>();
+    return results.map((r) => ({
+      repoOwner: r.repo_owner,
+      repoName: r.repo_name,
+      blobSha: r.blob_sha,
+      role: r.role,
+      bytesLimit: r.bytes_limit,
+      summary: r.summary,
+      model: r.model,
+      promptVersion: r.prompt_version,
+      createdAt: r.created_at,
+    }));
+  }
+
+  async putSummary(s: StoredSummary): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT INTO repo_file_summaries
+           (repo_owner, repo_name, blob_sha, role, bytes_limit, summary, model, prompt_version, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (repo_owner, repo_name, blob_sha, role, bytes_limit) DO UPDATE SET
+           summary = excluded.summary, model = excluded.model,
+           prompt_version = excluded.prompt_version, created_at = excluded.created_at`,
+      )
+      .bind(
+        s.repoOwner,
+        s.repoName,
+        s.blobSha,
+        s.role,
+        s.bytesLimit,
+        s.summary,
+        s.model,
+        s.promptVersion,
+        s.createdAt,
+      )
+      .run();
   }
 
   async get(userId: string, id: string): Promise<StoredRepoMapDraft | null> {

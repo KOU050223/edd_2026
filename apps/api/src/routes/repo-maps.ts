@@ -14,10 +14,13 @@ import type { AuthVariables } from "../auth/middleware.js";
 import {
   createRepoMapDraftSchema,
   inspectRepoSchema,
+  summarizeRepoMapDraftSchema,
   type CreateRepoMapDraftResponse,
   type ListRepoMapDraftsResponse,
 } from "../contract/repo-maps.js";
+import { AiStageFailure } from "../repo-maps/ai.js";
 import { GitHubError } from "../repo-maps/github.js";
+import { summarizeDraft } from "../repo-maps/summarize.js";
 import type { GitHubErrorKind } from "../repo-maps/github.js";
 import {
   createDraft,
@@ -33,7 +36,8 @@ export type RepoMapsDepsResolver = (env: CloudflareBindings) => RepoMapDeps;
 
 const NO_STORE = { "cache-control": "no-store" } as const;
 
-const REFUSAL_STATUS: Record<RepoMapRefusal["code"], 400 | 403 | 429> = {
+const REFUSAL_STATUS: Record<RepoMapRefusal["code"], 400 | 403 | 404 | 429> = {
+  not_found: 404,
   invalid_url: 400,
   invalid_target: 400,
   invalid_issue: 400,
@@ -115,6 +119,9 @@ export function createRepoMapsRoute(resolve: RepoMapsDepsResolver) {
         NO_STORE,
       );
     }
+    if (error instanceof AiStageFailure) {
+      return c.json(error.body, error.status, NO_STORE);
+    }
     if (error instanceof GitHubError) {
       const failure = githubFailure(error, c.req.path);
       return c.json({ error: failure.error, message: failure.message }, failure.status, NO_STORE);
@@ -139,6 +146,17 @@ export function createRepoMapsRoute(resolve: RepoMapsDepsResolver) {
     try {
       const body: CreateRepoMapDraftResponse = await createDraft(resolve(c.env), userId, input);
       return c.json(body, 201, NO_STORE);
+    } catch (error) {
+      return respondFailure(c, error);
+    }
+  });
+
+  app.post("/repo-map-drafts/:id/summarize", async (c) => {
+    const userId = c.get("user").userId;
+    const input = await parseBody(c, summarizeRepoMapDraftSchema);
+    try {
+      const body = await summarizeDraft(resolve(c.env), userId, c.req.param("id"), input);
+      return c.json(body, 200, NO_STORE);
     } catch (error) {
       return respondFailure(c, error);
     }

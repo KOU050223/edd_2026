@@ -13,6 +13,7 @@ import {
   type CreateRepoMapDraftInput,
   type InspectRepoResponse,
   type RepoMapDraftView,
+  type RepoMapMaterialView,
   type RepoMapRepoInfo,
   type RepoMapScan,
   type RepoMapUsageView,
@@ -31,7 +32,8 @@ import {
 } from "./classify.js";
 import type { GitHubClient, IssueSummary, TreeEntry } from "./github.js";
 import type { RepoMapDraftRepository, RepoMapUsage, StoredRepoMapDraft } from "./repository.js";
-import { parseRepoUrl, repoUrl, type RepoRef } from "./url.js";
+import type { RepoMapAiConfig } from "./ai.js";
+import { issueLink, parseRepoUrl, permalink, repoUrl, type RepoRef } from "./url.js";
 
 /** 一覧に載せる Issue のタイトルの数。 */
 export const ISSUE_TITLE_COUNT = 50;
@@ -42,6 +44,26 @@ export const MAX_STATE_BYTES = 120_000;
 /** 作成のたびに一緒に消す、期限切れの下書きの件数の上限。 */
 export const SWEEP_LIMIT = 50;
 const STATE_VERSION = 1;
+
+/** 要約した材料 1 件。`id`（E1…）を候補の根拠の参照にし、パスは機械で戻す。 */
+export interface MaterialState {
+  id: string;
+  kind: RepoMapMaterialView["kind"];
+  /** ファイルのパス、または `#番号`（Issue）。 */
+  ref: string;
+  text: string;
+  pinned: boolean;
+}
+
+/** 要約の段（PR C2a）の結果。 */
+export interface SummaryState {
+  materials: MaterialState[];
+  /** 機械で読んだデータの形（AI は使っていない）。 */
+  schema: { path: string; names: string[] }[];
+  skipped: { ref: string; reason: string }[];
+  /** 文書（用語集を含む）の要約の文字数の合計。 */
+  docChars: number;
+}
 
 /** `stage_state` の中身。形の版は `stage_state_version`。 */
 export interface FetchedState {
@@ -54,13 +76,20 @@ export interface FetchedState {
   issues: IssueSummary[];
   /** 利用者が指定した Issue（検証済み）。 */
   pinnedIssues: { number: number; title: string }[];
+  /** 要約の段が終わっていれば入る。 */
+  summary?: SummaryState;
 }
 
 /** 呼び出し側が HTTP の応答へ写す、利用者の入力・状態のせいの失敗。 */
 export class RepoMapRefusal extends Error {
   constructor(
     readonly code:
-      "invalid_url" | "invalid_target" | "invalid_issue" | "consent_required" | "quota_exceeded",
+      | "invalid_url"
+      | "invalid_target"
+      | "invalid_issue"
+      | "consent_required"
+      | "quota_exceeded"
+      | "not_found",
     message: string,
     readonly detail: Record<string, unknown> = {},
   ) {
@@ -79,6 +108,8 @@ export interface RepoMapDeps {
   identity: { ensureUser(params: { userId: string; nowMs: number }): Promise<void> };
   newId: () => string;
   now: () => Date;
+  /** AI の段（要約・候補）が使う設定。無ければ AI の段は 503 を返す。 */
+  ai?: RepoMapAiConfig;
 }
 
 interface Source {
@@ -265,9 +296,24 @@ export async function inspectRepo(
   };
 }
 
+/** 下書きの `stage_state` を読む。知らない版・壊れた JSON は例外にする（黙って空にしない）。 */
+export function parseState(draft: StoredRepoMapDraft): FetchedState {
+  if (draft.stageStateVersion !== STATE_VERSION) {
+    throw new Error(
+      `unsupported repo map draft state version: ${String(draft.stageStateVersion)} (id=${draft.id})`,
+    );
+  }
+  try {
+    return JSON.parse(draft.stageState) as FetchedState;
+  } catch (cause) {
+    throw new Error(`repo map draft state is not valid JSON (id=${draft.id})`, { cause });
+  }
+}
+
 function toView(draft: StoredRepoMapDraft): RepoMapDraftView {
-  const state = JSON.parse(draft.stageState) as FetchedState;
+  const state = parseState(draft);
   const ref = { owner: draft.repoOwner, name: draft.repoName };
+  const summary = state.summary;
   return {
     id: draft.id,
     repo: {
@@ -287,12 +333,58 @@ function toView(draft: StoredRepoMapDraft): RepoMapDraftView {
     scan: state.scan,
     listing: state.listing,
     issues: state.pinnedIssues,
+    summary:
+      summary === undefined
+        ? null
+        : {
+            materials: summary.materials.map((m) => ({
+              ...m,
+              url:
+                m.kind === "issue"
+                  ? issueLink(ref, Number(m.ref.slice(1)))
+                  : permalink(ref, draft.commitSha, m.ref),
+            })),
+            schema: summary.schema.map((f) => ({
+              ...f,
+              url: permalink(ref, draft.commitSha, f.path),
+            })),
+            skipped: summary.skipped,
+            docChars: summary.docChars,
+          },
+    ai: {
+      calls: draft.aiCalls,
+      inputTokens: draft.inputTokens,
+      outputTokens: draft.outputTokens,
+    },
+    failure:
+      draft.status === "failed" && draft.failedStage !== null && draft.failureCode !== null
+        ? { stage: draft.failedStage, code: draft.failureCode }
+        : null,
     createdAt: draft.createdAt,
     expiresAt: draft.expiresAt,
   };
 }
 
 export { toView as draftView, usageView };
+
+/**
+ * 送る前に同意を確かめる。その場の同意（今の版の `consentVersion`）か、「今後表示しない」の記録のどちらか。
+ * 版が古い記録は同意として扱わない。AI の段ごとに確かめる（作った時点の版の同意を引き継がない）。
+ */
+export async function requireConsent(
+  deps: Pick<RepoMapDeps, "consents">,
+  userId: string,
+  consentVersion: number | undefined,
+): Promise<void> {
+  if (consentVersion === MAP_GENERATION_CONSENT_VERSION) return;
+  const stored = await deps.consents.get(userId);
+  if (stored?.version === MAP_GENERATION_CONSENT_VERSION) return;
+  throw new RepoMapRefusal(
+    "consent_required",
+    "マップを作る前に、AI へ送る内容を確認して同意してください。",
+    { version: MAP_GENERATION_CONSENT_VERSION },
+  );
+}
 
 /** 今の枠（読み取り）。 */
 export async function currentUsage(
@@ -320,16 +412,7 @@ export async function createDraft(
 ): Promise<{ draft: RepoMapDraftView; usage: RepoMapUsageView }> {
   const ref = parseRef(input.url);
 
-  if (input.consentVersion !== MAP_GENERATION_CONSENT_VERSION) {
-    const stored = await deps.consents.get(userId);
-    if (stored?.version !== MAP_GENERATION_CONSENT_VERSION) {
-      throw new RepoMapRefusal(
-        "consent_required",
-        "マップを作る前に、AI へ送る内容を確認して同意してください。",
-        { version: MAP_GENERATION_CONSENT_VERSION },
-      );
-    }
-  }
+  await requireConsent(deps, userId, input.consentVersion);
 
   const now = deps.now();
   const monthKey = utcMonthKey(now);
@@ -402,6 +485,11 @@ export async function createDraft(
     status: "fetched",
     stageState,
     stageStateVersion: STATE_VERSION,
+    failedStage: null,
+    failureCode: null,
+    aiCalls: 0,
+    inputTokens: 0,
+    outputTokens: 0,
     createdAt: updatedAt,
     updatedAt,
     expiresAt: new Date(reservedAt.getTime() + REPO_MAP_DRAFT_TTL_DAYS * 86_400_000).toISOString(),

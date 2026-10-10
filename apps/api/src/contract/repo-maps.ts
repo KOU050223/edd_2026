@@ -125,6 +125,41 @@ export interface InspectRepoResponse {
   usage: RepoMapUsageView;
 }
 
+/** 要約した材料 1 件。`id`（E1…）が候補の根拠の参照になる。 */
+export interface RepoMapMaterialView {
+  id: string;
+  kind: "glossary" | "doc" | "code" | "issue";
+  /** ファイルのパス、または `#番号`（Issue）。 */
+  ref: string;
+  /** commit SHA で固定したリンク（Issue は番号のリンク）。 */
+  url: string;
+  text: string;
+  /** 利用者が「参考にしてほしい」と指定したもの。 */
+  pinned: boolean;
+}
+
+export interface RepoMapSummaryView {
+  materials: RepoMapMaterialView[];
+  /** 機械で読んだデータの形（AI は使っていない）。 */
+  schema: { path: string; url: string; names: string[] }[];
+  /** 読まなかった材料と理由（読めない形式・失敗など）。 */
+  skipped: { ref: string; reason: string }[];
+  /** 文書の要約の文字数の合計。薄いリポジトリの判定に使う。 */
+  docChars: number;
+}
+
+export interface RepoMapAiUsageView {
+  calls: number;
+  inputTokens: number;
+  outputTokens: number;
+}
+
+/** `POST /v1/repo-map-drafts/:id/summarize` が受け取るもの。 */
+export const summarizeRepoMapDraftSchema = v.strictObject({
+  consentVersion: v.optional(v.pipe(v.number(), v.integer())),
+});
+export type SummarizeRepoMapDraftInput = v.InferOutput<typeof summarizeRepoMapDraftSchema>;
+
 export interface RepoMapDraftView {
   id: string;
   repo: RepoMapRepoInfo;
@@ -136,6 +171,11 @@ export interface RepoMapDraftView {
   listing: string;
   /** 参考にしてほしい Issue のタイトル。 */
   issues: { number: number; title: string }[];
+  /** 要約の段が終わっていれば、その結果。 */
+  summary: RepoMapSummaryView | null;
+  ai: RepoMapAiUsageView;
+  /** 失敗して止まっているとき、どの段から続けるか。 */
+  failure: { stage: "fetch" | "summarize" | "candidates"; code: string } | null;
   createdAt: string;
   expiresAt: string;
 }

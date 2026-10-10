@@ -6,6 +6,30 @@
  */
 
 export type DraftStatus = "fetched" | "summarized" | "candidates" | "failed";
+export type DraftStage = "fetch" | "summarize" | "candidates";
+
+/** AI の呼び出し 1 回の記録。本文は持たない。 */
+export interface AiCallRecord {
+  stage: "summarize" | "select" | "candidates" | "tree" | "objectives";
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  ok: boolean;
+}
+
+/** 取得したファイル・Issue の要約の保管（`repo_file_summaries`）。 */
+export interface StoredSummary {
+  repoOwner: string;
+  repoName: string;
+  /** ファイルの blob SHA。Issue は `issue:<番号>:<更新日時>`。 */
+  blobSha: string;
+  role: "glossary" | "doc" | "code" | "issue";
+  bytesLimit: number;
+  summary: string;
+  model: string;
+  promptVersion: number;
+  createdAt: string;
+}
 
 /** 保存する下書き 1 件。段ごとの材料は `stageState`（JSON 文字列）。 */
 export interface StoredRepoMapDraft {
@@ -21,6 +45,13 @@ export interface StoredRepoMapDraft {
   status: DraftStatus;
   stageState: string;
   stageStateVersion: number;
+  /** `failed` のときに、どの段から続けるか。 */
+  failedStage: DraftStage | null;
+  failureCode: string | null;
+  /** この下書きで使った AI の呼び出しの合計。段ごとの内訳は `repo_map_ai_calls`。 */
+  aiCalls: number;
+  inputTokens: number;
+  outputTokens: number;
   createdAt: string;
   updatedAt: string;
   expiresAt: string;
@@ -60,6 +91,44 @@ export interface RepoMapDraftRepository {
 
   /** 持ち主の下書きを、期限が切れていないものだけ新しい順に。 */
   list(userId: string, nowIso: string): Promise<StoredRepoMapDraft[]>;
+
+  /** 段の結果を書く。持ち主の下書きでなければ false。 */
+  update(
+    userId: string,
+    id: string,
+    patch: {
+      status: DraftStatus;
+      stageState: string;
+      stageStateVersion: number;
+      failedStage: DraftStage | null;
+      failureCode: string | null;
+      updatedAt: string;
+    },
+  ): Promise<boolean>;
+
+  /**
+   * AI の呼び出しを記録する（呼び出しごとの行・下書きの合計・月のトークン）。
+   * 確定・期限切れで下書きが消えても、呼び出しの行は残る。
+   */
+  recordAiCalls(params: {
+    userId: string;
+    draftId: string;
+    monthKey: string;
+    dayKey: string;
+    updatedAt: string;
+    calls: readonly AiCallRecord[];
+  }): Promise<void>;
+
+  /** 同じ (リポジトリ, プロンプトの版) で、`blobShas` に当たる要約。 */
+  getSummaries(params: {
+    repoOwner: string;
+    repoName: string;
+    promptVersion: number;
+    blobShas: readonly string[];
+  }): Promise<StoredSummary[]>;
+
+  /** 要約を保管する。同じキーがあれば置き換える。 */
+  putSummary(summary: StoredSummary): Promise<void>;
 
   /** 持ち主の下書きを消す。無ければ false。 */
   delete(userId: string, id: string): Promise<boolean>;

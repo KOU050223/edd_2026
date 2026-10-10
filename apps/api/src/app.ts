@@ -427,6 +427,15 @@ app.route(
     consents: new D1MapGenerationConsentRepository(env.DB),
     plans: new D1UserPlanRepository(env.DB),
     identity: new D1IdentityRepository(env.DB),
+    // 要約の段が使う AI。要約・選択は安いモデルを先に（REPO_MAP_SUMMARY_MODELS）。空なら確認問題と同じ。
+    ai: {
+      apiKey: env.GEMINI_API_KEY,
+      fetch: (input, init) => globalThis.fetch(input, init),
+      models: (() => {
+        const summary = parseModelList(env.REPO_MAP_SUMMARY_MODELS);
+        return summary.length > 0 ? summary : parseModelList(env.CHECK_MODELS);
+      })(),
+    },
     newId: () => `r${randomKey()}`,
     now: () => new Date(),
   })),
