@@ -7,6 +7,7 @@ import {
   createInMemoryRepositoryStore,
   InMemoryAuditLogRepository,
   InMemoryIdentityRepository,
+  InMemoryLearningMapRepository,
   InMemoryImportSessionRepository,
   InMemoryLearningEvidenceRepository,
   type InMemoryRepositoryStore,
@@ -40,6 +41,7 @@ beforeEach(() => {
     "/v1",
     createImportSessionsRoute(() => ({
       identity,
+      maps: new InMemoryLearningMapRepository(store),
       sessions,
       evidence,
       audit: new InMemoryAuditLogRepository(store),
@@ -71,6 +73,85 @@ function createBody(overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
 }
+
+async function mapBody(id: string, conceptId = "go.defer", observationKey = "a".repeat(64)) {
+  const response = await get("/v1/history-targets/language%3Ago", "token-a");
+  const target = (await response.json()) as { concepts: { id: string; fingerprint: string }[] };
+  return {
+    ...createBody(),
+    id,
+    importedBy: "file",
+    providers: ["claude-code"],
+    mapTarget: {
+      target: "language:go",
+      fingerprints: Object.fromEntries(
+        target.concepts.map((concept) => [concept.id, concept.fingerprint]),
+      ),
+    },
+    evidence: [
+      evidenceItem({
+        id: `${id}:claude-code:${observationKey}:${conceptId}`,
+        conceptIds: [conceptId],
+        source: { provider: "claude-code", importedBy: "file" },
+        importSessionId: id,
+        observationKey,
+      }),
+    ],
+  };
+}
+
+test("別の反映への同じ質問・Concept の再取り込みを二重計上しない", async () => {
+  const first = await post("/v1/import-sessions", "token-a", await mapBody("map-import-1"));
+  const second = await post("/v1/import-sessions", "token-a", await mapBody("map-import-2"));
+
+  expect(first.status).toBe(200);
+  expect(((await second.json()) as CreateImportSessionResponse).evidenceCount).toBe(0);
+  expect(await evidence.listByUser("user-a")).toHaveLength(1);
+  await del("/v1/import-sessions/map-import-2", "token-a");
+  expect(await evidence.listByUser("user-a")).toHaveLength(1);
+});
+
+test("同じ質問を別 Concept に反映でき、Undo は指定した反映の追加分だけを消す", async () => {
+  await post("/v1/import-sessions", "token-a", await mapBody("map-import-1"));
+  const targetResponse = await get("/v1/history-targets/language%3Ago", "token-a");
+  const target = (await targetResponse.json()) as { concepts: { id: string }[] };
+  const another = target.concepts.find((concept) => concept.id !== "go.defer")!.id;
+  const second = await post(
+    "/v1/import-sessions",
+    "token-a",
+    await mapBody("map-import-2", another),
+  );
+
+  expect(second.status).toBe(200);
+  expect(await evidence.listByUser("user-a")).toHaveLength(2);
+  await del("/v1/import-sessions/map-import-2", "token-a");
+  expect((await evidence.listByUser("user-a"))[0]!.conceptIds).toEqual(["go.defer"]);
+  await del("/v1/import-sessions/map-import-1", "token-a");
+  const reapplied = await post("/v1/import-sessions", "token-a", await mapBody("map-import-3"));
+  expect(((await reapplied.json()) as CreateImportSessionResponse).evidenceCount).toBe(1);
+});
+
+test("古いプレビューや対象外 Concept の適用を保存前に拒否する", async () => {
+  const body = await mapBody("map-import-1");
+  body.mapTarget.fingerprints["go.defer"] = "0".repeat(64);
+
+  const stale = await post("/v1/import-sessions", "token-a", body);
+  const foreign = await post(
+    "/v1/import-sessions",
+    "token-a",
+    await mapBody("map-import-2", "typescript.error"),
+  );
+
+  expect(stale.status).toBe(409);
+  expect(foreign.status).toBe(409);
+  expect(await evidence.listByUser("user-a")).toEqual([]);
+});
+
+test("他人のマップ、未知の言語、未認証の定義取得を拒否する", async () => {
+  expect((await get("/v1/history-targets/m12345678", "token-b")).status).toBe(404);
+  expect((await get("/v1/history-targets/language%3Aunknown", "token-a")).status).toBe(404);
+  expect((await get("/v1/history-targets/language%3Ago", "invalid")).status).toBe(401);
+});
 
 function post(path: string, token: string, body: unknown) {
   return app.request(

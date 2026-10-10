@@ -1159,11 +1159,12 @@ interface EvidenceRow {
   concept_ids: string;
   observed_at: string | null;
   confidence: number;
+  observation_key: string | null;
   external_ref_hash: string | null;
 }
 
 const EVIDENCE_COLUMNS = `id, import_session_id, provider, imported_by, kind, concept_ids,
-  observed_at, confidence, external_ref_hash`;
+  observed_at, confidence, external_ref_hash, observation_key`;
 
 /**
  * learning_evidence の行を `LearningEvidence` へ戻す。
@@ -1195,6 +1196,7 @@ function toLearningEvidence(row: EvidenceRow): LearningEvidence {
     ...(row.observed_at === null ? {} : { observedAt: row.observed_at }),
     confidence: row.confidence,
     importSessionId: row.import_session_id,
+    ...(row.observation_key == null ? {} : { observationKey: row.observation_key }),
     ...(row.external_ref_hash === null ? {} : { externalRefHash: row.external_ref_hash }),
   };
 }
@@ -1352,6 +1354,7 @@ export class D1ImportSessionRepository implements ImportSessionRepository {
     evidence: readonly LearningEvidence[],
   ): Promise<{ alreadyExisted: boolean }> {
     const nowMs = Date.now();
+    const creationToken = crypto.randomUUID();
 
     // Session と Evidence を同じバッチに入れて原子的に作る。
     // 先に存在を確認してから分岐すると、同じ ID の再送と並行したときに
@@ -1362,9 +1365,9 @@ export class D1ImportSessionRepository implements ImportSessionRepository {
           `INSERT INTO import_sessions (
              id, user_id, status, imported_by, providers, conversation_count,
              ignored_count, unmapped_candidates, evidence_count, concept_count,
-             created_at, updated_at
+             created_at, updated_at, creation_token
            )
-           SELECT ?, ?, 'applied', ?, ?, ?, ?, ?, ?, ?, ?, ?
+           SELECT ?, ?, 'applied', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
            WHERE NOT EXISTS (
              SELECT 1 FROM account_deletions
              WHERE user_id = ? AND started_at_ms > ?
@@ -1383,6 +1386,7 @@ export class D1ImportSessionRepository implements ImportSessionRepository {
           session.conceptCount,
           session.createdAt,
           session.updatedAt,
+          creationToken,
           userId,
           nowMs - ACCOUNT_DELETION_TOMBSTONE_TTL_MS,
         ),
@@ -1391,17 +1395,17 @@ export class D1ImportSessionRepository implements ImportSessionRepository {
           .prepare(
             // Undo 済みの Session が同じ ID で再送されたとき、Evidence だけが
             // 復活して「undone なのに形跡が残る」状態を作らないよう、
-            // applied な Session が存在するときだけ書く。
+            // この呼び出しが作った applied な Session にだけ書く。
             `INSERT INTO learning_evidence (
                id, user_id, import_session_id, provider, imported_by, kind,
-               concept_ids, observed_at, confidence, external_ref_hash, received_at_ms
+               concept_ids, observed_at, confidence, external_ref_hash, received_at_ms, observation_key
              )
-             SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+             SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
              WHERE EXISTS (
                SELECT 1 FROM import_sessions
-               WHERE user_id = ? AND id = ? AND status = 'applied'
+               WHERE user_id = ? AND id = ? AND status = 'applied' AND creation_token = ?
              )
-             ON CONFLICT (user_id, id) DO NOTHING`,
+             ON CONFLICT DO NOTHING`,
           )
           .bind(
             item.id,
@@ -1415,11 +1419,23 @@ export class D1ImportSessionRepository implements ImportSessionRepository {
             item.confidence,
             item.externalRefHash ?? null,
             nowMs,
+            item.observationKey ?? null,
             userId,
             session.id,
+            creationToken,
           ),
       ),
     ];
+    statements.push(
+      this.db
+        .prepare(
+          `UPDATE import_sessions SET
+      evidence_count = (SELECT COUNT(*) FROM learning_evidence WHERE user_id = ? AND import_session_id = ?),
+      concept_count = (SELECT COUNT(DISTINCT j.value) FROM learning_evidence e, json_each(e.concept_ids) j WHERE e.user_id = ? AND e.import_session_id = ?)
+      WHERE user_id = ? AND id = ? AND status = 'applied' AND creation_token = ?`,
+        )
+        .bind(userId, session.id, userId, session.id, userId, session.id, creationToken),
+    );
     const results = await this.db.batch(statements);
 
     const sessionChanges = results[0]?.meta?.changes;

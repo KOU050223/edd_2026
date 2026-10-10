@@ -569,9 +569,22 @@ export class InMemoryImportSessionRepository implements ImportSessionRepository 
       this.store.evidenceByUser.set(userId, items);
     }
     for (const item of evidence) {
+      if (
+        item.observationKey !== undefined &&
+        [...items.values()].some(
+          (existing) =>
+            existing.observationKey === item.observationKey &&
+            existing.source.provider === item.source.provider &&
+            existing.conceptIds.some((id) => item.conceptIds.includes(id)),
+        )
+      )
+        continue;
       // Evidence も (user_id, id) で冪等。既存を上書きしない。
       if (!items.has(item.id)) items.set(item.id, item);
     }
+    const added = [...items.values()].filter((item) => item.importSessionId === session.id);
+    view.evidenceCount = added.length;
+    view.conceptCount = new Set(added.flatMap((item) => item.conceptIds)).size;
     return Promise.resolve({ alreadyExisted: false });
   }
 

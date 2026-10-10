@@ -1,3 +1,5 @@
+import { buildHistoryAnalysisPrompt } from "../maps/history-prompt.js";
+import { AI_USAGE_LIMITS, estimateInputTokens } from "../contract/ai-usage.js";
 /**
  * 外部 AI 履歴からの学習引き継ぎ（Issue #157）の API。
  *
@@ -13,6 +15,8 @@
  * 通した Evidence だけが HTTP を越える。
  */
 
+import { loadHistoryTarget } from "../maps/history-target.js";
+import type { LearningMapRepository } from "../repository/types.js";
 import { Hono } from "hono";
 import { vValidator } from "@hono/valibot-validator";
 import * as v from "valibot";
@@ -36,6 +40,7 @@ import {
 } from "../contract/history-import.js";
 
 export interface ImportDeps {
+  maps: LearningMapRepository;
   identity: IdentityRepository;
   sessions: ImportSessionRepository;
   evidence: LearningEvidenceRepository;
@@ -67,10 +72,64 @@ const deleteEvidenceQuerySchema = v.object({
 export function createImportSessionsRoute(resolve: ImportDepsResolver) {
   const app = new Hono<{ Bindings: CloudflareBindings; Variables: AuthVariables }>();
 
+  app.get("/history-targets/:target", async (c) => {
+    const target = await loadHistoryTarget(
+      resolve(c.env).maps,
+      c.get("user").userId,
+      c.req.param("target"),
+    );
+    if (target === null) return c.json({ error: "map not found" }, 404);
+    return c.json(
+      {
+        ...target,
+        inputBytesLimit: AI_USAGE_LIMITS.inputTokensPerRequest,
+        promptOverheadBytes: estimateInputTokens(buildHistoryAnalysisPrompt([], [], [])),
+      },
+      200,
+      { "cache-control": "no-store" },
+    );
+  });
+
   app.post("/import-sessions", vValidator("json", createImportSessionSchema), async (c) => {
     const body = c.req.valid("json");
     const userId = c.get("user").userId;
     const deps = resolve(c.env);
+
+    // A committed retry must succeed even if the map has since changed or disappeared.
+    // It returns the original session and never writes new evidence.
+    const previous = await deps.sessions.getById(userId, body.id);
+    if (previous !== null) return c.json({ ...previous.session, alreadyExisted: true });
+
+    if (
+      body.evidence.some((item) => item.observationKey !== undefined) &&
+      body.mapTarget === undefined
+    ) {
+      return c.json({ error: "stable observations require a map target" }, 400);
+    }
+    if (body.mapTarget !== undefined) {
+      const target = await loadHistoryTarget(deps.maps, userId, body.mapTarget.target);
+      if (target === null) return c.json({ error: "map not found" }, 404);
+      const definitions = new Map(
+        target.concepts.map((concept) => [concept.id, concept.fingerprint]),
+      );
+      for (const item of body.evidence) {
+        if (
+          item.conceptIds.length !== 1 ||
+          item.observationKey === undefined ||
+          item.source.provider !== "claude-code" ||
+          item.source.importedBy !== "file"
+        ) {
+          return c.json(
+            { error: "map history requires one concept and a stable Claude Code observation key" },
+            400,
+          );
+        }
+        const id = item.conceptIds[0]!;
+        if (!definitions.has(id) || definitions.get(id) !== body.mapTarget.fingerprints[id]) {
+          return c.json({ error: "map definition changed; analyze again" }, 409);
+        }
+      }
+    }
 
     // Evidence の importSessionId は Normalizer が埋める。Session の ID と
     // 食い違う Evidence を受けると Undo の単位が壊れるため、境界で検査する。

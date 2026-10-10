@@ -359,7 +359,7 @@ test("セッションが無い /api は API に中継せず理由を区別する
   await expect(expired.json()).resolves.toEqual({ error: "session_expired" });
 });
 
-test("/session はログイン状態だけを返し、未ログインでも 200 で答える", async () => {
+test("/session は履歴の分離に使う本人の ID とログイン状態を返す", async () => {
   const sessions = new MemoryKv();
   const app = createWebApp({
     fetch: async () => {
@@ -370,7 +370,7 @@ test("/session はログイン状態だけを返し、未ログインでも 200 
 
   const noCookie = await app.request("https://web.example.test/session", {}, env);
   expect(noCookie.status).toBe(200);
-  await expect(noCookie.json()).resolves.toEqual({ loggedIn: false });
+  await expect(noCookie.json()).resolves.toEqual({ loggedIn: false, userId: null });
   expect(noCookie.headers.get("cache-control")).toBe("no-store");
 
   const invalid = await app.request(
@@ -378,7 +378,7 @@ test("/session はログイン状態だけを返し、未ログインでも 200 
     { headers: { cookie: "session=unknown-token" } },
     env,
   );
-  await expect(invalid.json()).resolves.toEqual({ loggedIn: false });
+  await expect(invalid.json()).resolves.toEqual({ loggedIn: false, userId: null });
 
   const token = await createSession(kvOf(sessions), { refreshToken: "rt-1", sub: "auth0|a" });
   const loggedIn = await app.request(
@@ -386,7 +386,7 @@ test("/session はログイン状態だけを返し、未ログインでも 200 
     { headers: { cookie: `session=${token}` } },
     env,
   );
-  await expect(loggedIn.json()).resolves.toEqual({ loggedIn: true });
+  await expect(loggedIn.json()).resolves.toEqual({ loggedIn: true, userId: "auth0|a" });
 });
 
 test("伝播待ちの 401 では Cookie を消さない（再試行が資格情報を失わない）", async () => {

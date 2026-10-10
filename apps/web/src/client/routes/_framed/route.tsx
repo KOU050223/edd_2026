@@ -19,6 +19,7 @@ function Header() {
         <Link to="/explore">みんなのマップ</Link>
         <Link to="/activity">推移</Link>
         <Link to="/history">履歴</Link>
+        {loggedIn && <Link to="/local-history">Claude Code 履歴</Link>}
         <Link to="/settings">設定</Link>
         {loggedIn ? (
           <button

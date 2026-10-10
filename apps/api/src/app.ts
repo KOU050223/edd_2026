@@ -288,6 +288,7 @@ app.route(
   "/v1",
   createImportSessionsRoute((env) => ({
     identity: new D1IdentityRepository(env.DB),
+    maps: new D1LearningMapRepository(env.DB),
     sessions: new D1ImportSessionRepository(env.DB),
     evidence: new D1LearningEvidenceRepository(env.DB),
     audit: new D1AuditLogRepository(env.DB),

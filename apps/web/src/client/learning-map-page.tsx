@@ -1,3 +1,4 @@
+import { HistoryMapPanel } from "./history-map-panel.js";
 /**
  * 学習マップ1件の画面の中身（#242・#244・#302）。`/maps/<ID>`（手元のマップ・他人の共有マップ）と
  * `/shared/<ID>`（持ち主が見る自分の共有の版）が使う。
@@ -426,6 +427,7 @@ export function LearningMapPage({
           </Link>
         )}
       </p>
+      {own && <HistoryMapPanel key={mapId} target={mapId} />}
       {map.description && <p className="muted">{map.description}</p>}
       {own ? (
         <>
