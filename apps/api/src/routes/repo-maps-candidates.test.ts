@@ -35,7 +35,7 @@ const TREE: TreeEntry[] = [
   blob("app/models/order.rb", 700),
 ];
 
-const BODIES: Record<string, string> = {
+const BASE_BODIES: Record<string, string> = {
   "sha:README.md": "# 注文システム\n注文と顧客を扱う。",
   "sha:docs/orders.md": "注文は paid になるまで下書きである。",
   "sha:db/schema.rb":
@@ -43,6 +43,8 @@ const BODIES: Record<string, string> = {
   "sha:app/models/order.rb": "class Order\nend\n",
 };
 
+/** テストごとに BASE_BODIES へ戻す（テストの中で書き換える）。 */
+let BODIES: Record<string, string> = { ...BASE_BODIES };
 let store: InMemoryRepositoryStore;
 let drafts: InMemoryRepoMapDraftRepository;
 let consents: InMemoryMapGenerationConsentRepository;
@@ -65,7 +67,13 @@ function geminiOk(text: string): Response {
   );
 }
 
+let aiOverride: ((prompt: string) => Response) | null = null;
+
 function ai(prompt: string): Response {
+  return aiOverride !== null ? aiOverride(prompt) : aiBase(prompt);
+}
+
+function aiBase(prompt: string): Response {
   if (prompt.includes("『ドメインの用語（業務の概念）』の候補")) {
     return geminiOk(JSON.stringify(candidatesResponse(prompt)));
   }
@@ -150,6 +158,8 @@ beforeEach(async () => {
     await consents.put(u, { version: MAP_GENERATION_CONSENT_VERSION, grantedAt: "t" } as never);
   }
   prompts = [];
+  BODIES = { ...BASE_BODIES };
+  aiOverride = null;
   tree = TREE;
   seq = 0;
   candidatesResponse = () => [
@@ -200,9 +210,11 @@ describe("POST /v1/repo-map-drafts/:id/candidates", () => {
       fromSchema: true,
       schemaOnly: false,
     });
+    // 根拠は、AI が返した ID に、一致したデータの形のファイル（S1）を機械で足したもの。
     expect(order!.evidence).toEqual([
       expect.objectContaining({ id: "E1", kind: "doc", ref: "README.md" }),
       expect.objectContaining({ id: "E3", kind: "code", ref: "app/models/order.rb" }),
+      expect.objectContaining({ id: "S1", kind: "schema", ref: "db/schema.rb" }),
     ]);
     expect(order!.evidence[0]!.url).toBe(
       `https://github.com/Owner/Repo/blob/${"c".repeat(40)}/README.md`,
@@ -311,6 +323,87 @@ describe("POST /v1/repo-map-drafts/:id/candidates", () => {
     expect(prompts.filter((p) => p.includes("文書が少ない"))).toHaveLength(0);
   });
 
+  it("データの形の名前は、文書が薄いときだけ AI へ渡す", async () => {
+    // 十分な文書: 名前（audit_logs）は AI へ渡さない。つき合わせと根拠は機械だけで行う。
+    const full = await summarizedDraft();
+    prompts.length = 0;
+    await candidates(full.id);
+    const sent = prompts.filter((p) => p.includes("候補を最大"));
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).not.toContain("audit_logs");
+    expect(sent[0]).not.toContain("データの形に現れる名前");
+
+    // 薄い文書: 名前を渡す。
+    tree = [blob("README.md", 120), ...TREE.slice(2)];
+    const thin = await summarizedDraft();
+    prompts.length = 0;
+    await candidates(thin.id);
+    const thinSent = prompts.filter((p) => p.includes("候補を最大"));
+    expect(thinSent[0]).toContain("audit_logs");
+    expect(thinSent[0]).toContain("データの形に現れる名前");
+  });
+
+  it("入力の上限（バイト）に収まる。材料が多く、データの形の名前が多い薄い文書でも", async () => {
+    // 長い要約を返す。薄い文書（README だけ小さい）に、データの形のファイルを 4 つ。
+    const longSummary = "あ".repeat(300);
+    aiOverride = (prompt) =>
+      prompt.includes("要約してください")
+        ? geminiOk(JSON.stringify({ summary: longSummary }))
+        : aiBase(prompt);
+    const names = Array.from({ length: 30 }, (_, i) =>
+      [
+        `create_table "very_long_table_name_for_order_${String(i)}_xxxxxxxxxxxxxxxxxxxx" do |t|`,
+        "end",
+      ].join("\n"),
+    ).join("\n");
+    tree = [
+      blob("README.md", 100),
+      blob("db/schema.rb", 900),
+      blob("a/schema.rb", 900),
+      blob("b/schema.rb", 900),
+      blob("c/schema.rb", 900),
+      ...Array.from({ length: 6 }, (_, i) => blob(`app/models/m${String(i)}.rb`, 700)),
+    ];
+    for (const sha of [
+      "sha:db/schema.rb",
+      "sha:a/schema.rb",
+      "sha:b/schema.rb",
+      "sha:c/schema.rb",
+    ]) {
+      BODIES[sha] = names;
+    }
+    for (let i = 0; i < 6; i += 1) {
+      BODIES[`sha:app/models/m${String(i)}.rb`] = [`class M${String(i)}`, "end"].join("\n");
+    }
+    const draft = await summarizedDraft();
+    prompts.length = 0;
+    const res = await candidates(draft.id);
+    expect(res.status).toBe(200);
+    const sent = prompts.filter((p) => p.includes("候補を最大"));
+    expect(sent).toHaveLength(1);
+    expect(new TextEncoder().encode(sent[0]).length).toBeLessThanOrEqual(6_000);
+  });
+
+  it("作り直しの回数の断りは、失敗にせず、前の状態を残す。候補の前の作り直しは回数を使わない", async () => {
+    const created = await summarizedDraft();
+    expect((await rebuild(created.id)).status).toBe(409);
+    expect(
+      (await drafts.usage({ userId: "user-a", monthKey: "2026-10", dayKey: "2026-10-11" }))
+        .dailyRebuilds,
+    ).toBe(0);
+
+    await candidates(created.id);
+    for (let i = 0; i < 5; i += 1) await rebuild(created.id);
+    expect((await rebuild(created.id)).status).toBe(429);
+    const view = (await (
+      await call("GET", `/v1/repo-map-drafts/${created.id}`)
+    ).json()) as RepoMapDraftView;
+    expect(view.status).toBe("candidates");
+    expect(view.failure).toBeNull();
+    // 占有は手放している。続けて普通に読める・作り直せない（今日の分は使い切り）。
+    expect((await candidates(created.id)).status).toBe(200);
+  });
+
   it("候補の段は、設定した候補用のモデルで呼ぶ", async () => {
     const draft = await summarizedDraft();
     await candidates(draft.id);
@@ -344,7 +437,7 @@ describe("POST /v1/repo-map-drafts/:id/rebuild", () => {
     const sent = prompts.filter((p) => p.includes("候補を最大"));
     expect(sent).toHaveLength(1);
     expect(sent[0]).not.toContain("[E2]");
-    expect(body.candidates!.items[0]!.evidence.map((e) => e.id)).toEqual(["E1"]);
+    expect(body.candidates!.items[0]!.evidence.map((e) => e.id)).toEqual(["E1", "S1"]);
     // 要約の呼び出しは増えない。
     expect(prompts.filter((p) => p.includes("要約してください"))).toHaveLength(0);
   });
@@ -387,6 +480,7 @@ describe("POST /v1/repo-map-drafts/:id/rebuild", () => {
 
   it("材料を全部外すことはできない", async () => {
     const draft = await summarizedDraft();
+    await candidates(draft.id);
     const all = draft.summary!.materials.map((m) => m.id);
     const res = await rebuild(draft.id, { excludeIds: [...all, "S1"] });
     expect(res.status).toBe(400);

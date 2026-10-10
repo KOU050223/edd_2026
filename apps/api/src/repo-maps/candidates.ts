@@ -11,14 +11,16 @@
 
 import { utcDayKey, utcMonthKey } from "../contract/ai-usage.js";
 import { REPO_MAP_LIMITS, type RepoMapDraftView } from "../contract/repo-maps.js";
+import { AI_USAGE_LIMITS } from "../contract/ai-usage.js";
 import { AiSession, AiStageFailure, MAX_AI_CALLS_PER_DRAFT } from "./ai.js";
 import {
   buildCandidatesPrompt,
+  byteLength,
   CANDIDATE_MATERIAL_BYTES,
   CANDIDATE_SCHEMA_BYTES,
   headBytes,
 } from "./prompts.js";
-import type { DraftStage } from "./repository.js";
+import type { DraftStage, DraftStatus } from "./repository.js";
 import {
   draftView,
   parseState,
@@ -119,6 +121,10 @@ export async function buildCandidates(
   }
   // 済んでいる段は、作り直しでなければ、何も送らずに結果を返す。
   if (draft.status === "candidates" && !input.rebuild) return draftView(draft);
+  // 作り直しは、候補を出したあとだけ。最初の 1 回で作り直しの回数を使わせない。
+  if (input.rebuild && draft.status === "summarized") {
+    throw new RepoMapRefusal("conflict", "先に候補を作ってください。", { status: draft.status });
+  }
   const resumable =
     draft.status === "summarized" ||
     draft.status === "candidates" ||
@@ -195,11 +201,7 @@ export async function buildCandidates(
   const monthKey = utcMonthKey(now);
   const dayKey = utcDayKey(now);
   // 占有を持ったあとの失敗は、占有を手放して状態を残す（持ったままにしない）。
-  const release = (
-    status: "summarized" | "candidates" | "failed",
-    next: FetchedState,
-    extra = {},
-  ) =>
+  const release = (status: DraftStatus, next: FetchedState, extra = {}) =>
     deps.drafts.update(userId, draftId, {
       status,
       stageState: JSON.stringify(next),
@@ -256,12 +258,26 @@ export async function buildCandidates(
     const thin = docBytes < THIN_DOC_BYTES;
 
     const materialLines = materials.map((m) => `[${m.id}] ${m.kind} ${m.ref}: ${m.text}`);
-    const schemaLines = schema.map((f) => `[${f.id}] ${f.path}: ${f.names.join(", ")}`);
-    const prompt = buildCandidatesPrompt({
-      materials: headBytes(materialLines.join("\n"), CANDIDATE_MATERIAL_BYTES),
-      schema: headBytes(schemaLines.join("\n"), CANDIDATE_SCHEMA_BYTES),
+    // データの形の名前は、文書が薄いときだけ AI へ渡す（docs/data-privacy.md）。薄くなければ、
+    // 名前のつき合わせと根拠は機械だけで行う。
+    const schemaLines = thin ? schema.map((f) => `[${f.id}] ${f.path}: ${f.names.join(", ")}`) : [];
+    const schemaText = headBytes(schemaLines.join("\n"), CANDIDATE_SCHEMA_BYTES);
+    // 入力の上限（バイト）に収める。固定の指示・見出し・データの形の分を先に測り、残りを材料に使う
+    // （材料だけを切ると、指示と合わせて上限を超えることがある）。
+    const skeleton = buildCandidatesPrompt({
+      materials: "",
+      schema: schemaText,
       thin,
       max: MAX_CANDIDATES,
+      materialsMaxBytes: 0,
+    });
+    const room = AI_USAGE_LIMITS.inputTokensPerRequest - byteLength(skeleton);
+    const prompt = buildCandidatesPrompt({
+      materials: materialLines.join("\n"),
+      schema: schemaText,
+      thin,
+      max: MAX_CANDIDATES,
+      materialsMaxBytes: Math.max(0, Math.min(CANDIDATE_MATERIAL_BYTES, room)),
     });
     const value = await ai.json("candidates", "candidates", prompt, {
       maxOutputTokens: CANDIDATES_MAX_OUTPUT_TOKENS,
@@ -281,9 +297,12 @@ export async function buildCandidates(
       if (seen.has(key)) continue;
       seen.add(key);
       const names = [normalizeName(c.original), normalizeName(c.name)];
-      const fromSchema = schemaNames.some((s) =>
+      const matched = schemaNames.filter((s) =>
         names.some((n) => sameName(normalizeName(s.name), n)),
       );
+      const fromSchema = matched.length > 0;
+      // 一致したデータの形のファイルを根拠に足す（機械で。AI が答えたかどうかに依らない）。
+      for (const m of matched) if (!evidence.includes(m.id)) evidence.push(m.id);
       items.push({
         id: `C${String(items.length + 1)}`,
         name: c.name,
@@ -332,9 +351,18 @@ export async function buildCandidates(
     // 作り直しの失敗では、前の候補が今も有効なので、その状態へ戻す（失敗の段は書かない）。
     const stage: DraftStage = "candidates";
     const settle =
-      draft.status === "candidates"
-        ? release("candidates", state)
-        : release("failed", state, { failedStage: stage, failureCode: failureCodeOf(error) });
+      error instanceof RepoMapRefusal
+        ? // 回数の上限などの断り。下書きの状態は何も変わっていないので、前の状態へ戻す。
+          release(
+            draft.status,
+            state,
+            draft.status === "failed"
+              ? { failedStage: draft.failedStage, failureCode: draft.failureCode }
+              : {},
+          )
+        : draft.status === "candidates"
+          ? release("candidates", state)
+          : release("failed", state, { failedStage: stage, failureCode: failureCodeOf(error) });
     await settle.catch((updateError: unknown) => {
       console.error("failed to settle repo map draft after a failure", { draftId, updateError });
     });

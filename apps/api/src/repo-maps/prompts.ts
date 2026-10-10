@@ -80,9 +80,12 @@ export const CANDIDATE_SCHEMA_BYTES = 1_200;
  */
 export function buildCandidatesPrompt(params: {
   materials: string;
+  /** データの形の名前。**文書が薄いときだけ**渡す（それ以外は AI へ渡さない。docs/data-privacy.md）。 */
   schema: string;
   thin: boolean;
   max: number;
+  /** 材料に使えるバイト数。固定の指示と、データの形の分を引いた残りを呼び出し側が決める。 */
+  materialsMaxBytes?: number;
 }): string {
   return [
     `あなたはソフトウェアのドメイン知識を整理する人です。${GUARD}`,
@@ -94,7 +97,7 @@ export function buildCandidatesPrompt(params: {
           "文書が少ないので、データの形に現れる名前とコードの要約を主の材料にして、業務の概念になっているものを選ぶ。",
         ]
       : []),
-    fence("要約", params.materials, CANDIDATE_MATERIAL_BYTES),
+    fence("要約", params.materials, params.materialsMaxBytes ?? CANDIDATE_MATERIAL_BYTES),
     ...(params.schema === ""
       ? []
       : [fence("データの形に現れる名前（機械で抽出）", params.schema, CANDIDATE_SCHEMA_BYTES)]),
