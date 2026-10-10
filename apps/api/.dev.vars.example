@@ -13,3 +13,7 @@
 # Managed AI 用。本番は `wrangler secret put GEMINI_API_KEY` で設定する。
 GEMINI_API_KEY=
 GEMINI_MODEL=gemini-3.6-flash
+# リポジトリからのマップ（#249）用。公開リポジトリだけを読む fine-grained token
+# （Repository access は Public repositories、権限なし）。本番は `wrangler secret put GITHUB_TOKEN`。
+# 無い・失効していると POST /v1/repo-maps:inspect などが 503 を返す。
+GITHUB_TOKEN=
