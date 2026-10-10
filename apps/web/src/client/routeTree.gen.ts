@@ -15,6 +15,7 @@ import { Route as FramedIndexRouteImport } from './routes/_framed/index'
 import { Route as FramedActivityRouteImport } from './routes/_framed/activity'
 import { Route as FramedSettingsRouteRouteImport } from './routes/_framed/settings/route'
 import { Route as FramedCheckConceptIdRouteImport } from './routes/_framed/check.$conceptId'
+import { Route as FramedExploreIndexRouteImport } from './routes/_framed/explore.index'
 import { Route as FramedHistoryIndexRouteImport } from './routes/_framed/history.index'
 import { Route as FramedHistoryConversationIdRouteImport } from './routes/_framed/history.$conversationId'
 import { Route as FramedMapLanguageRouteImport } from './routes/_framed/map.$language'
@@ -60,6 +61,11 @@ const FramedSettingsRouteRoute = FramedSettingsRouteRouteImport.update({
 const FramedCheckConceptIdRoute = FramedCheckConceptIdRouteImport.update({
   id: '/check/$conceptId',
   path: '/check/$conceptId',
+  getParentRoute: () => FramedRouteRoute,
+} as any)
+const FramedExploreIndexRoute = FramedExploreIndexRouteImport.update({
+  id: '/explore/',
+  path: '/explore/',
   getParentRoute: () => FramedRouteRoute,
 } as any)
 const FramedHistoryIndexRoute = FramedHistoryIndexRouteImport.update({
@@ -164,6 +170,7 @@ export interface FileRoutesByFullPath {
   '/settings/data': typeof FramedSettingsDataRoute
   '/settings/usage': typeof FramedSettingsUsageRoute
   '/shared/$mapId': typeof FramedSharedMapIdRoute
+  '/explore/': typeof FramedExploreIndexRoute
   '/history/': typeof FramedHistoryIndexRoute
   '/maps/': typeof FramedMapsIndexRoute
   '/settings/': typeof FramedSettingsIndexRoute
@@ -187,6 +194,7 @@ export interface FileRoutesByTo {
   '/settings/data': typeof FramedSettingsDataRoute
   '/settings/usage': typeof FramedSettingsUsageRoute
   '/shared/$mapId': typeof FramedSharedMapIdRoute
+  '/explore': typeof FramedExploreIndexRoute
   '/history': typeof FramedHistoryIndexRoute
   '/maps': typeof FramedMapsIndexRoute
   '/settings': typeof FramedSettingsIndexRoute
@@ -213,6 +221,7 @@ export interface FileRoutesById {
   '/_framed/settings/data': typeof FramedSettingsDataRoute
   '/_framed/settings/usage': typeof FramedSettingsUsageRoute
   '/_framed/shared/$mapId': typeof FramedSharedMapIdRoute
+  '/_framed/explore/': typeof FramedExploreIndexRoute
   '/_framed/history/': typeof FramedHistoryIndexRoute
   '/_framed/maps/': typeof FramedMapsIndexRoute
   '/_framed/settings/': typeof FramedSettingsIndexRoute
@@ -239,6 +248,7 @@ export interface FileRouteTypes {
     | '/settings/data'
     | '/settings/usage'
     | '/shared/$mapId'
+    | '/explore/'
     | '/history/'
     | '/maps/'
     | '/settings/'
@@ -262,6 +272,7 @@ export interface FileRouteTypes {
     | '/settings/data'
     | '/settings/usage'
     | '/shared/$mapId'
+    | '/explore'
     | '/history'
     | '/maps'
     | '/settings'
@@ -287,6 +298,7 @@ export interface FileRouteTypes {
     | '/_framed/settings/data'
     | '/_framed/settings/usage'
     | '/_framed/shared/$mapId'
+    | '/_framed/explore/'
     | '/_framed/history/'
     | '/_framed/maps/'
     | '/_framed/settings/'
@@ -345,6 +357,13 @@ declare module '@tanstack/react-router' {
       path: '/check/$conceptId'
       fullPath: '/check/$conceptId'
       preLoaderRoute: typeof FramedCheckConceptIdRouteImport
+      parentRoute: typeof FramedRouteRoute
+    }
+    '/_framed/explore/': {
+      id: '/_framed/explore/'
+      path: '/explore'
+      fullPath: '/explore/'
+      preLoaderRoute: typeof FramedExploreIndexRouteImport
       parentRoute: typeof FramedRouteRoute
     }
     '/_framed/history/': {
@@ -496,6 +515,7 @@ interface FramedRouteRouteChildren {
   FramedMapsMapIdRoute: typeof FramedMapsMapIdRoute
   FramedMapsGenerateRoute: typeof FramedMapsGenerateRoute
   FramedSharedMapIdRoute: typeof FramedSharedMapIdRoute
+  FramedExploreIndexRoute: typeof FramedExploreIndexRoute
   FramedHistoryIndexRoute: typeof FramedHistoryIndexRoute
   FramedMapsIndexRoute: typeof FramedMapsIndexRoute
   FramedSharedIndexRoute: typeof FramedSharedIndexRoute
@@ -516,6 +536,7 @@ const FramedRouteRouteChildren: FramedRouteRouteChildren = {
   FramedMapsMapIdRoute: FramedMapsMapIdRoute,
   FramedMapsGenerateRoute: FramedMapsGenerateRoute,
   FramedSharedMapIdRoute: FramedSharedMapIdRoute,
+  FramedExploreIndexRoute: FramedExploreIndexRoute,
   FramedHistoryIndexRoute: FramedHistoryIndexRoute,
   FramedMapsIndexRoute: FramedMapsIndexRoute,
   FramedSharedIndexRoute: FramedSharedIndexRoute,

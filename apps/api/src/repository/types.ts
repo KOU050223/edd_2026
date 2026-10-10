@@ -952,8 +952,11 @@ export interface LearningMapRepository {
   /** 持ち主に限らずマップを読む（共有の側の表示、#244）。マップが無ければ `null`。 */
   getShared(mapId: string): Promise<StoredSharedMap | null>;
 
-  /** 範囲が「全員」の共有マップ。新しく上げた順（同時刻は ID の昇順）に `limit` 件まで。 */
-  listPublic(limit: number): Promise<SharedMapSummary[]>;
+  /**
+   * 範囲が「全員」の共有マップ。新しく上げた順（同時刻は ID の昇順）に `limit` 件まで。
+   * `excludeOwnerUserId` を渡すと、その利用者のマップを除いてから `limit` 件に絞る（#305 の P3-a）。
+   */
+  listPublic(limit: number, excludeOwnerUserId?: string): Promise<SharedMapSummary[]>;
 
   /**
    * 持ち主が共有しているマップ（範囲が「リンクだけ」か「全員」で、版があるもの、#302）。

@@ -606,6 +606,25 @@ describe("共有の範囲（T5）", () => {
       expect.objectContaining({ id: first.map.id, title: "一つ目" }),
     ]);
   });
+
+  test("?exclude=own は呼び出した人のマップを除き、ほかの人の全員のマップだけを出す（#305）", async () => {
+    const mine = await create({ ...TWO_NODES, title: "自分の" });
+    const linkOnly = await create({ ...TWO_NODES, title: "リンクだけ" });
+    await publish(mine.map.id, "public");
+    await publish(linkOnly.map.id, "link");
+
+    const ids = async (query: string, token: string) =>
+      (
+        await json<ListSharedMapsResponse>(await send("GET", `/shared-maps${query}`, token))
+      ).maps.map((map) => map.id);
+    // 持ち主には自分のものが出ない。除かなければ（「自分のマップ」の下の段）今までどおり出る。
+    expect(await ids("?exclude=own", "token-a")).toEqual([]);
+    expect(await ids("", "token-a")).toEqual([mine.map.id]);
+    // ほかの人には出る。「リンクだけ」はどちらにも出ない。
+    expect(await ids("?exclude=own", "token-b")).toEqual([mine.map.id]);
+    // 知らない値は黙って無視せず、400 にする。
+    expect((await send("GET", "/shared-maps?exclude=mine", "token-b")).status).toBe(400);
+  });
 });
 
 describe("「リンクだけ」の鍵（決定 U1）", () => {

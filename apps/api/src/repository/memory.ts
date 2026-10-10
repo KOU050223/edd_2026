@@ -1264,8 +1264,10 @@ export class InMemoryLearningMapRepository implements LearningMapRepository {
   }
 
   /** D1 の ORDER BY v.created_at_ms DESC, m.id ASC と一致させる。 */
-  listPublic(limit: number): Promise<SharedMapSummary[]> {
-    const listed = this.sharedSummaries((map) => map.visibility === "public");
+  listPublic(limit: number, excludeOwnerUserId?: string): Promise<SharedMapSummary[]> {
+    const listed = this.sharedSummaries(
+      (map) => map.visibility === "public" && map.ownerUserId !== excludeOwnerUserId,
+    );
     return Promise.resolve(listed.slice(0, limit).map((entry) => entry.summary));
   }
 

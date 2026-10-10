@@ -300,11 +300,14 @@ export function fetchOwnSharedMaps(
   return requestJson(`${LEARNING_MAPS_PATH}:shared`, fetcher, retry);
 }
 
+/** `excludeOwn` で、自分のマップを除く（「みんなのマップ」の画面、#305）。 */
 export function fetchSharedMaps(
   fetcher: typeof fetch = fetch,
   retry: boolean | number = false,
+  options: { excludeOwn?: boolean } = {},
 ): Promise<{ maps: SharedMapSummary[] }> {
-  return requestJson(SHARED_MAPS_PATH, fetcher, retry);
+  const query = options.excludeOwn === true ? "?exclude=own" : "";
+  return requestJson(`${SHARED_MAPS_PATH}${query}`, fetcher, retry);
 }
 
 /** 共有の側の版。「リンクだけ」のマップは鍵が要る（決定 U1）。 */
