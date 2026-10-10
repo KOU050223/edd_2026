@@ -12,6 +12,7 @@ import type { AuthVariables } from "../auth/middleware.js";
 import { stubAuth } from "../auth/test-auth.js";
 import type {
   LearningMapView,
+  ListLearningMapsResponse,
   ListMapVersionsResponse,
   ListSharedMapsResponse,
   MapPublishPreview,
@@ -466,6 +467,30 @@ describe("手元の書き換えとの競合（PR #294 のレビュー）", () =>
     expect(after.latestVersion).toBe(2);
     expect(after.nodes[0]).toMatchObject({ label: "別の画面" });
     expect(after.revision).toBeGreaterThan(read.revision);
+  });
+});
+
+describe("共有したマップの一覧（#302）", () => {
+  test("自分のマップの一覧に、いちばん新しい版を上げた日時が載る", async () => {
+    const list = async () =>
+      (await json<ListLearningMapsResponse>(await send("GET", "/learning-maps", "token-a"))).maps;
+    const { map } = await create();
+    expect((await list())[0]).toMatchObject({ latestVersion: null, latestPublishedAt: null });
+
+    const first = await publish(map.id);
+    expect((await list())[0]).toMatchObject({
+      latestVersion: 1,
+      latestPublishedAt: first.version.createdAt,
+    });
+
+    nowMs += 60_000;
+    await rename(map, "所有権");
+    const second = await publish(map.id);
+    expect(second.version.createdAt).not.toBe(first.version.createdAt);
+    expect((await list())[0]).toMatchObject({
+      latestVersion: 2,
+      latestPublishedAt: second.version.createdAt,
+    });
   });
 });
 

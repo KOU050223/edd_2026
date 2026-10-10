@@ -15,6 +15,7 @@ function Header() {
       <nav>
         <Link to="/">マップ</Link>
         <Link to="/maps">自分のマップ</Link>
+        <Link to="/shared">共有したマップ</Link>
         <Link to="/activity">推移</Link>
         <Link to="/history">履歴</Link>
         <Link to="/settings">設定</Link>

@@ -1788,6 +1788,8 @@ interface LearningMapRow {
   visibility: string;
   share_scope: string | null;
   latest_version: number | null;
+  /** `listByOwner` だけが読む（#302）。 */
+  latest_published_at?: string | null;
   source_map_id: string | null;
   source_version: number | null;
   source_key: string | null;
@@ -2175,6 +2177,8 @@ export class D1LearningMapRepository implements LearningMapRepository {
         `SELECT m.id, m.title, m.description, m.visibility, m.share_scope, m.created_at, m.updated_at,
                 (SELECT MAX(version) FROM learning_map_versions v WHERE v.map_id = m.id)
                   AS latest_version,
+                (SELECT created_at FROM learning_map_versions v WHERE v.map_id = m.id
+                  ORDER BY version DESC LIMIT 1) AS latest_published_at,
                 ${SOURCE_COLUMNS},
                 (SELECT COUNT(*) FROM learning_map_nodes n WHERE n.map_id = m.id) AS node_count
          FROM learning_maps m
@@ -2189,6 +2193,7 @@ export class D1LearningMapRepository implements LearningMapRepository {
       description: row.description,
       visibility: toLearningMapVisibility(row),
       latestVersion: row.latest_version,
+      latestPublishedAt: row.latest_published_at ?? null,
       source: toMapSourceView(toMapSource(row)),
       nodeCount: row.node_count,
       createdAt: row.created_at,

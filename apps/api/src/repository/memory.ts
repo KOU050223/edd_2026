@@ -900,6 +900,7 @@ export class InMemoryLearningMapRepository implements LearningMapRepository {
         description: map.description,
         visibility: map.visibility,
         latestVersion: map.latestVersion,
+        latestPublishedAt: map.versions.at(-1)?.createdAt ?? null,
         source: toMapSourceView(this.sourceOf(map)),
         nodeCount: map.nodes.length,
         createdAt: map.createdAt,

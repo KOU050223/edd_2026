@@ -144,6 +144,7 @@ test("マップを作ると、ID を振ったノードと線を返し、一覧�
       description: "所有権まで",
       visibility: "private",
       latestVersion: null,
+      latestPublishedAt: null,
       source: null,
       nodeCount: 2,
       createdAt: map.createdAt,
