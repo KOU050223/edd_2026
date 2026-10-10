@@ -25,10 +25,11 @@ function MapRoutePage() {
       shareKey={key}
       // 「リンクだけ」の鍵は選び直しても持ち続ける（外すと読み直しで 404 になる）。
       onSelectInMap={(conceptId) =>
-        void navigate({
+        navigate({
           to: "/maps/$mapId",
           params: { mapId },
           search: { concept: conceptId, key },
+          resetScroll: false,
         })
       }
     />

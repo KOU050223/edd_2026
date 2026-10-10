@@ -547,7 +547,11 @@ export function buildConfirmRequest(
 }
 
 /** 確定の入力を、送る前に確かめる。問題があれば画面向けの文を返す。 */
-export function validateConfirm(request: ConfirmRequest, maxNodes = 30): string | undefined {
+export function validateConfirm(
+  request: ConfirmRequest,
+  maxNodes = 30,
+  candidates: readonly RepoMapCandidate[] = [],
+): string | undefined {
   if (request.accepted.length < 1) return "マップに入れる用語を 1 つ以上選んでください。";
   if (request.accepted.length > maxNodes) {
     return `マップに入れられる用語は ${String(maxNodes)} 個までです（${String(request.accepted.length)} 個選んでいます）。`;
@@ -559,6 +563,19 @@ export function validateConfirm(request: ConfirmRequest, maxNodes = 30): string 
     if (item.name !== undefined && item.name === "") return "表示名を空にはできません。";
     if (item.description !== undefined && item.description === "") {
       return "説明を空にはできません。";
+    }
+    // サーバーは、説明に「（原文: ○○）」を足した最終の説明を 200 文字までで確かめる。同じ計算で見る。
+    const base = candidates.find((c) => c.id === item.id);
+    if (base !== undefined) {
+      const label = item.name ?? base.name;
+      const description = item.description ?? base.description;
+      const summary =
+        base.original !== "" && !label.includes(base.original)
+          ? `${description}（原文: ${base.original}）`
+          : description;
+      if ([...summary].length > REPO_MAP_LIMITS.description) {
+        return `「${label}」の説明は、原文の名前（${base.original}）を含めて ${String(REPO_MAP_LIMITS.description)} 文字までです。`;
+      }
     }
     if ([...(item.name ?? "")].length > REPO_MAP_LIMITS.name) {
       return `表示名は ${String(REPO_MAP_LIMITS.name)} 文字までです。`;

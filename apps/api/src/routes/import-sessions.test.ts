@@ -10,9 +10,11 @@ import {
   InMemoryLearningMapRepository,
   InMemoryImportSessionRepository,
   InMemoryLearningEvidenceRepository,
+  InMemoryLearningEventRepository,
   type InMemoryRepositoryStore,
 } from "../repository/memory.js";
 import { createImportSessionsRoute } from "./import-sessions.js";
+import { createLearningProfileRoute } from "./learning-profile.js";
 import type {
   CreateImportSessionResponse,
   ImportSessionDetail,
@@ -39,6 +41,15 @@ beforeEach(() => {
   app.use("/v1/*", stubAuth(TOKENS));
   app.route(
     "/v1",
+    createLearningProfileRoute(() => ({
+      maps: new InMemoryLearningMapRepository(store),
+      events: new InMemoryLearningEventRepository(store),
+      evidence,
+      nowIso: () => NOW,
+    })),
+  );
+  app.route(
+    "/v1",
     createImportSessionsRoute(() => ({
       identity,
       maps: new InMemoryLearningMapRepository(store),
@@ -49,6 +60,45 @@ beforeEach(() => {
       nowMs: () => 1_000,
     })),
   );
+});
+
+test("マップへの反映 API を通した質問が profile の履歴に載り、理解度は変えず Undo で消える", async () => {
+  const targetResponse = await get("/v1/history-targets/language%3Ago", "token-a");
+  expect(targetResponse.status).toBe(200);
+  const target = (await targetResponse.json()) as {
+    concepts: { id: string; fingerprint: string }[];
+  };
+  const definition = target.concepts.find((item) => item.id === "go.defer")!;
+  const response = await post(
+    "/v1/import-sessions",
+    "token-a",
+    createBody({
+      importedBy: "file",
+      providers: ["claude-code"],
+      mapTarget: { target: "language:go", fingerprints: { "go.defer": definition.fingerprint } },
+      evidence: [
+        evidenceItem({
+          id: "import-1:claude-code:q1",
+          observationKey: "f".repeat(64),
+          source: { provider: "claude-code", importedBy: "file" },
+        }),
+      ],
+    }),
+  );
+  expect(response.status).toBe(200);
+  const profile = (await (await get("/v1/learning-profile", "token-a")).json()) as {
+    concepts: unknown[];
+    familiarity: { conceptId: string; observationCount: number }[];
+  };
+  expect(profile.familiarity).toEqual([
+    expect.objectContaining({ conceptId: "go.defer", observationCount: 1 }),
+  ]);
+  expect(profile.concepts).toEqual([]);
+  await del("/v1/import-sessions/import-1", "token-a");
+  const undone = (await (await get("/v1/learning-profile", "token-a")).json()) as {
+    familiarity: unknown[];
+  };
+  expect(undone.familiarity).toEqual([]);
 });
 
 function evidenceItem(partial: Partial<LearningEvidence> & { id: string }): LearningEvidence {

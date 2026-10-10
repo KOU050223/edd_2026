@@ -42,8 +42,13 @@ function defaultSelection(items: readonly RepoMapCandidate[]): Set<string> {
   return new Set(items.filter((c) => !c.schemaOnly).map((c) => c.id));
 }
 
-function RepoMapDraftPage() {
+/** 下書きの ID ごとに状態を作り直す（別の下書きへ移っても、前の下書きの状態を持ち越さない）。 */
+function RepoMapDraftRoute() {
   const loaded = Route.useLoaderData();
+  return <RepoMapDraftPage key={loaded.draft.id} loaded={loaded} />;
+}
+
+function RepoMapDraftPage({ loaded }: { loaded: ReturnType<typeof Route.useLoaderData> }) {
   const navigate = useNavigate();
   const guard = useRef(createSubmitGuard());
   const consentFlow = useConsentFlow(loaded.consent);
@@ -143,7 +148,7 @@ function RepoMapDraftPage() {
 
   const confirm = (consentVersion: number | undefined) => {
     const request = buildConfirmRequest(candidates, selected, edits, title);
-    const invalid = validateConfirm(request, MAX_NODES);
+    const invalid = validateConfirm(request, MAX_NODES, candidates);
     if (invalid !== undefined) {
       setError(invalid);
       return;
@@ -477,5 +482,5 @@ export const Route = createFileRoute("/_framed/maps/repo_/$draftId")({
     ]);
     return { draft, consent };
   },
-  component: RepoMapDraftPage,
+  component: RepoMapDraftRoute,
 });

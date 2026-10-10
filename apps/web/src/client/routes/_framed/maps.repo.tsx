@@ -43,7 +43,9 @@ function RepoMapStartPage() {
   const consentFlow = useConsentFlow(loaded.consent);
 
   const [url, setUrl] = useState("");
-  const [inspected, setInspected] = useState<InspectRepoResult>();
+  const [inspected, setInspected] = useState<
+    (InspectRepoResult & { inspectedFor: string }) | undefined
+  >();
   const [folders, setFolders] = useState<ReadonlySet<string>>(new Set());
   const [filesText, setFilesText] = useState("");
   const [issuesText, setIssuesText] = useState("");
@@ -51,7 +53,8 @@ function RepoMapStartPage() {
   const [error, setError] = useState<string>();
   const [deleting, setDeleting] = useState<string>();
 
-  const usage = inspected?.usage ?? loaded.usage;
+  // 枠は、読み込み（作成の失敗・月の変わり目のあとの読み直し）の値を使う。下見の時点の値は古くなる。
+  const usage = loaded.usage;
   const slotsLeft = usage.monthlyDraftsLimit - usage.monthlyDrafts;
   // 同意の確認中に入力を変えると、同意した内容と違うものを送ってしまう。確認中は入力を止める。
   const locked = busy !== undefined || consentFlow.asking;
@@ -65,7 +68,7 @@ function RepoMapStartPage() {
       .run("inspect", async () => {
         try {
           const result = await inspectRepo(url.trim());
-          setInspected(result);
+          setInspected({ ...result, inspectedFor: url.trim() });
           setFolders(new Set(defaultFolderSelection(result.monorepo)));
         } catch (value: unknown) {
           if (redirectIfSessionExpired(value)) return;
@@ -87,7 +90,9 @@ function RepoMapStartPage() {
     busy === undefined;
 
   const create = (consentVersion: number | undefined) => {
+    // 入力した URL が、下見したリポジトリと違えば作らない（枠を使うので、見えているものと同じものだけ作る）。
     if (inspected === undefined || guard.current.isRunning("create")) return;
+    if (url.trim() === "" || inspected.inspectedFor !== url.trim()) return;
     setError(undefined);
     setBusy("create");
     void guard.current
@@ -203,7 +208,12 @@ function RepoMapStartPage() {
             required
             maxLength={200}
             disabled={locked || consentFlow.asking}
-            onChange={(event) => setUrl(event.target.value)}
+            onChange={(event) => {
+              setUrl(event.target.value);
+              // 下見の結果は、その URL のもの。入力を変えたら、別のリポジトリへ下書きを作らないよう消す。
+              setInspected(undefined);
+              setFolders(new Set());
+            }}
           />
         </label>
         <div className="actions">

@@ -312,6 +312,26 @@ describe("確定の入力", () => {
     expect(validateConfirm(request2)).toContain("空");
   });
 
+  it("説明は、サーバーと同じ最終の説明（原文の名前を含む）で長さを見る", () => {
+    const withOriginal = [candidate("C1", { name: "注文", original: "Order" })];
+    // 200 文字ちょうどの説明でも、「（原文: Order）」を足すと超える。
+    const request = { accepted: [{ id: "C1", description: "あ".repeat(200) }] };
+    expect(validateConfirm(request, 30, withOriginal)).toContain("原文の名前");
+    // 候補の情報が無ければ、説明だけで見る（従来どおり）。
+    expect(validateConfirm(request)).toBeUndefined();
+    // 表示名に原文が入っていれば、足されない。
+    const named = [candidate("C1", { name: "注文 Order", original: "Order" })];
+    expect(validateConfirm(request, 30, named)).toBeUndefined();
+    // 足しても収まる長さなら通る。
+    expect(
+      validateConfirm(
+        { accepted: [{ id: "C1", description: "あ".repeat(150) }] },
+        30,
+        withOriginal,
+      ),
+    ).toBeUndefined();
+  });
+
   it("題名が空なら送らない（リポジトリ名から付く）", () => {
     expect(buildConfirmRequest(items, new Set(["C1"]), {}, "  ").title).toBeUndefined();
   });
