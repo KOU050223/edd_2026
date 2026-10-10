@@ -484,14 +484,14 @@ export function SkillTree({
                 aria-label={`${nameOf(concept)}：${kind === undefined ? "" : `${REPO_MAP_NODE_KIND_LABELS[kind]}・`}${isCurrent ? "現在地・" : ""}${statusLabel[concept.status]}${concept.familiarity ? `・履歴あり ${concept.familiarity.observationCount} 件` : ""}`}
                 onClick={() => onSelect(node.conceptId)}
               >
+                {kind !== undefined && (
+                  <em className="kind-label">{REPO_MAP_NODE_KIND_LABELS[kind]}</em>
+                )}
                 <span className="node-name">
                   {concept.status === "confirmed" && <span aria-hidden="true">✓ </span>}
                   {nameOf(concept)}
                 </span>
                 <span className="node-status">
-                  {kind !== undefined && (
-                    <em className="kind-label">{REPO_MAP_NODE_KIND_LABELS[kind]}</em>
-                  )}
                   {isCurrent && <em className="badge">現在地</em>}
                   {statusLabel[concept.status]}
                   {concept.manual && <em className="manual">手動</em>}
