@@ -58,10 +58,11 @@ function LanguageMap() {
       : concepts.get(selectedId);
 
   const select = (conceptId: string) => {
-    void navigate({
+    return navigate({
       to: "/map/$language",
       params: { language },
       search: { concept: conceptId },
+      resetScroll: false,
     });
   };
 
@@ -103,7 +104,9 @@ function LanguageMap() {
           </Link>
         )}
       </p>
-      {loggedIn && <HistoryMapPanel key={language} target={`language:${language}`} />}
+      {loggedIn && (
+        <HistoryMapPanel key={language} target={`language:${language}`} onApplied={select} />
+      )}
       {summary.complete && (
         <section className="celebrate" role="status">
           <CompleteBadge />
@@ -128,6 +131,16 @@ function LanguageMap() {
         <div>
           <strong>{summary.unobserved}</strong>未観測
         </div>
+        <div>
+          <strong>
+            {
+              tree.nodes.filter(
+                (node) => (concepts.get(node.conceptId)?.familiarity?.observationCount ?? 0) > 0,
+              ).length
+            }
+          </strong>
+          履歴あり
+        </div>
         <button onClick={() => router.invalidate()} disabled={pending.length > 0}>
           再読み込み
         </button>
@@ -148,7 +161,7 @@ function LanguageMap() {
         </p>
       )}
       <div className={selected ? "map-layout" : undefined}>
-        <div className="map">
+        <div className="map" id="learning-map">
           <SkillTree
             tree={tree}
             concepts={concepts}

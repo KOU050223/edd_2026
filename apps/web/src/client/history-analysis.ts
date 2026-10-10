@@ -112,7 +112,7 @@ export interface HistoryProgress {
     fingerprints: Record<string, string>;
   };
 }
-export const HISTORY_ANALYSIS_VERSION = 2;
+export const HISTORY_ANALYSIS_VERSION = 3;
 export const HISTORY_CALL_LIMIT = 5;
 export const fetchHistoryTarget = (target: string) =>
   requestJson<HistoryTarget>(`/api/v1/history-targets/${encodeURIComponent(target)}`);
@@ -156,6 +156,42 @@ export function pendingHistory(
 export function localHistoryMatch(question: HistoryQuestion, concept: HistoryConcept): boolean {
   const questionText = historyAnalysisBody(question);
   return questionText.split(/[^\p{L}\p{N}_.]+/u).includes(concept.id);
+}
+
+/** Exact, unambiguous names are a preview suggestion, never a mastery assessment. */
+export function localHistoryNameMatch(
+  question: HistoryQuestion,
+  concept: HistoryConcept,
+  target: HistoryTarget,
+): boolean {
+  const label = concept.label.trim().toLocaleLowerCase();
+  if (
+    label.length < 3 ||
+    concept.needsObjectives ||
+    target.concepts.some(
+      (other) => other.id !== concept.id && other.label.trim().toLocaleLowerCase() === label,
+    )
+  )
+    return false;
+  const text = historyAnalysisBody(question).toLocaleLowerCase();
+  const names = [label, ...(label.match(/[a-z][a-z0-9_+.-]{2,}/g) ?? [])];
+  return names.some((name) => {
+    if (
+      target.concepts.some(
+        (other) =>
+          other.id !== concept.id &&
+          (other.label.trim().toLocaleLowerCase() === name ||
+            other.label
+              .toLocaleLowerCase()
+              .match(/[a-z][a-z0-9_+.-]{2,}/g)
+              ?.some((word) => word === name) === true),
+      )
+    )
+      return false;
+    if (!/^[a-z0-9_.+ -]+$/.test(name)) return text.includes(name);
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(`(?:^|[^a-z0-9_])${escaped}(?=$|[^a-z0-9_])`).test(text);
+  });
 }
 
 export async function analyzeHistoryBatch(

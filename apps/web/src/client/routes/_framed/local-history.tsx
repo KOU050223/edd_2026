@@ -1,4 +1,5 @@
-import { createFileRoute, useRouter } from "@tanstack/react-router";
+import { createFileRoute, useRouter, Link } from "@tanstack/react-router";
+import { HistoryQuestionBrowser } from "../../history-question-browser.js";
 import { useEffect, useRef, useState } from "react";
 import { createSubmitGuard, deleteJson, requestJson } from "../../api.js";
 import { historyUserId, openHistoryStore } from "../../history-store.js";
@@ -72,8 +73,9 @@ function LocalHistoryPage() {
     const store = await openHistoryStore(userId);
     try {
       const result = await importHistoryFiles(selected, store, abort.current.signal, setMessage);
+      const count = historyQuestionCount(historyQuestions(await store.files()));
       setMessage(
-        `保存完了：更新 ${result.updated} ファイル、変更なし ${result.unchanged} ファイル`,
+        `${count} 件の質問を取り込みました。更新 ${result.updated} ファイル、変更なし ${result.unchanged} ファイル。下の一覧で内容を確認できます。`,
       );
     } finally {
       store.close();
@@ -119,8 +121,17 @@ function LocalHistoryPage() {
   const questions = historyQuestions(files);
   const projects = [...new Set(files.map((file) => file.project))];
   return (
-    <section>
+    <section className="local-history-page">
       <h1>Claude Code の履歴管理</h1>
+      <p>
+        Claude Code
+        であなたが尋ねた質問・相談・作業依頼を取り込みます。まず内容を確認し、次にマップを選んで関連する概念を探します。
+      </p>
+      <ol className="history-steps">
+        <li>フォルダを選ぶ</li>
+        <li>取り込んだ質問を確認</li>
+        <li>マップを選んで反映</li>
+      </ol>
       <p>
         履歴フォルダ（通常は ~/.claude/projects またはその配下）を選びます。Git
         のフォルダとは別です。選択した範囲だけを読み取ります。
@@ -174,22 +185,35 @@ function LocalHistoryPage() {
         </p>
       )}
       <p>
-        {files.length} ファイル・{historyQuestionCount(questions)} 質問。期間（UTC）：
-        {questions[0]?.observedAt.slice(0, 10) ?? "—"} ～{" "}
-        {questions.at(-1)?.observedAt.slice(0, 10) ?? "—"}
+        {historyQuestionCount(questions)} 件の質問・{projects.length} プロジェクトを収集しました。
+        AI
+        の回答・ツール出力・中断通知は質問に含めません。概念への分類は、反映先のマップを選んだ後に行います。
       </p>
       {!files.length && (
         <p>保存済みの履歴がありません。初回・削除後はフォルダを取り込んでください。</p>
       )}
-      {projects.map((project) => (
-        <p key={project}>
-          {project}：
-          {historyQuestionCount(questions.filter((question) => question.project === project))} 質問{" "}
-          <button disabled={running} onClick={() => remove(project)}>
-            このプロジェクトのローカル履歴を削除
-          </button>
-        </p>
-      ))}
+      {!!questions.length && (
+        <div className="history-result">
+          <strong>質問を確認したら、反映先を選んでください。</strong>
+          <p>
+            <Link to="/">マップ一覧から反映先を選ぶ →</Link>
+          </p>
+        </div>
+      )}
+      <h2>プロジェクト別の取り込み結果</h2>
+      <div className="history-projects">
+        {projects.map((project) => (
+          <article className="history-question-card" key={project}>
+            {project}：
+            {historyQuestionCount(questions.filter((question) => question.project === project))}{" "}
+            質問{" "}
+            <button disabled={running} onClick={() => remove(project)}>
+              このプロジェクトのローカル履歴を削除
+            </button>
+          </article>
+        ))}
+      </div>
+      <HistoryQuestionBrowser questions={questions} />
       <details>
         <summary>
           前処理・読み飛ばしの理由（{files.reduce((sum, file) => sum + file.warnings.length, 0)}{" "}
@@ -203,15 +227,16 @@ function LocalHistoryPage() {
           )),
         )}
       </details>
-      <h2>反映済みの観測 / Undo</h2>
+      <h2>マップへの反映履歴</h2>
       <p>
-        開いているマップの「取り込んだ履歴から反映」で、プロジェクト・期間を選んで解析できます。Undo
-        は今回の反映で追加した分だけを取り消します。同じ Concept ID
+        マップの「取り込んだ質問を確認する」から関連する概念を探して反映できます。
+        取り消しは、その反映で追加した分だけを消します。同じ Concept ID
         を参照するほかのマップからも消えます。
       </p>
       {sessions.sessions.map((session) => (
         <p key={session.id}>
-          {session.createdAt}：{session.evidenceCount} 件 ({session.status}){" "}
+          {new Date(session.createdAt).toLocaleString("ja-JP")}：質問 {session.evidenceCount} 件（
+          {session.status === "applied" ? "反映済み" : "取り消し済み"}）{" "}
           <button
             disabled={running || session.status !== "applied"}
             onClick={() =>
@@ -221,7 +246,7 @@ function LocalHistoryPage() {
               })
             }
           >
-            この反映を Undo
+            この反映を取り消す
           </button>
         </p>
       ))}

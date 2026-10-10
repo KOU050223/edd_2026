@@ -344,7 +344,7 @@ export function LearningMapPage({
   /** 「リンクだけ」の共有を持ち主以外が開いたときの鍵（#244 の U1）。取り込みに使う。 */
   shareKey: string | undefined;
   /** このマップのノードを選んだとき。画面ごとに URL が違う。 */
-  onSelectInMap: (conceptId: string) => void;
+  onSelectInMap: (conceptId: string) => void | Promise<void>;
 }) {
   const map = loaded.map;
   const own = loaded.kind === "own" ? loaded.map : undefined;
@@ -427,7 +427,7 @@ export function LearningMapPage({
           </Link>
         )}
       </p>
-      {own && <HistoryMapPanel key={mapId} target={mapId} />}
+      {own && <HistoryMapPanel key={mapId} target={mapId} onApplied={onSelectInMap} />}
       {map.description && <p className="muted">{map.description}</p>}
       {own ? (
         <>
@@ -453,6 +453,16 @@ export function LearningMapPage({
           <div>
             <strong>{summary.unobserved}</strong>未観測
           </div>
+          <div>
+            <strong>
+              {
+                map.nodes.filter(
+                  (node) => (concepts.get(node.conceptId)?.familiarity?.observationCount ?? 0) > 0,
+                ).length
+              }
+            </strong>
+            履歴あり
+          </div>
           <button onClick={() => router.invalidate()} disabled={pending.length > 0}>
             再読み込み
           </button>
@@ -477,7 +487,7 @@ export function LearningMapPage({
         )
       ) : (
         <div className={selected ? "map-layout" : undefined}>
-          <div className="map">
+          <div className="map" id="learning-map">
             <SkillTree
               tree={tree}
               title={map.title}
