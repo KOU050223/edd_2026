@@ -221,7 +221,7 @@ export const languageLabel: Record<string, string> = {
 
 // 地図の寸法（px）。ノードは固定の大きさの箱で、列は前提の段数、行は木の葉の順。
 const NODE_WIDTH = 150;
-const NODE_HEIGHT = 48;
+const NODE_HEIGHT = 64;
 const COLUMN_GAP = 24;
 const ROW_GAP = 12;
 const nodeX = (depth: number) => depth * (NODE_WIDTH + COLUMN_GAP);
@@ -455,6 +455,7 @@ export function SkillTree({
               isCurrent ? "current" : concept.status,
               next.has(node.conceptId) && "next",
               node.conceptId === selected && "selected",
+              (concept.familiarity?.observationCount ?? 0) > 0 && "history-observed",
             ].filter(Boolean);
             return (
               <button
@@ -463,7 +464,7 @@ export function SkillTree({
                 style={{ left: nodeX(node.depth), top: nodeY(node.row), width: NODE_WIDTH }}
                 title={nameOf(concept)}
                 aria-pressed={node.conceptId === selected}
-                aria-label={`${nameOf(concept)}：${isCurrent ? "現在地・" : ""}${statusLabel[concept.status]}`}
+                aria-label={`${nameOf(concept)}：${isCurrent ? "現在地・" : ""}${statusLabel[concept.status]}${concept.familiarity ? `・履歴あり ${concept.familiarity.observationCount} 件` : ""}`}
                 onClick={() => onSelect(node.conceptId)}
               >
                 <span className="node-name">
@@ -474,10 +475,11 @@ export function SkillTree({
                   {isCurrent && <em className="badge">現在地</em>}
                   {statusLabel[concept.status]}
                   {concept.manual && <em className="manual">手動</em>}
-                  {/* 履歴だけある Concept は「未観測」ではなく
-                      「触れた形跡あり」として区別する（Issue #157） */}
-                  {concept.status === "unobserved" && concept.familiarity && (
-                    <em className="familiar">履歴あり</em>
+                  {/* 理解度とは別に、取り込んだ質問があることを表示する（Issue #318）。 */}
+                  {(concept.familiarity?.observationCount ?? 0) > 0 && (
+                    <em className="familiar">
+                      履歴あり {concept.familiarity!.observationCount} 件
+                    </em>
                   )}
                 </span>
               </button>

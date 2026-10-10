@@ -1,4 +1,5 @@
 import { isIsoDateTime } from "@gakushu-sochi/domain";
+import { isLearnerQuestion } from "./history-presentation.js";
 
 /** Browser-local, sanitized Claude Code questions. No filesystem or raw text is persisted. */
 export interface HistoryQuestion {
@@ -161,7 +162,7 @@ export async function parseClaudeHistory(
     }
     latest = undefined;
     if (
-      !text.trim() ||
+      !isLearnerQuestion(text) ||
       /^\s*<(?:system-reminder|local-command|command-name|task-notification|ide_opened_file|ide_selection)/i.test(
         text,
       )
@@ -232,7 +233,8 @@ export async function parseClaudeHistory(
 export function historyQuestions(files: readonly HistoryFile[]): HistoryQuestion[] {
   const questions = new Map<string, HistoryQuestion>();
   for (const file of [...files].sort((a, b) => (a.revision ?? 0) - (b.revision ?? 0)))
-    for (const question of file.questions) questions.set(question.key, question);
+    for (const question of file.questions)
+      if (isLearnerQuestion(question.body)) questions.set(question.key, question);
   return [...questions.values()].sort(
     (a, b) => a.observedAt.localeCompare(b.observedAt) || a.key.localeCompare(b.key),
   );

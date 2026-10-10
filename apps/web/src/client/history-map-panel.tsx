@@ -1,4 +1,6 @@
 import { toErrorText } from "./errors.js";
+import { HistoryQuestionBrowser } from "./history-question-browser.js";
+import { historyProgressSummary } from "./history-presentation.js";
 import { Link, useRouter } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { ApiError, createSubmitGuard, deleteJson, postJsonBody, requestJson } from "./api.js";
@@ -14,10 +16,10 @@ import {
 } from "./local-history.js";
 import {
   analyzeHistoryBatch,
-  historyAnalysisBody,
   fetchHistoryTarget,
   historyEvidence,
   localHistoryMatch,
+  localHistoryNameMatch,
   pendingHistory,
   previewHistory,
   reconcileHistoryProgress,
@@ -28,7 +30,13 @@ import {
   type HistoryTarget,
 } from "./history-analysis.js";
 
-export function HistoryMapPanel({ target }: { target: string }) {
+export function HistoryMapPanel({
+  target,
+  onApplied,
+}: {
+  target: string;
+  onApplied?: (conceptId: string) => void | Promise<void>;
+}) {
   const router = useRouter();
   const guard = useRef(createSubmitGuard());
   const mounted = useRef(true);
@@ -42,8 +50,8 @@ export function HistoryMapPanel({ target }: { target: string }) {
     usage: AiUsageSummary;
   }>();
   const [project, setProject] = useState("");
-  const [from, setFrom] = useState("");
-  const [to, setTo] = useState("");
+  const from = "";
+  const to = "";
   const [consent, setConsent] = useState(false);
   const [excluded, setExcluded] = useState<string[]>([]);
   const [progress, setProgress] = useState<HistoryProgress>();
@@ -90,22 +98,30 @@ export function HistoryMapPanel({ target }: { target: string }) {
           fetchHistoryTarget(target),
           fetchAiUsage(fetch, 0),
         ]);
+        const questions = historyQuestions(files);
+        const saved = await store.loadProgress<HistoryProgress>(
+          JSON.stringify([target, project, "", ""]),
+        );
         if (mounted.current) {
-          setData({ userId, questions: historyQuestions(files), target: definition, usage });
+          setData({ userId, questions, target: definition, usage });
+          setProgress(
+            saved
+              ? reconcileHistoryProgress(
+                  saved,
+                  filterHistory(questions, project, "", ""),
+                  definition,
+                )
+              : undefined,
+          );
+          setExcluded(saved?.excludedConceptIds ?? []);
           setOpened(true);
         }
       } finally {
         store.close();
       }
     });
-  const invalidPeriod = !!(from && to && from > to);
-  const selection = data && !invalidPeriod ? filterHistory(data.questions, project, from, to) : [];
+  const selection = data ? filterHistory(data.questions, project, from, to) : [];
   const selectionKey = JSON.stringify([target, project, from, to]);
-  const changeFilter = (action: () => void) => {
-    action();
-    setProgress(undefined);
-    setExcluded([]);
-  };
   const analyze = () =>
     run(async () => {
       if (!data) return;
@@ -130,9 +146,7 @@ export function HistoryMapPanel({ target }: { target: string }) {
           definition,
         );
         if (current.pendingApplication)
-          throw new Error(
-            "応答を確認できていない適用があります。「保存済みの進捗を読む」から適用を再送してください",
-          );
+          throw new Error("前回の反映の応答を確認できていません。「反映を再確認」を押してください");
         const save = async () => {
           await store.saveProgress(current);
           if (mounted.current) {
@@ -144,13 +158,16 @@ export function HistoryMapPanel({ target }: { target: string }) {
           setData({ ...data, questions: historyQuestions(files), target: definition, usage });
         for (const item of pendingHistory(questions, definition, current)) {
           for (const concept of item.concepts)
-            if (localHistoryMatch(item.question, concept))
+            if (
+              localHistoryMatch(item.question, concept) ||
+              localHistoryNameMatch(item.question, concept, definition)
+            )
               current.classifications.push({
                 question: item.question.key,
                 inputFingerprint: item.question.fingerprint,
                 concept: concept.id,
                 definitionFingerprint: concept.fingerprint,
-                confidence: 1,
+                confidence: localHistoryMatch(item.question, concept) ? 1 : 0.8,
               });
         }
         await save();
@@ -162,7 +179,7 @@ export function HistoryMapPanel({ target }: { target: string }) {
           if (!consent || used >= calls) break;
           // Small bounded candidate batches. Only the current map's unresolved definitions are sent.
           const { concepts, questions: batch } = selectHistoryBatch(pending, definition);
-          setMessage(`解析中：呼び出し ${used + 1} / ${calls}、未解析 ${pending.length} 質問`);
+          setMessage(`関連する概念を探しています… ${used + 1} / ${calls} 回`);
           const result = await analyzeHistoryBatch(batch, concepts, target);
           current = { ...current, classifications: [...current.classifications, ...result] };
           used++;
@@ -170,13 +187,19 @@ export function HistoryMapPanel({ target }: { target: string }) {
         }
         if (mounted.current)
           setMessage(
-            `解析済みの結果を保存しました。未解析 ${pendingHistory(questions, definition, current).length} 質問。${cancel.current ? "中断しました。" : "上限や同意待ちの残りは後から再開できます。"}`,
+            cancel.current
+              ? "中断しました。見つかった概念は下で確認して反映できます。"
+              : !consent
+                ? "名前が一致する概念を確認しました。AI を使うと、言い換えや文脈からも関連を探せます。"
+                : pendingHistory(questions, definition, current).length
+                  ? "見つかった概念を確認してください。残りの質問は「続きを解析」で調べられます。"
+                  : "すべての質問を確認しました。関連する概念を選んでマップに反映してください。",
           );
       } finally {
         store.close();
       }
     });
-  const resume = () =>
+  const refresh = () =>
     run(async () => {
       if (!data) return;
       if ((await historyUserId()) !== data.userId) throw new Error("アカウントが変わりました");
@@ -185,16 +208,17 @@ export function HistoryMapPanel({ target }: { target: string }) {
         const saved = await store.loadProgress<HistoryProgress>(selectionKey);
         const definition = await fetchHistoryTarget(target);
         const questions = historyQuestions(await store.files());
-        if (!saved) throw new Error("このマップ・プロジェクト・期間の保存済み進捗がありません");
         if (mounted.current) {
           setData({ ...data, questions, target: definition });
-          setExcluded(saved.excludedConceptIds ?? []);
+          setExcluded(saved?.excludedConceptIds ?? []);
           setProgress(
-            reconcileHistoryProgress(
-              saved,
-              filterHistory(questions, project, from, to),
-              definition,
-            ),
+            saved
+              ? reconcileHistoryProgress(
+                  saved,
+                  filterHistory(questions, project, from, to),
+                  definition,
+                )
+              : undefined,
           );
         }
       } finally {
@@ -285,14 +309,31 @@ export function HistoryMapPanel({ target }: { target: string }) {
           pendingApplication: undefined,
         };
         await store.saveProgress(next);
+        if (mounted.current) setProgress(next);
+        await router.invalidate();
+        const profile = await requestJson<{
+          familiarity?: { conceptId: string; observationCount: number }[];
+        }>("/api/v1/learning-profile");
+        const appliedIds = Object.keys(pending.fingerprints);
+        if (
+          !appliedIds.every((id) =>
+            profile.familiarity?.some((item) => item.conceptId === id && item.observationCount > 0),
+          )
+        )
+          throw new Error(
+            "質問は保存されましたが、マップの履歴表示を確認できませんでした。ページを再読み込みしてください。反映し直す必要はありません。",
+          );
         if (mounted.current) {
           setProgress(next);
           setExcluded(next.excludedConceptIds ?? []);
           setMessage(
-            `反映しました：この反映の観測 ${saved.evidenceCount} 件（既存の観測は二重計上しません）`,
+            `${appliedIds.length} 個の概念に質問 ${saved.evidenceCount} 件を反映しました。マップの「履歴あり」に表示されます。`,
           );
+          if (appliedIds[0]) await onApplied?.(appliedIds[0]);
+          document
+            .getElementById("learning-map")
+            ?.scrollIntoView({ behavior: "smooth", block: "start" });
         }
-        await router.invalidate();
       } finally {
         store.close();
       }
@@ -341,192 +382,289 @@ export function HistoryMapPanel({ target }: { target: string }) {
         store.close();
       }
     });
+  const changeProject = (name: string) =>
+    run(async () => {
+      if (!data) return;
+      if ((await historyUserId()) !== data.userId)
+        throw new Error("ログイン中のユーザーが変わりました");
+      const store = await openHistoryStore(data.userId);
+      try {
+        const saved = await store.loadProgress<HistoryProgress>(
+          JSON.stringify([target, name, "", ""]),
+        );
+        if (mounted.current) {
+          setProject(name);
+          setProgress(
+            saved
+              ? reconcileHistoryProgress(
+                  saved,
+                  filterHistory(data.questions, name, "", ""),
+                  data.target,
+                )
+              : undefined,
+          );
+          setExcluded(saved?.excludedConceptIds ?? []);
+          setMessage("");
+        }
+      } finally {
+        store.close();
+      }
+    });
+  const toggleConcept = (id: string, checked: boolean) =>
+    run(async () => {
+      if (!data || !progress) return;
+      if ((await historyUserId()) !== data.userId)
+        throw new Error("ログイン中のユーザーが変わりました");
+      const nextExcluded = checked ? excluded.filter((value) => value !== id) : [...excluded, id];
+      const next = { ...progress, excludedConceptIds: nextExcluded };
+      const store = await openHistoryStore(data.userId);
+      try {
+        await store.saveProgress(next);
+        if (mounted.current) {
+          setProgress(next);
+          setExcluded(nextExcluded);
+        }
+      } finally {
+        store.close();
+      }
+    });
   if (!opened)
     return (
-      <section className="message">
-        <button disabled={running} onClick={open}>
-          取り込んだ履歴から反映
-        </button>{" "}
-        <Link to="/local-history">履歴管理</Link>
-        {error && <p role="alert">{error}</p>}
+      <section className="message history-panel">
+        <h2>Claude Code の質問をマップへ反映</h2>
+        <p>取り込んだ質問を確認し、このマップの概念に関連する質問を反映できます。</p>
+        <div className="actions">
+          <button disabled={running} onClick={open}>
+            {running ? "質問を読み込み中" : "取り込んだ質問を確認する"}
+          </button>
+          <Link to="/local-history">履歴を取り込む</Link>
+        </div>
+        {error && (
+          <p role="alert" className="error-text">
+            {error}
+          </p>
+        )}
       </section>
     );
   const preview = data && progress ? previewHistory(selection, data.target, progress) : [];
+  const counts = data
+    ? historyProgressSummary(selection, data.target, progress)
+    : { total: 0, related: 0, unrelated: 0, pending: 0 };
+  const selectedCount = preview.filter((row) => !excluded.includes(row.concept.id)).length;
   return (
-    <section className="message">
-      <h2>このマップへ履歴を反映</h2>
-      <p>
-        <Link to="/local-history">履歴の取り込み・更新・削除</Link>
-        は履歴管理で行います。履歴は「触れた形跡」にだけ反映し、理解度を上げません。
-      </p>
-      <label>
-        プロジェクト{" "}
+    <section className="message history-panel">
+      <div className="history-section-head">
+        <h2>質問からマップへ</h2>
+        <Link to="/local-history">履歴管理</Link>
+      </div>
+      <ol className="history-steps" aria-label="反映の手順">
+        <li>質問を確認</li>
+        <li>関連する概念を探す</li>
+        <li>マップに反映</li>
+      </ol>
+      <label className="history-search">
+        質問のプロジェクト
         <select
           disabled={running || !!progress?.pendingApplication}
           value={project}
-          onChange={(event) => changeFilter(() => setProject(event.target.value))}
+          onChange={(event) => changeProject(event.target.value)}
         >
-          <option value="">すべて</option>
+          <option value="">すべてのプロジェクト</option>
           {[...new Set(data?.questions.map((question) => question.project))].map((name) => (
             <option key={name}>{name}</option>
           ))}
         </select>
       </label>
-      <label>
-        開始日（UTC）{" "}
-        <input
-          type="date"
-          disabled={running || !!progress?.pendingApplication}
-          value={from}
-          max={to || undefined}
-          onChange={(event) => changeFilter(() => setFrom(event.target.value))}
-        />
-      </label>
-      <label>
-        終了日（UTC）{" "}
-        <input
-          type="date"
-          disabled={running || !!progress?.pendingApplication}
-          value={to}
-          min={from || undefined}
-          onChange={(event) => changeFilter(() => setTo(event.target.value))}
-        />
-      </label>
-      <p>
-        対象 {historyQuestionCount(selection)} 質問（解析素材 {selection.length} 分割）。Gakushu
-        Managed AI（Google
-        Gemini）へ、マスク済み質問・このマップの候補定義を送信します。周辺回答は送信しません。会話全文はサーバーに保存しません。1回の操作は最大{" "}
-        {HISTORY_CALL_LIMIT} 呼び出し、現在の残り利用枠 {data ? remainingRequests(data.usage) : 0}{" "}
-        回。マスクの限界があるため、送信前に素材を確認してください。
-      </p>
-      <details>
-        <summary>送信する素材を確認</summary>
-        {selection.map((question) => (
-          <pre key={question.key}>{historyAnalysisBody(question)}</pre>
-        ))}
-      </details>
-      <p>
-        適用は1回5000観測までです。残りがあれば、もう一度適用してください。再解析しても以前の観測は消えません。誤った以前の反映は履歴管理から
-        Undo できます。
-      </p>
-      <label>
-        <input
-          type="checkbox"
-          disabled={running}
-          checked={consent}
-          onChange={(event) => setConsent(event.target.checked)}
-        />
-        上記の内容と利用枠を確認し、AI への送信に同意する
-      </label>
-      <div className="actions">
-        <button disabled={running || !selection.length} onClick={analyze}>
-          解析 / 未解析分を再開
-        </button>
-        <button disabled={running} onClick={resume}>
-          保存済みの進捗を読む
-        </button>
-        <button
-          disabled={!running}
-          onClick={() => {
-            cancel.current = true;
-          }}
-        >
-          この呼び出し後に中断
-        </button>
-        <button
-          disabled={running || (!preview.length && !progress?.pendingApplication)}
-          onClick={apply}
-        >
-          {progress?.pendingApplication ? "同じ適用を再送" : "選択した Concept を適用"}
-        </button>
-        {progress?.pendingApplication && (
-          <button disabled={running} onClick={rebuild}>
-            適用結果を照合してプレビューを作り直す
-          </button>
-        )}
+      <div className="history-stats">
+        <div>
+          <strong>{counts.total}</strong>取り込んだ質問
+        </div>
+        <div>
+          <strong>{counts.related}</strong>関連が見つかった質問
+        </div>
+        <div>
+          <strong>{counts.pending}</strong>関連が未確認の質問
+        </div>
+        <div>
+          <strong>{counts.unrelated}</strong>このマップに関連なし
+        </div>
       </div>
+      {!selection.length ? (
+        <p>
+          質問がありません。<Link to="/local-history">履歴管理でフォルダを選んでください</Link>
+        </p>
+      ) : (
+        <>
+          <HistoryQuestionBrowser
+            key={project}
+            questions={selection}
+            title="1. 取り込んだ質問を確認"
+          />
+          <h3>2. 関連する概念を探す</h3>
+          <p>
+            まず質問に含まれる概念名を照合します。AI
+            を使うと、名前が一致しない質問も内容から分類できます。確認した結果は自動保存され、続きから解析できます。
+          </p>
+          <div className="history-consent">
+            <label>
+              <input
+                type="checkbox"
+                disabled={running}
+                checked={consent}
+                onChange={(event) => setConsent(event.target.checked)}
+              />{" "}
+              質問を AI に送信し、関連する概念を探すことに同意する
+            </label>
+            <p>
+              マスク済みの質問とこのマップの概念定義を Google Gemini に送ります。AI
+              の回答は送りません。会話全文はサーバーに保存しません。1回の操作で最大{" "}
+              {HISTORY_CALL_LIMIT} 回呼び出します。残りの利用枠は{" "}
+              {data ? remainingRequests(data.usage) : 0} 回です。
+            </p>
+          </div>
+          <div className="actions">
+            <button
+              disabled={running || !!progress?.pendingApplication || !data?.target.concepts.length}
+              onClick={analyze}
+            >
+              {running
+                ? "確認中"
+                : !consent
+                  ? "名前が一致する概念を探す"
+                  : progress?.classifications.length
+                    ? "続きを解析する"
+                    : "AI で関連する概念を探す"}
+            </button>
+            {running && (
+              <button
+                className="secondary"
+                onClick={() => {
+                  cancel.current = true;
+                }}
+              >
+                この呼び出し後に中断
+              </button>
+            )}
+            <button
+              className="secondary"
+              disabled={running || !!progress?.pendingApplication}
+              onClick={refresh}
+            >
+              取り込み済みの質問を更新
+            </button>
+          </div>
+          {!consent && !preview.length && (
+            <p className="hint">
+              概念名が質問にない場合は、AI による分類で関連する概念を探せます。
+            </p>
+          )}
+          <h3>3. マップに反映する概念を選ぶ</h3>
+          {!preview.length && (
+            <p className="history-empty">
+              反映候補はまだありません。上の「関連する概念を探す」を実行してください。別のマップに関連する質問はこのマップには表示されません。
+            </p>
+          )}
+          <div className="history-concept-list">
+            {preview.map((row) => {
+              const matchedKeys = new Set(row.matches.map((match) => match.question));
+              const parentKeys = new Set(
+                selection
+                  .filter((question) => matchedKeys.has(question.key))
+                  .map((question) => question.observationKey ?? question.key),
+              );
+              return (
+                <article
+                  className={
+                    excluded.includes(row.concept.id)
+                      ? "history-concept excluded"
+                      : "history-concept"
+                  }
+                  key={row.concept.id}
+                >
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={!excluded.includes(row.concept.id)}
+                      disabled={running || !!progress?.pendingApplication}
+                      onChange={(event) => toggleConcept(row.concept.id, event.target.checked)}
+                    />
+                    <strong>{row.concept.label}</strong>
+                    <span>{row.count} 件の質問</span>
+                  </label>
+                  <p className="muted">{row.concept.summary}</p>
+                  <details>
+                    <summary>関連する質問を確認</summary>
+                    <HistoryQuestionBrowser
+                      questions={selection.filter((question) =>
+                        parentKeys.has(question.observationKey ?? question.key),
+                      )}
+                      title={row.concept.label + " に関連する質問"}
+                    />
+                  </details>
+                </article>
+              );
+            })}
+          </div>
+          <p>
+            反映すると、該当する概念に「履歴あり」と質問件数が表示されます。理解度は上がりません。1回に最大5000観測を反映できます。残りがある場合はもう一度反映してください。
+          </p>
+          <div className="actions">
+            <button
+              disabled={running || (!selectedCount && !progress?.pendingApplication)}
+              onClick={apply}
+            >
+              {progress?.pendingApplication
+                ? "反映を再確認"
+                : selectedCount + " 個の概念をマップに反映"}
+            </button>
+            <a href="#learning-map">マップを見る</a>
+          </div>
+          {progress?.pendingApplication && (
+            <button disabled={running} onClick={rebuild}>
+              未反映の候補からやり直す
+            </button>
+          )}
+        </>
+      )}
       {data?.target.warnings.map((warning) => (
         <p key={warning} role="alert">
           {warning}
         </p>
       ))}
-      {invalidPeriod && <p role="alert">開始日を終了日以前にしてください。</p>}
-      {message && <p role="status">{message}</p>}
+      {message && (
+        <p className="history-result" role="status">
+          {message}
+        </p>
+      )}
       {error && (
         <p role="alert" className="error-text">
           {error}
         </p>
       )}
-      <table>
-        <thead>
-          <tr>
-            <th>適用</th>
-            <th>Concept</th>
-            <th>関連質問件数</th>
-            <th>最終日時（UTC）</th>
-          </tr>
-        </thead>
-        <tbody>
-          {preview.map((row) => (
-            <tr key={row.concept.id}>
-              <td>
-                <input
-                  type="checkbox"
-                  aria-label={`${row.concept.label} を適用`}
-                  disabled={running || !!progress?.pendingApplication}
-                  checked={!excluded.includes(row.concept.id)}
-                  onChange={(event) => {
-                    const checked = event.target.checked;
-                    run(async () => {
-                      if (!data || !progress) return;
-                      if ((await historyUserId()) !== data.userId)
-                        throw new Error("アカウントが変わりました");
-                      const nextExcluded = checked
-                        ? excluded.filter((id) => id !== row.concept.id)
-                        : [...excluded, row.concept.id];
-                      const next = { ...progress, excludedConceptIds: nextExcluded };
-                      const store = await openHistoryStore(data.userId);
-                      try {
-                        await store.saveProgress(next);
-                        if (mounted.current) {
-                          setProgress(next);
-                          setExcluded(nextExcluded);
-                        }
-                      } finally {
-                        store.close();
-                      }
-                    });
-                  }}
-                />
-              </td>
-              <td>
-                {row.concept.label} <small>{row.concept.id}</small>
-              </td>
-              <td>{row.count}</td>
-              <td>{row.lastObservedAt}</td>
-            </tr>
+      {!!progress?.applications.length && (
+        <details>
+          <summary>これまでの反映（{progress.applications.length} 回）</summary>
+          {progress.applications.map((application, index) => (
+            <p key={application.id}>
+              反映 {index + 1}：{application.concepts.length} 個の概念{" "}
+              <button
+                disabled={running}
+                onClick={() =>
+                  run(async () => {
+                    await deleteJson(
+                      "/api/v1/import-sessions/" + encodeURIComponent(application.id),
+                    );
+                    setMessage("この反映を取り消しました。マップの表示を更新します。");
+                    await router.invalidate();
+                  })
+                }
+              >
+                この反映を取り消す
+              </button>
+            </p>
           ))}
-        </tbody>
-      </table>
-      {progress?.applications.map((application) => (
-        <p key={application.id}>
-          {application.id}{" "}
-          <button
-            disabled={running}
-            onClick={() =>
-              run(async () => {
-                await deleteJson(`/api/v1/import-sessions/${encodeURIComponent(application.id)}`);
-                setMessage(
-                  "この反映の追加分を Undo しました。同じ ID を参照するほかのマップからも消えます",
-                );
-                await router.invalidate();
-              })
-            }
-          >
-            この反映を Undo
-          </button>
-        </p>
-      ))}
+        </details>
+      )}
     </section>
   );
 }
