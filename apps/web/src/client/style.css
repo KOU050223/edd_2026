@@ -2163,32 +2163,57 @@ button.link.danger {
 .kind-core {
   --kind-bg: var(--kind-core-bg);
   --kind-fg: var(--kind-core-fg);
+  --kind-bar: #6366f1;
 }
 .kind-event {
   --kind-bg: var(--kind-event-bg);
   --kind-fg: var(--kind-event-fg);
+  --kind-bar: #ec4899;
 }
 .kind-state {
   --kind-bg: var(--kind-state-bg);
   --kind-fg: var(--kind-state-fg);
+  --kind-bar: #eab308;
 }
 .kind-record {
   --kind-bg: var(--kind-record-bg);
   --kind-fg: var(--kind-record-fg);
+  --kind-bar: #0ea5e9;
 }
 .kind-system {
   --kind-bg: var(--kind-system-bg);
   --kind-fg: var(--kind-system-fg);
+  --kind-bar: #14b8a6;
 }
-.node[class*="kind-"]:not(.current) {
-  background: var(--kind-bg);
-  color: var(--kind-fg);
-  border-width: 2px;
+/* B案: 白地＋左の色帯＋種類のタグ。理解度の枠線（緑・橙・灰）が埋もれない。 */
+.node[class*="kind-"] {
+  background: #fff;
+  color: #1f2937;
+  border-width: 1.5px;
+  border-left: 6px solid var(--kind-bar, #cbd5e1);
+}
+.node[class*="kind-"].confirmed {
+  background: #fff;
+  color: #1f2937;
+}
+.node[class*="kind-"].learning {
+  background: #fff;
+  color: #1f2937;
+}
+.node.current[class*="kind-"] {
+  background: #2563eb;
+  color: #fff;
 }
 .node .kind-label {
+  align-self: flex-start;
   font-style: normal;
   font-weight: 600;
-  opacity: 0.85;
+  font-size: 10px;
+  line-height: 16px;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: var(--kind-bg, #e2e8f0);
+  color: var(--kind-fg, #334155);
 }
 .node.dim {
   opacity: 0.35;
