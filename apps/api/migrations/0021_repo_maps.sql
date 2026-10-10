@@ -80,10 +80,15 @@ CREATE TABLE repo_map_usage (
 --
 -- AI の呼び出し 1 回につき 1 行。トークンの枠と、段ごとのモデルの選び方を実測で決めるための記録。
 -- 本文（材料・応答）は持たない。段・モデル・トークン・結果だけ。
--- 下書きを消す（期限・退会）と一緒に消える。
+--
+-- **下書きを参照しない。** 確定で下書きを消しても、成功したマップの呼び出しの記録を残すため
+-- （下書きに CASCADE すると、実測したい成功の分が確定で消える。PR #310 のレビュー）。
+-- draft_id は確定・期限切れで下書きが消えたあとは参照先が無い、ただの識別子。
+-- 持ち主は user_id で、退会では users と一緒に消える。
 CREATE TABLE repo_map_ai_calls (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  draft_id TEXT NOT NULL REFERENCES repo_map_drafts(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  draft_id TEXT NOT NULL,
   stage TEXT NOT NULL CHECK (stage IN ('summarize', 'select', 'candidates', 'tree', 'objectives')),
   model TEXT NOT NULL,
   input_tokens INTEGER NOT NULL,
@@ -92,6 +97,7 @@ CREATE TABLE repo_map_ai_calls (
   created_at TEXT NOT NULL
 );
 CREATE INDEX idx_repo_map_ai_calls_draft ON repo_map_ai_calls (draft_id);
+CREATE INDEX idx_repo_map_ai_calls_user ON repo_map_ai_calls (user_id, created_at);
 
 -- ## repo_file_summaries
 --
@@ -101,18 +107,23 @@ CREATE INDEX idx_repo_map_ai_calls_draft ON repo_map_ai_calls (draft_id);
 -- **利用者に属さない。** user_id を持たず、users を参照しない（concept_checks（0009）と同じ判断）。
 -- 入るのは公開リポジトリ（非公開は受けない）の中身の要約だけで、誰が頼んだかは持たない。
 -- 利用者ごとに分けると、同じ公開ファイルの要約を人数分作ることになる。退会では消えない。
+-- blob SHA はファイル全体を指すが、要約は読んだ範囲と役割（文書・コード・Issue）で変わる。
+-- 同じ中身が文書とコードの両方で現れうるので、役割と読む上限をキーに含める
+-- （含めないと、先頭 4,000 バイトのコードの要約を、全体を読むはずの文書へ使い回す。PR #310 のレビュー）。
 -- prompt_version が今と違う行は使わない（プロンプトを変えたら要約をやり直す）。
 CREATE TABLE repo_file_summaries (
   repo_owner TEXT NOT NULL,
   repo_name TEXT NOT NULL,
   blob_sha TEXT NOT NULL,
-  -- 要約した範囲。大きなファイルは先頭だけ取る（バイト数）。
-  bytes_read INTEGER NOT NULL,
+  -- 要約の役割。プロンプトが役割で変わる。
+  role TEXT NOT NULL CHECK (role IN ('glossary', 'doc', 'code', 'issue')),
+  -- 読む上限（バイト）。大きなファイルは先頭だけ取る。実際に読んだ量ではなく、頼んだ上限。
+  bytes_limit INTEGER NOT NULL,
   summary TEXT NOT NULL,
   model TEXT NOT NULL,
   prompt_version INTEGER NOT NULL,
   created_at TEXT NOT NULL,
-  PRIMARY KEY (repo_owner, repo_name, blob_sha)
+  PRIMARY KEY (repo_owner, repo_name, blob_sha, role, bytes_limit)
 );
 
 -- ## learning_maps の取り込み元のリポジトリ
