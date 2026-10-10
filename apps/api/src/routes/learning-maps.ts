@@ -46,6 +46,7 @@ import {
   type LearningObjectiveView,
   type ListClientMapConceptsResponse,
   type ListLearningMapsResponse,
+  type ListOwnSharedMapsResponse,
   type ListMapVersionsResponse,
   type ListSharedMapsResponse,
   type MapGenerationConsentBody,
@@ -599,6 +600,14 @@ export function createLearningMapsRoute(resolve: LearningMapsDepsResolver) {
     const userId = c.get("user").userId;
     const deps = resolve(c.env);
     const body: ListLearningMapsResponse = { maps: await deps.maps.listByOwner(userId) };
+    return c.json(body, 200, { "cache-control": "no-store" });
+  });
+
+  // 自分が共有しているマップ（「共有したマップ」の画面、#302）。題名・説明は共有の版のもの。
+  app.get("/learning-maps:shared", async (c) => {
+    const userId = c.get("user").userId;
+    const deps = resolve(c.env);
+    const body: ListOwnSharedMapsResponse = { maps: await deps.maps.listSharedByOwner(userId) };
     return c.json(body, 200, { "cache-control": "no-store" });
   });
 

@@ -195,8 +195,6 @@ export interface LearningMapSummary {
   visibility: LearningMapVisibility;
   /** 共有の側のいちばん新しい版の番号。まだ一度も上げていなければ `null`。 */
   latestVersion: number | null;
-  /** その版を上げた日時（「共有したマップ」の一覧に出す、#302）。まだ一度も上げていなければ `null`。 */
-  latestPublishedAt: string | null;
   /** 取り込んだマップ（個人マップ）なら取り込み元（#244 の T3）。そうでなければ `null`。 */
   source: MapSourceView | null;
   nodeCount: number;
@@ -214,10 +212,7 @@ export interface LearningMapSummary {
 export type CreationChecksStatus = "pending" | "done" | "exhausted";
 
 /** `GET /v1/learning-maps/:id` の応答。ノードは保存した順（学習の順）に並ぶ。 */
-export interface LearningMapView extends Omit<
-  LearningMapSummary,
-  "nodeCount" | "latestPublishedAt"
-> {
+export interface LearningMapView extends Omit<LearningMapSummary, "nodeCount"> {
   /**
    * 範囲が「リンクだけ」のときの鍵（#244 の決定 U1）。持ち主だけが受け取り、
    * `/maps/<マップ ID>?key=<鍵>` のリンクを組み立てる。ほかの範囲では `null`。
@@ -475,6 +470,20 @@ export interface SharedMapSummary {
   nodeCount: number;
   version: number;
   publishedAt: string;
+}
+
+/**
+ * 持ち主の「共有したマップ」の一覧の1件（`GET /v1/learning-maps:shared`、#302）。
+ * 題名・説明・ノード数は、全員の一覧と同じく共有の側のいちばん新しい版のもの。
+ * 手元で直してまだ上げていない題名を出すと、開いた先（共有の版）と食い違う（PR #304 のレビュー）。
+ */
+export interface OwnSharedMapSummary extends SharedMapSummary {
+  visibility: ShareScope;
+}
+
+/** `GET /v1/learning-maps:shared` の応答。新しく上げた順。 */
+export interface ListOwnSharedMapsResponse {
+  maps: OwnSharedMapSummary[];
 }
 
 /** `GET /v1/shared-maps` の応答。新しく上げた順。作成者の名前は出さない（T5）。 */

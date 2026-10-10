@@ -56,6 +56,7 @@ import type {
   LearningObjectiveSource,
   MapVersionMeta,
   MapVersionSummary,
+  OwnSharedMapSummary,
   SharedMapSummary,
   ShareScope,
 } from "../contract/learning-maps.js";
@@ -900,7 +901,6 @@ export class InMemoryLearningMapRepository implements LearningMapRepository {
         description: map.description,
         visibility: map.visibility,
         latestVersion: map.latestVersion,
-        latestPublishedAt: map.versions.at(-1)?.createdAt ?? null,
         source: toMapSourceView(this.sourceOf(map)),
         nodeCount: map.nodes.length,
         createdAt: map.createdAt,
@@ -1265,9 +1265,30 @@ export class InMemoryLearningMapRepository implements LearningMapRepository {
 
   /** D1 の ORDER BY v.created_at_ms DESC, m.id ASC と一致させる。 */
   listPublic(limit: number): Promise<SharedMapSummary[]> {
+    const listed = this.sharedSummaries((map) => map.visibility === "public");
+    return Promise.resolve(listed.slice(0, limit).map((entry) => entry.summary));
+  }
+
+  listSharedByOwner(ownerUserId: string): Promise<OwnSharedMapSummary[]> {
+    const listed = this.sharedSummaries(
+      (map) => map.ownerUserId === ownerUserId && map.visibility !== "private",
+    );
+    return Promise.resolve(
+      listed.map(({ summary, visibility }) => {
+        if (visibility === "private") throw new Error(`shared map is private: ${summary.id}`);
+        return { ...summary, visibility };
+      }),
+    );
+  }
+
+  /**
+   * 共有の一覧（全員・持ち主）の1件。題名・説明・ノード数は、いちばん新しい版の中身から読む。
+   * 版の無いマップは出さない。D1 の ORDER BY v.created_at_ms DESC, m.id ASC と一致させる。
+   */
+  private sharedSummaries(include: (map: InMemoryLearningMap) => boolean) {
     const listed = [...this.store.learningMaps.values()].flatMap((map) => {
       const latest = map.versions.at(-1);
-      if (map.visibility !== "public" || latest === undefined) return [];
+      if (!include(map) || latest === undefined) return [];
       const content = JSON.parse(latest.content) as {
         title: string;
         description: string;
@@ -1283,6 +1304,7 @@ export class InMemoryLearningMapRepository implements LearningMapRepository {
             version: latest.version,
             publishedAt: latest.createdAt,
           },
+          visibility: map.visibility,
           at: latest.createdAtMs,
         },
       ];
@@ -1291,7 +1313,7 @@ export class InMemoryLearningMapRepository implements LearningMapRepository {
       (a, b) =>
         b.at - a.at || (a.summary.id < b.summary.id ? -1 : a.summary.id > b.summary.id ? 1 : 0),
     );
-    return Promise.resolve(listed.slice(0, limit).map((entry) => entry.summary));
+    return listed;
   }
 
   delete(ownerUserId: string, mapId: string): Promise<boolean> {

@@ -45,6 +45,7 @@ import type {
   LearningObjectiveSource,
   MapVersionMeta,
   MapVersionSummary,
+  OwnSharedMapSummary,
   SharedMapSummary,
   ShareScope,
 } from "../contract/learning-maps.js";
@@ -1788,8 +1789,6 @@ interface LearningMapRow {
   visibility: string;
   share_scope: string | null;
   latest_version: number | null;
-  /** `listByOwner` だけが読む（#302）。 */
-  latest_published_at?: string | null;
   source_map_id: string | null;
   source_version: number | null;
   source_key: string | null;
@@ -1947,6 +1946,45 @@ const SOURCE_COLUMNS = `m.source_map_id, m.source_version, m.source_key, m.sourc
    WHERE v.map_id = m.source_map_id
      AND (s.share_scope = 'public' OR (s.share_scope = 'link' AND s.share_key = m.source_key))
    ORDER BY v.version DESC LIMIT 1) AS source_latest_at`;
+
+/** 共有の一覧（全員・持ち主）の列。題名・説明・ノード数は版の中身から読む。 */
+const SHARED_SUMMARY_COLUMNS = `m.id,
+  json_extract(v.content, '$.title') AS title,
+  json_extract(v.content, '$.description') AS description,
+  json_array_length(v.content, '$.nodes') AS node_count,
+  v.version, v.created_at`;
+
+/** そのマップのいちばん新しい版だけを結ぶ。 */
+const LATEST_VERSION_JOIN = `JOIN learning_map_versions v
+  ON v.map_id = m.id
+ AND v.version = (SELECT MAX(version) FROM learning_map_versions WHERE map_id = m.id)`;
+
+interface SharedSummaryRow {
+  id: string;
+  title: unknown;
+  description: unknown;
+  node_count: unknown;
+  version: number;
+  created_at: string;
+}
+
+function toSharedMapSummary(row: SharedSummaryRow): SharedMapSummary {
+  if (
+    typeof row.title !== "string" ||
+    typeof row.description !== "string" ||
+    typeof row.node_count !== "number"
+  ) {
+    throw new Error(`learning_map_versions.content has an unexpected shape: ${row.id}`);
+  }
+  return {
+    id: row.id,
+    title: row.title,
+    description: row.description,
+    nodeCount: row.node_count,
+    version: row.version,
+    publishedAt: row.created_at,
+  };
+}
 
 function toMapSource(row: LearningMapRow): StoredMapSource | null {
   if (row.source_map_id === null) return null;
@@ -2177,8 +2215,6 @@ export class D1LearningMapRepository implements LearningMapRepository {
         `SELECT m.id, m.title, m.description, m.visibility, m.share_scope, m.created_at, m.updated_at,
                 (SELECT MAX(version) FROM learning_map_versions v WHERE v.map_id = m.id)
                   AS latest_version,
-                (SELECT created_at FROM learning_map_versions v WHERE v.map_id = m.id
-                  ORDER BY version DESC LIMIT 1) AS latest_published_at,
                 ${SOURCE_COLUMNS},
                 (SELECT COUNT(*) FROM learning_map_nodes n WHERE n.map_id = m.id) AS node_count
          FROM learning_maps m
@@ -2193,7 +2229,6 @@ export class D1LearningMapRepository implements LearningMapRepository {
       description: row.description,
       visibility: toLearningMapVisibility(row),
       latestVersion: row.latest_version,
-      latestPublishedAt: row.latest_published_at ?? null,
       source: toMapSourceView(toMapSource(row)),
       nodeCount: row.node_count,
       createdAt: row.created_at,
@@ -2889,44 +2924,35 @@ export class D1LearningMapRepository implements LearningMapRepository {
     // 題名・説明・ノード数は、手元ではなく共有の側（いちばん新しい版の中身）から読む。
     const { results } = await this.db
       .prepare(
-        `SELECT m.id,
-                json_extract(v.content, '$.title') AS title,
-                json_extract(v.content, '$.description') AS description,
-                json_array_length(v.content, '$.nodes') AS node_count,
-                v.version, v.created_at
+        `SELECT ${SHARED_SUMMARY_COLUMNS}
          FROM learning_maps m
-         JOIN learning_map_versions v
-           ON v.map_id = m.id
-          AND v.version = (SELECT MAX(version) FROM learning_map_versions WHERE map_id = m.id)
+         ${LATEST_VERSION_JOIN}
          WHERE m.share_scope = 'public'
          ORDER BY v.created_at_ms DESC, m.id ASC
          LIMIT ?`,
       )
       .bind(limit)
-      .all<{
-        id: string;
-        title: unknown;
-        description: unknown;
-        node_count: unknown;
-        version: number;
-        created_at: string;
-      }>();
+      .all<SharedSummaryRow>();
+    return results.map(toSharedMapSummary);
+  }
+
+  async listSharedByOwner(ownerUserId: string): Promise<OwnSharedMapSummary[]> {
+    // 全員の一覧と同じく、題名・説明・ノード数は共有の側の版から読む（PR #304 のレビュー）。
+    const { results } = await this.db
+      .prepare(
+        `SELECT ${SHARED_SUMMARY_COLUMNS}, m.visibility, m.share_scope
+         FROM learning_maps m
+         ${LATEST_VERSION_JOIN}
+         WHERE m.owner_user_id = ? AND m.share_scope IS NOT NULL
+         ORDER BY v.created_at_ms DESC, m.id ASC`,
+      )
+      .bind(ownerUserId)
+      .all<SharedSummaryRow & { visibility: string; share_scope: string | null }>();
     return results.map((row) => {
-      if (
-        typeof row.title !== "string" ||
-        typeof row.description !== "string" ||
-        typeof row.node_count !== "number"
-      ) {
-        throw new Error(`learning_map_versions.content has an unexpected shape: ${row.id}`);
-      }
-      return {
-        id: row.id,
-        title: row.title,
-        description: row.description,
-        nodeCount: row.node_count,
-        version: row.version,
-        publishedAt: row.created_at,
-      };
+      const visibility = toLearningMapVisibility(row);
+      // share_scope IS NOT NULL で選んでいるので private は来ない。来たら壊れている。
+      if (visibility === "private") throw new Error(`shared map is private: ${row.id}`);
+      return { ...toSharedMapSummary(row), visibility };
     });
   }
 

@@ -104,6 +104,14 @@ export interface SharedMapSummary {
   publishedAt: string;
 }
 
+/**
+ * 自分が共有しているマップの1件（`GET /v1/learning-maps:shared`、#302）。
+ * 題名・説明・ノード数は共有の版のもの（手元で直してまだ上げていない題名ではない）。
+ */
+export interface OwnSharedMapSummary extends SharedMapSummary {
+  visibility: ShareScope;
+}
+
 /** 共有の側のいちばん新しい版（`GET /v1/shared-maps/:id`）。 */
 export interface SharedMapView {
   id: string;
@@ -282,6 +290,14 @@ export function restoreMapVersion(
     fetcher,
     timeoutMs,
   );
+}
+
+/** 自分が共有しているマップ。新しく上げた順（#302）。 */
+export function fetchOwnSharedMaps(
+  fetcher: typeof fetch = fetch,
+  retry: boolean | number = false,
+): Promise<{ maps: OwnSharedMapSummary[] }> {
+  return requestJson(`${LEARNING_MAPS_PATH}:shared`, fetcher, retry);
 }
 
 export function fetchSharedMaps(

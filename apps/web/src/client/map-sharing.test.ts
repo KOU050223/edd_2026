@@ -5,6 +5,7 @@ import {
   describeSummary,
   fetchPublishPreview,
   publishLearningMap,
+  fetchOwnSharedMaps,
   fetchReimportPreview,
   fetchSharedMap,
   importSharedMap,
@@ -110,6 +111,12 @@ test("「リンクだけ」のマップは鍵を付けて読み、リンクに�
   expect(shareLinkOf("https://example.test", "mrust0001", "abc")).toBe(
     "https://example.test/maps/mrust0001?key=abc",
   );
+});
+
+test("共有したマップの一覧は、自分のマップの口（learning-maps:shared）から読む（#302）", async () => {
+  const { fetcher, calls } = respond(200, { maps: [] });
+  await expect(fetchOwnSharedMaps(fetcher)).resolves.toEqual({ maps: [] });
+  expect(calls[0]!.url).toBe("/api/v1/learning-maps:shared");
 });
 
 test("取り込みは鍵を本文で送り、取り込み直しは見た版・回数・残すノードを送る", async () => {

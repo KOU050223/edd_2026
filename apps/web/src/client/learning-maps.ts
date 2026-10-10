@@ -70,8 +70,6 @@ export interface LearningMapSummary {
   visibility: LearningMapVisibility;
   /** 共有の側のいちばん新しい版の番号。まだ一度も共有へ上げていなければ `null`。 */
   latestVersion: number | null;
-  /** その版を上げた日時（「共有したマップ」の一覧、#302）。まだ一度も上げていなければ `null`。 */
-  latestPublishedAt: string | null;
   /** 取り込んだマップなら取り込み元（#244）。 */
   source: MapSourceView | null;
   nodeCount: number;
@@ -88,10 +86,7 @@ export interface LearningMapSummary {
  */
 export type CreationChecksStatus = "pending" | "done" | "exhausted";
 
-export interface LearningMapView extends Omit<
-  LearningMapSummary,
-  "nodeCount" | "latestPublishedAt"
-> {
+export interface LearningMapView extends Omit<LearningMapSummary, "nodeCount"> {
   /** 範囲が「リンクだけ」のときの鍵（#244 の決定 U1）。リンクは `/maps/<ID>?key=<鍵>`。 */
   shareKey: string | null;
   nodes: LearningMapNodeView[];

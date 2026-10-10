@@ -1,11 +1,11 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { fetchLearningMaps } from "../../learning-maps.js";
-import { VISIBILITY_LABELS } from "../../map-sharing.js";
+import { fetchOwnSharedMaps, VISIBILITY_LABELS } from "../../map-sharing.js";
 import { takeLoginRetry } from "../../session.js";
 
 /**
  * 共有したマップの一覧（#302 の O1-c）。自分のマップのうち、共有しているものだけを出す。
- * 開くと、ほかの人に見えているのと同じ共有の版（`/shared/<ID>`）を見られる。
+ * 題名・説明・ノード数は共有の版のもの（PR #304 のレビュー）。開くと、ほかの人に見えているのと
+ * 同じ共有の版（`/shared/<ID>`）を見られる。
  * 手元と共有の版の差は出さない（O2-a。差は「共有の設定」の確認画面で見る）。
  */
 function SharedMapList() {
@@ -37,9 +37,8 @@ function SharedMapList() {
                 <h2>{map.title}</h2>
                 {map.description && <p className="muted">{map.description}</p>}
                 <p className="muted">
-                  {VISIBILITY_LABELS[map.visibility]}・版 {map.latestVersion}
-                  {map.latestPublishedAt !== null &&
-                    `・${new Date(map.latestPublishedAt).toLocaleString("ja-JP")} に上げた`}
+                  {VISIBILITY_LABELS[map.visibility]}・{map.nodeCount} ノード・版 {map.version}・
+                  {new Date(map.publishedAt).toLocaleString("ja-JP")} に上げた
                 </p>
               </Link>
             </li>
@@ -53,12 +52,7 @@ function SharedMapList() {
 export const Route = createFileRoute("/_framed/shared/")({
   // 共有の設定から戻ってきたとき、古い一覧を見せない。
   staleTime: 0,
-  loader: async () => {
-    const { maps } = await fetchLearningMaps(fetch, takeLoginRetry());
-    // 共有しているもの（範囲が private 以外で、版がある）だけ。並びは自分のマップと同じ（更新の新しい順）。
-    return {
-      maps: maps.filter((map) => map.visibility !== "private" && map.latestVersion !== null),
-    };
-  },
+  // 並びは新しく上げた順。
+  loader: () => fetchOwnSharedMaps(fetch, takeLoginRetry()),
   component: SharedMapList,
 });
