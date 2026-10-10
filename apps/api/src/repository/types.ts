@@ -656,6 +656,29 @@ export interface StoredLearningMap extends StoredMapContent {
   creationChecks: StoredCreationChecks | null;
 }
 
+/** ノードの根拠 1 件（migrations/0021_repo_maps.sql の learning_map_node_sources）。 */
+export interface RepoMapNodeSource {
+  conceptId: string;
+  /** ノードの中での並び。 */
+  position: number;
+  kind: "doc" | "glossary" | "code" | "issue" | "schema";
+  /** `kind` が issue のときは null。それ以外はリポジトリの中のパス。 */
+  path: string | null;
+  /** `kind` が issue のときの番号。それ以外は null。 */
+  issueNumber: number | null;
+  /** 要約（AI へ渡した材料）。 */
+  summary: string;
+}
+
+/** リポジトリから作ったマップの取り込み元（`learning_maps.repo_url`・`repo_commit_sha`）と根拠。 */
+export interface RepoMapSourceInput {
+  /** `github.com/owner/repo`。 */
+  url: string;
+  /** 根拠のリンクを固定した commit SHA。 */
+  commitSha: string;
+  nodeSources: readonly RepoMapNodeSource[];
+}
+
 /** 取り込み元（migrations/0020_learning_map_imports.sql）。 */
 export interface StoredMapSource {
   mapId: string;
@@ -749,11 +772,19 @@ export interface LearningMapRepository {
       objectives?: readonly StoredLearningObjective[];
       /** AI で作るときに「確認問題も作る」を選んだら、そのときの技術レベル（#247）。 */
       creationChecksLevel?: CheckLevel;
+      /** リポジトリから作ったマップの取り込み元と、ノードごとの根拠（#249）。 */
+      repoSource?: RepoMapSourceInput;
       nowIso: string;
       nowMs: number;
       maxMaps: number;
     },
   ): Promise<{ created: boolean }>;
+
+  /** リポジトリから作ったマップの取り込み元と根拠。そうでないマップ・他人のマップは `null`。 */
+  getRepoSource(
+    ownerUserId: string,
+    mapId: string,
+  ): Promise<{ url: string; commitSha: string; nodeSources: RepoMapNodeSource[] } | null>;
 
   /**
    * 作成時の確認問題を頼む権利を取る（#247）。まだ作成済みでなく、頼んだ回数が

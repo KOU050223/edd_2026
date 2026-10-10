@@ -12,6 +12,9 @@ import { Hono, type Context } from "hono";
 import { HTTPException } from "hono/http-exception";
 import type { AuthVariables } from "../auth/middleware.js";
 import {
+  confirmRepoMapDraftSchema,
+  type ConfirmRepoMapDraftResponse,
+  type RepoMapSourcesResponse,
   candidatesRepoMapDraftSchema,
   rebuildRepoMapDraftSchema,
   createRepoMapDraftSchema,
@@ -23,6 +26,8 @@ import {
 import { AiStageFailure } from "../repo-maps/ai.js";
 import { GitHubError } from "../repo-maps/github.js";
 import { buildCandidates } from "../repo-maps/candidates.js";
+import { issueLink, parseRepoUrl, permalink } from "../repo-maps/url.js";
+import { confirmDraft } from "../repo-maps/confirm.js";
 import { summarizeDraft } from "../repo-maps/summarize.js";
 import type { GitHubErrorKind } from "../repo-maps/github.js";
 import {
@@ -181,6 +186,22 @@ export function createRepoMapsRoute(resolve: RepoMapsDepsResolver) {
     }
   });
 
+  app.post("/repo-map-drafts/:id/confirm", async (c) => {
+    const userId = c.get("user").userId;
+    const input = await parseBody(c, confirmRepoMapDraftSchema);
+    try {
+      const body: ConfirmRepoMapDraftResponse = await confirmDraft(
+        resolve(c.env),
+        userId,
+        c.req.param("id"),
+        input,
+      );
+      return c.json(body, 201, NO_STORE);
+    } catch (error) {
+      return respondFailure(c, error);
+    }
+  });
+
   app.post("/repo-map-drafts/:id/rebuild", async (c) => {
     const userId = c.get("user").userId;
     const input = await parseBody(c, rebuildRepoMapDraftSchema);
@@ -194,6 +215,38 @@ export function createRepoMapsRoute(resolve: RepoMapsDepsResolver) {
     } catch (error) {
       return respondFailure(c, error);
     }
+  });
+
+  app.get("/repo-maps/:mapId/sources", async (c) => {
+    const userId = c.get("user").userId;
+    const found = await resolve(c.env).maps?.getRepoSource(userId, c.req.param("mapId"));
+    if (found === undefined) {
+      throw new HTTPException(503, { message: "maps are not configured" });
+    }
+    // 他人のマップ・リポジトリから作っていないマップは、存在しないのと同じ 404。
+    if (found === null) throw new HTTPException(404, { message: "repo map source not found" });
+    const ref = parseRepoUrl(found.url);
+    if (ref === null) throw new Error(`stored repo url is invalid: ${found.url}`);
+    const byNode = new Map<string, RepoMapSourcesResponse["nodes"][number]["sources"]>();
+    for (const s of found.nodeSources) {
+      const list = byNode.get(s.conceptId) ?? [];
+      list.push({
+        kind: s.kind,
+        path: s.path,
+        issueNumber: s.issueNumber,
+        url:
+          s.kind === "issue" && s.issueNumber !== null
+            ? issueLink(ref, s.issueNumber)
+            : permalink(ref, found.commitSha, s.path ?? ""),
+        summary: s.summary,
+      });
+      byNode.set(s.conceptId, list);
+    }
+    const body: RepoMapSourcesResponse = {
+      repo: { url: found.url, commitSha: found.commitSha },
+      nodes: [...byNode].map(([conceptId, sources]) => ({ conceptId, sources })),
+    };
+    return c.json(body, 200, NO_STORE);
   });
 
   app.get("/repo-map-drafts", async (c) => {

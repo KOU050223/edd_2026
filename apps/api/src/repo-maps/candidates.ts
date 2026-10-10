@@ -42,9 +42,11 @@ export const THIN_DOC_BYTES = 2_048;
 export const CANDIDATES_MAX_OUTPUT_TOKENS = 4_096;
 export const CANDIDATES_THINKING_BUDGET = 512;
 
-const MAX_NAME = 60;
-const MAX_ORIGINAL = 80;
-const MAX_DESCRIPTION = 200;
+// ノードの表示名（40）・概要（200）に、そのまま入る長さにする。確定で黙って切らないため。
+// 概要は説明に「（原文: ○○）」を足すので、説明と原文の名前は短めにする。
+const MAX_NAME = 40;
+const MAX_ORIGINAL = 40;
+const MAX_DESCRIPTION = 140;
 
 /** 名前のつき合わせ用。英数字だけの小文字にする（`order_items` と `OrderItem` を同じ扱いにする）。 */
 export function normalizeName(text: string): string {
@@ -120,6 +122,12 @@ export async function buildCandidates(
     throw new RepoMapRefusal("not_found", "下書きが見つかりません。", {});
   }
   // 済んでいる段は、作り直しでなければ、何も送らずに結果を返す。
+  // 確定済みの下書きは、材料を消している。作り直しも、候補の再作成もできない。
+  if (draft.confirmedMapId !== null && input.rebuild) {
+    throw new RepoMapRefusal("conflict", "この下書きは確定済みです。", {
+      mapId: draft.confirmedMapId,
+    });
+  }
   if (draft.status === "candidates" && !input.rebuild) return draftView(draft);
   // 作り直しは、候補を出したあとだけ。最初の 1 回で作り直しの回数を使わせない。
   if (input.rebuild && draft.status === "summarized") {

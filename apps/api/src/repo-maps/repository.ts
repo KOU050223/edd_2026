@@ -48,6 +48,8 @@ export interface StoredRepoMapDraft {
   /** `failed` のときに、どの段から続けるか。 */
   failedStage: DraftStage | null;
   failureCode: string | null;
+  /** 確定して作ったマップ。確定の途中で落ちても、二重にマップを作らないための印。 */
+  confirmedMapId: string | null;
   /** この下書きで使った AI の呼び出しの合計。段ごとの内訳は `repo_map_ai_calls`。 */
   aiCalls: number;
   inputTokens: number;
@@ -162,6 +164,17 @@ export interface RepoMapDraftRepository {
 
   /** 要約をまとめて保管する（1 回の書き込み）。同じキーがあれば置き換える。 */
   putSummaries(summaries: readonly StoredSummary[]): Promise<void>;
+
+  /**
+   * 確定でマップができたことを、占有を持っているときだけ下書きへ書く。
+   * 以後、この下書きは占有できず、確定をもう一度呼ばれても、このマップを返す。
+   */
+  markConfirmed(params: {
+    userId: string;
+    id: string;
+    claim: string;
+    mapId: string;
+  }): Promise<boolean>;
 
   /** 持ち主の下書きを消す。無ければ false。 */
   delete(userId: string, id: string): Promise<boolean>;
