@@ -205,6 +205,9 @@ const MAP_PATHS = [
   "/v1/shared-maps",
   "/v1/shared-maps/m1234abcd",
   "/v1/fixed-maps",
+  "/v1/repo-maps:inspect",
+  "/v1/repo-map-drafts",
+  "/v1/repo-map-drafts/r1234abcd",
 ];
 
 test("マップ系の経路は Profile ではなくマップの枠で数える（#299）", async () => {

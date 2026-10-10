@@ -1,4 +1,4 @@
-/// <reference types="node" />
+﻿/// <reference types="node" />
 import { afterEach, expect, test } from "vitest";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { readFileSync } from "node:fs";
@@ -23,7 +23,7 @@ function repositories() {
   );
   sqlite.exec(
     readFileSync(
-      new URL("../../migrations/0021_history_observation_keys.sql", import.meta.url),
+      new URL("../../migrations/0022_history_observation_keys.sql", import.meta.url),
       "utf8",
     ),
   );

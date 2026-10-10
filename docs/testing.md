@@ -1,4 +1,4 @@
-# 手動確認手順
+﻿# 手動確認手順
 
 手動での動作確認手順をここにまとめる。
 
@@ -291,7 +291,7 @@ API キーは VS Code の SecretStorage にだけ保存され、設定ファイ�
 
 ## Web の Claude Code 履歴（#157）
 
-前提: ローカル API に migration `0021_history_observation_keys.sql` まで適用し、Web と API を起動する。
+前提: ローカル API に migration `0022_history_observation_keys.sql` まで適用し、Web と API を起動する。
 実 AI を使う確認には設定済みの Managed AI と利用枠が必要。通常の自動テストは AI を偽物に差し替える。
 
 1. Chrome / Edge でログインし、「Claude Code 履歴」から履歴フォルダを選ぶ。
