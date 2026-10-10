@@ -170,6 +170,12 @@ export interface UpstreamRequest {
    * マップの生成（`maps/generate.ts`）だけが、1回で多くのノードを作るために広げる。
    */
   maxOutputTokens?: number;
+  /**
+   * 思考に使ってよいトークンの上限。省略は上流の既定（無制限に近い）。
+   * 思考が出力上限を食うと JSON が途中で切れる（#249 のスパイクで、出力上限 3,000 のうち思考が
+   * 約 2,900 を使った）。要約・選択のような短い出力は小さく絞る。
+   */
+  thinkingBudget?: number;
   /** ログに載せるため。マップの生成では何を作る呼び出しか（例: `map:skeleton`）。 */
   conceptId: string;
 }
@@ -327,6 +333,9 @@ export function requestCheckGeneration(request: UpstreamRequest): Promise<Upstre
                 // JSON を要求する。コードブロックの囲みが来ないようにするための指定で、
                 // 受理側（`response.ts`）は囲みを剥がさずに拒否する。
                 responseMimeType: "application/json",
+                ...(request.thinkingBudget === undefined
+                  ? {}
+                  : { thinkingConfig: { thinkingBudget: request.thinkingBudget } }),
               },
             }),
           },

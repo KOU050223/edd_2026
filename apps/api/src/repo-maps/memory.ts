@@ -4,7 +4,15 @@
  * D1 実装との差異が出ないよう、月と日の切り替わり・枠の判定を SQL 側と一致させてある。
  */
 
-import type { RepoMapDraftRepository, RepoMapUsage, StoredRepoMapDraft } from "./repository.js";
+import type {
+  AiCallRecord,
+  DraftStage,
+  DraftStatus,
+  RepoMapDraftRepository,
+  RepoMapUsage,
+  StoredRepoMapDraft,
+  StoredSummary,
+} from "./repository.js";
 
 interface UsageRow {
   monthlyDrafts: number;
@@ -15,6 +23,9 @@ interface UsageRow {
 
 export class InMemoryRepoMapDraftRepository implements RepoMapDraftRepository {
   private readonly drafts = new Map<string, StoredRepoMapDraft>();
+  /** テスト用: 記録した AI の呼び出し（確定・期限切れで下書きが消えても残る）。 */
+  readonly aiCallRows: { userId: string; draftId: string; call: AiCallRecord }[] = [];
+  private readonly summaries = new Map<string, StoredSummary>();
   /** userId -> (monthKey -> 集計)。主キーを D1 と揃える。 */
   private readonly usageRows = new Map<string, Map<string, UsageRow>>();
   /** 退会中の利用者。`reserveDraft` と `create` が例外にする。 */
@@ -89,6 +100,120 @@ export class InMemoryRepoMapDraftRepository implements RepoMapDraftRepository {
     if (missing !== null) return Promise.reject(missing);
     this.drafts.set(draft.id, structuredClone(draft));
     return Promise.resolve();
+  }
+
+  update(
+    userId: string,
+    id: string,
+    patch: {
+      status: DraftStatus;
+      stageState: string;
+      stageStateVersion: number;
+      failedStage: DraftStage | null;
+      failureCode: string | null;
+      updatedAt: string;
+      claim?: string;
+    },
+  ): Promise<boolean> {
+    const draft = this.drafts.get(id);
+    if (draft === undefined || draft.userId !== userId) return Promise.resolve(false);
+    if (patch.claim !== undefined && draft.failureCode !== patch.claim) {
+      return Promise.resolve(false);
+    }
+    this.drafts.set(id, {
+      ...draft,
+      status: patch.status,
+      stageState: patch.stageState,
+      stageStateVersion: patch.stageStateVersion,
+      failedStage: patch.failedStage,
+      failureCode: patch.failureCode,
+      updatedAt: patch.updatedAt,
+    });
+    return Promise.resolve(true);
+  }
+
+  claimStage(params: {
+    userId: string;
+    id: string;
+    claim: string;
+    nowMs: number;
+    leaseMs: number;
+  }): Promise<boolean> {
+    const draft = this.drafts.get(params.id);
+    if (draft === undefined || draft.userId !== params.userId) return Promise.resolve(false);
+    if (draft.status !== "fetched" && draft.status !== "failed") return Promise.resolve(false);
+    const held = draft.failureCode;
+    if (held?.startsWith("claim:")) {
+      const heldAt = Number(held.slice(6, 19));
+      if (heldAt >= params.nowMs - params.leaseMs) return Promise.resolve(false);
+    }
+    this.drafts.set(params.id, { ...draft, failureCode: params.claim });
+    return Promise.resolve(true);
+  }
+
+  recordAiCalls(params: {
+    userId: string;
+    draftId: string;
+    monthKey: string;
+    dayKey: string;
+    updatedAt: string;
+    calls: readonly AiCallRecord[];
+  }): Promise<void> {
+    const { userId, draftId, monthKey, dayKey } = params;
+    const input = params.calls.reduce((n, c) => n + c.inputTokens, 0);
+    const output = params.calls.reduce((n, c) => n + c.outputTokens, 0);
+    for (const call of params.calls) this.aiCallRows.push({ userId, draftId, call: { ...call } });
+    const draft = this.drafts.get(draftId);
+    if (draft !== undefined && draft.userId === userId) {
+      this.drafts.set(draftId, {
+        ...draft,
+        aiCalls: draft.aiCalls + params.calls.length,
+        inputTokens: draft.inputTokens + input,
+        outputTokens: draft.outputTokens + output,
+      });
+    }
+    const row = this.usageRows.get(userId)?.get(monthKey);
+    this.write(userId, monthKey, {
+      monthlyDrafts: row?.monthlyDrafts ?? 0,
+      dayKey: row?.dayKey ?? dayKey,
+      dailyRebuilds: row?.dailyRebuilds ?? 0,
+      monthlyTokens: (row?.monthlyTokens ?? 0) + input + output,
+    });
+    return Promise.resolve();
+  }
+
+  getSummaries(params: {
+    repoOwner: string;
+    repoName: string;
+    promptVersion: number;
+    blobShas: readonly string[];
+  }): Promise<StoredSummary[]> {
+    const wanted = new Set(params.blobShas);
+    return Promise.resolve(
+      [...this.summaries.values()].filter(
+        (s) =>
+          s.repoOwner === params.repoOwner &&
+          s.repoName === params.repoName &&
+          s.promptVersion === params.promptVersion &&
+          wanted.has(s.blobSha),
+      ),
+    );
+  }
+
+  putSummaries(summaries: readonly StoredSummary[]): Promise<void> {
+    for (const summary of summaries) this.putOne(summary);
+    return Promise.resolve();
+  }
+
+  private putOne(summary: StoredSummary): void {
+    const key = [
+      summary.repoOwner,
+      summary.repoName,
+      summary.blobSha,
+      summary.role,
+      String(summary.bytesLimit),
+    ].join("|");
+    this.summaries.set(key, { ...summary });
   }
 
   get(userId: string, id: string): Promise<StoredRepoMapDraft | null> {
