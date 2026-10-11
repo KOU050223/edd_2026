@@ -110,8 +110,9 @@ export const Points = ({
               display: "flex",
               gap: 18,
               alignItems: "flex-start",
-              opacity: 1 - fade * 0.55,
               ...riseIn(frame, p.start, 24),
+              // riseIn の opacity を上書きして、古い要点を薄くする
+              opacity: (1 - fade * 0.55) * progress(frame, p.start, 14),
             }}
           >
             <span

@@ -416,13 +416,16 @@ const ImportSheet = ({ frame }: { frame: number }) => {
           }}
         >
           <Button>閉じる</Button>
-          <Button primary style={{ width: 250, textAlign: "center" }}>
-            {step === "sources"
-              ? "Learning Map を作る"
-              : step === "applied"
-                ? "この Import を取り消す"
-                : "地図に適用"}
-          </Button>
+          {/* 読み解いている間は、Desktop と同じく主ボタンを出さない（history.js の showStep） */}
+          {step !== "progress" && (
+            <Button primary style={{ width: 250, textAlign: "center" }}>
+              {step === "sources"
+                ? "Learning Map を作る"
+                : step === "applied"
+                  ? "この Import を取り消す"
+                  : "地図に適用"}
+            </Button>
+          )}
         </div>
       </div>
     </>
