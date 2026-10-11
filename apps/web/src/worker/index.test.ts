@@ -1,4 +1,4 @@
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { CONSENT_NOTICE_VERSION } from "@gakushu-sochi/domain";
 import { createWebApp } from "./index.js";
 import { createSession, readSession } from "./session.js";
@@ -471,7 +471,7 @@ test("ログアウトと並行する refresh は、消したセッションを�
   release();
   await api;
 
-  expect(logout.status).toBe(204);
+  expect(logout.status).toBe(200);
   // ログアウト後に KV へセッションが書き戻されていないこと。
   await expect(readSession(kvOf(sessions), token)).resolves.toBeUndefined();
 });
@@ -588,7 +588,7 @@ test("ログアウトは先に KV を消し、その後 Refresh Token を撤回�
     envWith(sessions),
   );
 
-  expect(response.status).toBe(204);
+  expect(response.status).toBe(200);
   expect(response.headers.get("set-cookie")).toContain("Max-Age=0");
   expect(revoked).toEqual([
     { client_id: "web-client", client_secret: "web-secret", token: "rt-1" },
@@ -609,8 +609,90 @@ test("撤回に失敗してもログアウトは完了する（利用者を守�
     envWith(sessions),
   );
 
-  expect(response.status).toBe(204);
+  expect(response.status).toBe(200);
   await expect(readSession(kvOf(sessions), token)).resolves.toBeUndefined();
+});
+
+test("ログアウトは IdP のログアウトの URL を返し、IdP からはトップへ戻す（#301）", async () => {
+  const sessions = new MemoryKv();
+  const token = await createSession(kvOf(sessions), { refreshToken: "rt-1", sub: "auth0|a" });
+  const app = createWebApp({ fetch: async () => new Response(null, { status: 200 }) });
+
+  const response = await app.request(
+    "https://web.example.test/logout",
+    { method: "POST", headers: { cookie: `session=${token}` } },
+    envWith(sessions),
+  );
+
+  const { redirectTo } = (await response.json()) as { redirectTo: string };
+  const url = new URL(redirectTo);
+  expect(url.origin + url.pathname).toBe("https://idp.example.test/v2/logout");
+  expect(url.searchParams.get("client_id")).toBe("web-client");
+  expect(url.searchParams.get("returnTo")).toBe("https://web.example.test/");
+  expect(response.headers.get("cache-control")).toBe("no-store");
+});
+
+test("撤回の応答を待たずに IdP のログアウトの URL を返し、撤回は応答のあとに済ませる（PR #303）", async () => {
+  const sessions = new MemoryKv();
+  const token = await createSession(kvOf(sessions), { refreshToken: "rt-1", sub: "auth0|a" });
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const revoked: string[] = [];
+  const app = createWebApp({
+    fetch: async (input) => {
+      // 撤回が締め切り近くまで返らない IdP。
+      await held;
+      revoked.push(new Request(input).url);
+      return new Response(null, { status: 200 });
+    },
+  });
+  const pending: Promise<unknown>[] = [];
+  const context = {
+    waitUntil: (promise: Promise<unknown>) => void pending.push(promise),
+    passThroughOnException: () => undefined,
+    props: {},
+  };
+
+  const response = await app.request(
+    "https://web.example.test/logout",
+    { method: "POST", headers: { cookie: `session=${token}` } },
+    envWith(sessions),
+    context as unknown as ExecutionContext,
+  );
+
+  // 撤回はまだ終わっていないが、応答は返っている。KV はもう消えている。
+  expect(response.status).toBe(200);
+  const { redirectTo } = (await response.json()) as { redirectTo: string };
+  expect(new URL(redirectTo).pathname).toBe("/v2/logout");
+  await expect(readSession(kvOf(sessions), token)).resolves.toBeUndefined();
+  expect(revoked).toEqual([]);
+  expect(pending).toHaveLength(1);
+
+  release();
+  await Promise.all(pending);
+  expect(revoked).toEqual(["https://idp.example.test/oauth/revoke"]);
+});
+
+test("IdP の設定が読めなくても、ログアウトは済ませてトップへ戻す（#301）", async () => {
+  const sessions = new MemoryKv();
+  const token = await createSession(kvOf(sessions), { refreshToken: "rt-1", sub: "auth0|a" });
+  const app = createWebApp({ fetch: async () => new Response(null, { status: 200 }) });
+  const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+  const response = await app.request(
+    "https://web.example.test/logout",
+    { method: "POST", headers: { cookie: `session=${token}` } },
+    envWith(sessions, { AUTH_CLIENT_ID: undefined }),
+  );
+
+  expect(response.status).toBe(200);
+  expect(response.headers.get("set-cookie")).toContain("Max-Age=0");
+  await expect(response.json()).resolves.toEqual({ redirectTo: "https://web.example.test/" });
+  await expect(readSession(kvOf(sessions), token)).resolves.toBeUndefined();
+  expect(errors).toHaveBeenCalled();
+  errors.mockRestore();
 });
 
 test("loopback 以外の HTTP API_ORIGIN へトークンを送らない", async () => {
