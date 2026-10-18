@@ -95,6 +95,7 @@ const github = (): GitHubClient => ({
   getRepo: () => Promise.resolve({ owner: "Owner", name: "Repo", defaultBranch: "main" }),
   getHeadSha: () => Promise.resolve(SHA),
   getTree: () => Promise.resolve(tree),
+  getFileText: () => Promise.reject(new Error("not used in repo maps")),
   getBlobText: (_r, sha, max) => {
     const body = BODIES[sha];
     if (body === undefined) return Promise.reject(new GitHubError("not-found", sha));

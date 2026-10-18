@@ -95,6 +95,7 @@ function fakeGitHub(): GitHubClient {
     getRepo: () => Promise.resolve({ owner: "Owner", name: "Repo", defaultBranch: "main" }),
     getHeadSha: () => Promise.resolve(SHA),
     getTree: () => Promise.resolve(treeOverride ?? TREE),
+    getFileText: () => Promise.reject(new Error("not used in repo maps")),
     getBlobText: (_ref, sha, maxBytes) => {
       h.githubCalls.push(`blob:${sha}`);
       if (blobFailure !== null) return Promise.reject(blobFailure);

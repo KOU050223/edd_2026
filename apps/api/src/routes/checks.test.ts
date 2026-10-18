@@ -35,6 +35,8 @@ import {
   TEST_MAP_TITLE,
 } from "../maps/test-map.js";
 import { InMemoryUserPlanRepository } from "../repository/user-plans.js";
+import { GitHubError } from "../repo-maps/github.js";
+import type { RepoCodeDeps, RepoFileCache } from "../checks/repo-code.js";
 
 describe("parseModelList", () => {
   it("カンマ区切りを並びにし、空白と空の要素を捨てる", () => {
@@ -97,7 +99,11 @@ interface Harness {
  */
 function buildApp(
   objectives: readonly LearningObjective[] = [],
-  options: { enforceUsageLimits?: boolean; models?: readonly string[] } = {},
+  options: {
+    enforceUsageLimits?: boolean;
+    models?: readonly string[];
+    repoCode?: RepoCodeDeps;
+  } = {},
 ): Harness {
   const store = createInMemoryRepositoryStore();
   store.fixedObjectives.splice(
@@ -974,7 +980,7 @@ describe("GET /v1/checks", () => {
 
     const response = await call(harness, `/checks?conceptId=${CONCEPT_ID}`, {}, "other-token");
 
-    await expect(response.json()).resolves.toEqual({ checks: [], mapChecks: [] });
+    await expect(response.json()).resolves.toEqual({ checks: [], mapChecks: [], repoCode: false });
   });
 
   it("Concept ID の形式を満たさない要求を弾く", async () => {
@@ -1061,7 +1067,7 @@ describe("GET /v1/checks のマップの問題（#250）", () => {
 
     const response = await call(harness, `/checks?conceptId=${NODE}`, {}, "other-token");
 
-    await expect(response.json()).resolves.toEqual({ checks: [], mapChecks: [] });
+    await expect(response.json()).resolves.toEqual({ checks: [], mapChecks: [], repoCode: false });
   });
 });
 
@@ -1141,5 +1147,209 @@ describe("/v1/check-generation-consent", () => {
     const response = await call(harness, "/check-generation-consent");
 
     await expect(response.json()).resolves.toMatchObject({ granted: false });
+  });
+});
+
+describe("リポジトリから作ったマップのノード（#326）", () => {
+  const REPO_MAP_ID = "mrepo0001";
+  const REPO_NODE = `${REPO_MAP_ID}.order001`;
+  const SHA = "c".repeat(40);
+  const ORDER_TS = [
+    'import { Stock } from "./stock";',
+    "",
+    "export function confirmOrder(order: Order, stock: Stock) {",
+    "  if (!stock.reserve(order.items)) {",
+    '    throw new Error("在庫が足りません");',
+    "  }",
+    '  order.status = "confirmed";',
+    "}",
+  ].join("\n");
+  const REPO_CONCEPT = {
+    conceptId: REPO_NODE,
+    scope: "concept",
+    level: "basic",
+    consentVersion: CHECK_GENERATION_CONSENT_VERSION,
+  };
+
+  async function seedRepoMap(harness: Harness) {
+    const { created } = await harness.maps.create(USER_A, {
+      id: REPO_MAP_ID,
+      content: {
+        title: "acme/shop",
+        description: "",
+        nodes: [
+          { kind: "own", conceptId: REPO_NODE, label: "注文の確定", summary: "注文を確定する。" },
+        ],
+        edges: [],
+      },
+      repoSource: {
+        url: "github.com/acme/shop",
+        commitSha: SHA,
+        nodeSources: [
+          {
+            conceptId: REPO_NODE,
+            position: 0,
+            kind: "code",
+            path: "src/order.ts",
+            issueNumber: null,
+            summary: "confirmOrder が在庫を引き当てる。",
+          },
+          {
+            conceptId: REPO_NODE,
+            position: 1,
+            kind: "issue",
+            path: null,
+            issueNumber: 12,
+            summary: "在庫の二重引き当てを直す。",
+          },
+        ],
+      },
+      nowIso: "2026-09-01T00:00:00.000Z",
+      nowMs: 0,
+      maxMaps: 20,
+    });
+    if (!created) throw new Error("repo map could not be seeded");
+  }
+
+  /** 呼ばれたパスを記録し、決めた本文（無ければ失敗）を返す GitHub。 */
+  function fakeGitHub(files: Record<string, string> | GitHubError) {
+    const calls: string[] = [];
+    return {
+      calls,
+      getFileText: (_ref: unknown, sha: string, path: string) => {
+        calls.push(`${sha}:${path}`);
+        if (files instanceof GitHubError) return Promise.reject(files);
+        const text = files[path];
+        return text === undefined
+          ? Promise.reject(new GitHubError("not-found", "リポジトリが見つかりません"))
+          : Promise.resolve({ text, truncated: false });
+      },
+    };
+  }
+
+  function memoryCache(): RepoFileCache {
+    const entries = new Map<string, string>();
+    return {
+      match: (key) => {
+        const text = entries.get(key);
+        return Promise.resolve(text === undefined ? undefined : new Response(text));
+      },
+      put: async (key, response) => {
+        entries.set(key, await response.text());
+      },
+    };
+  }
+
+  it("根拠のファイルを commit で固定して読み、抜き出したコードを資料として渡す", async () => {
+    const fetchMock = stubUpstream(generatedCheck({ conceptId: REPO_NODE }));
+    silenceInfo();
+    const github = fakeGitHub({ "src/order.ts": ORDER_TS });
+    const harness = buildApp([], { repoCode: { github } });
+    await seedRepoMap(harness);
+
+    const response = await generate(harness, REPO_CONCEPT);
+
+    expect(response.status).toBe(200);
+    expect(github.calls).toEqual([`${SHA}:src/order.ts`]);
+    const prompt = sentPrompt(fetchMock);
+    expect(prompt).toContain("公開リポジトリ github.com/acme/shop");
+    expect(prompt).toContain("<<<資料: コード src/order.ts");
+    expect(prompt).toContain("3: export function confirmOrder(order: Order, stock: Stock) {");
+    expect(prompt).toContain("<<<資料: Issue #12");
+    expect(prompt).toContain("要約: 在庫の二重引き当てを直す。");
+    expect(prompt).toContain("例示コードは資料の抜粋を元にしてよい");
+    // 小さいコードなら 1 回 8,048 に収まり、1 回分で済む。
+    await expect(usedToday(harness)).resolves.toBe(1);
+  });
+
+  it("大きいコードを入れた組は 2 回分として数える", async () => {
+    stubUpstream(generatedCheck({ conceptId: REPO_NODE }));
+    const info = silenceInfo();
+    const big = Array.from(
+      { length: 300 },
+      (_, i) => `export const confirmOrderStep${String(i)} = () => stock.reserve(${String(i)});`,
+    ).join("\n");
+    const harness = buildApp([], { repoCode: { github: fakeGitHub({ "src/order.ts": big }) } });
+    await seedRepoMap(harness);
+
+    const response = await generate(harness, REPO_CONCEPT);
+
+    expect(response.status).toBe(200);
+    await expect(usedToday(harness)).resolves.toBe(2);
+    expect(info).toHaveBeenCalledWith(
+      "check generation completed",
+      expect.objectContaining({ repoSourceCount: 2, repoExcerptCount: 1, usageUnits: 2 }),
+    );
+  });
+
+  it("2 回目の生成は置き場から読み、GitHub を読み直さない", async () => {
+    stubUpstream(generatedCheck({ conceptId: REPO_NODE }));
+    silenceInfo();
+    const github = fakeGitHub({ "src/order.ts": ORDER_TS });
+    const harness = buildApp([], { repoCode: { github, cache: memoryCache() } });
+    await seedRepoMap(harness);
+
+    expect((await generate(harness, REPO_CONCEPT)).status).toBe(200);
+    expect((await generate(harness, REPO_CONCEPT)).status).toBe(200);
+
+    expect(github.calls).toEqual([`${SHA}:src/order.ts`]);
+  });
+
+  it("GitHub から読めなくても、根拠の要約だけで作る", async () => {
+    const fetchMock = stubUpstream(generatedCheck({ conceptId: REPO_NODE }));
+    silenceInfo();
+    const warn = silenceWarn();
+    const github = fakeGitHub(new GitHubError("rate-limited", "GitHub の利用上限に達しています"));
+    const harness = buildApp([], { repoCode: { github } });
+    await seedRepoMap(harness);
+
+    const response = await generate(harness, REPO_CONCEPT);
+
+    expect(response.status).toBe(200);
+    const prompt = sentPrompt(fetchMock);
+    expect(prompt).toContain("要約: confirmOrder が在庫を引き当てる。");
+    expect(prompt).not.toContain("抜粋");
+    expect(prompt).toContain("短い例示コードを自分で書き");
+    expect(warn).toHaveBeenCalledWith(
+      "repo file could not be read; using its summary only",
+      expect.objectContaining({ kind: "rate-limited" }),
+    );
+  });
+
+  it("手で作ったマップのノードは、GitHub を読まず今までどおり作る", async () => {
+    const fetchMock = stubUpstream(generatedCheck({ conceptId: TEST_MAP_NODE.id }));
+    silenceInfo();
+    const github = fakeGitHub({});
+    const harness = buildApp([], { repoCode: { github } });
+    await seedTestMap(harness.maps, USER_A);
+
+    const response = await generate(harness, {
+      conceptId: TEST_MAP_NODE.id,
+      scope: "objective",
+      level: "basic",
+      objectiveId: TEST_MAP_OBJECTIVES[0]!.id,
+      consentVersion: CHECK_GENERATION_CONSENT_VERSION,
+    });
+
+    expect(response.status).toBe(200);
+    expect(github.calls).toEqual([]);
+    expect(sentPrompt(fetchMock)).not.toContain("このリポジトリの資料");
+    await expect(usedToday(harness)).resolves.toBe(1);
+  });
+
+  it("GET /v1/checks は、根拠のファイルを読むノードかを返す", async () => {
+    const harness = buildApp([], { repoCode: { github: fakeGitHub({}) } });
+    await seedRepoMap(harness);
+    await seedTestMap(harness.maps, USER_A);
+
+    const repo = await call(harness, `/checks?conceptId=${REPO_NODE}`);
+    const own = await call(harness, `/checks?conceptId=${TEST_MAP_NODE.id}`);
+    const fixed = await call(harness, `/checks?conceptId=${CONCEPT_ID}`);
+    const other = await call(harness, `/checks?conceptId=${REPO_NODE}`, {}, "other-token");
+
+    await expect(repo.json()).resolves.toMatchObject({ repoCode: true });
+    await expect(own.json()).resolves.toMatchObject({ repoCode: false });
+    await expect(fixed.json()).resolves.toMatchObject({ repoCode: false });
+    await expect(other.json()).resolves.toMatchObject({ repoCode: false });
   });
 });

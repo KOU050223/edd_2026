@@ -86,6 +86,7 @@ function fakeGitHub(
       return Promise.resolve(overrides.tree ?? TREE);
     },
     getBlobText: () => Promise.reject(new Error("not used in C1")),
+    getFileText: () => Promise.reject(new Error("not used in repo maps")),
     listIssues: () => {
       guard("listIssues");
       return Promise.resolve([

@@ -134,6 +134,9 @@ export function isPersonalConceptCheck(
  * `checks` は自分の組（作り直せる）、`mapChecks` は取り込んだマップの公開の問題（#250。作り直せない）。
  * 同じ狙いに自分の組があれば、API は公開の問題を返さない。
  *
+ * `repoCode` は、生成のときにリポジトリの根拠のファイルも AI に渡すか（#326）。注記と回数の表示に
+ * だけ使うので、無い（古い API）ときは false として扱う。
+ *
  * 2xx でも形が違えば失敗にする（RULE-004）。採点できない問題を出すと、
  * 利用者の回答が正しくても不正解として記録されうる。
  */
@@ -141,20 +144,28 @@ export async function fetchSavedChecks(
   conceptId: ConceptId,
   fetcher: typeof fetch = fetch,
   sessionRetries: boolean | number = false,
-): Promise<{ checks: PersonalConceptCheck[]; mapChecks: PersonalConceptCheck[] }> {
+): Promise<{
+  checks: PersonalConceptCheck[];
+  mapChecks: PersonalConceptCheck[];
+  repoCode: boolean;
+}> {
   const body = await requestJson<unknown>(
     `${CHECKS_PATH}?conceptId=${encodeURIComponent(conceptId)}`,
     fetcher,
     sessionRetries,
   );
-  const { checks, mapChecks } = (body ?? {}) as { checks?: unknown; mapChecks?: unknown };
+  const { checks, mapChecks, repoCode } = (body ?? {}) as {
+    checks?: unknown;
+    mapChecks?: unknown;
+    repoCode?: unknown;
+  };
   const valid = (value: unknown): value is PersonalConceptCheck[] =>
     Array.isArray(value) && value.every((check) => isPersonalConceptCheck(check, conceptId));
   if (!valid(checks) || !valid(mapChecks)) {
     console.error("saved checks did not match the expected shape", { conceptId });
     throw new ApiError("unavailable");
   }
-  return { checks, mapChecks };
+  return { checks, mapChecks, repoCode: repoCode === true };
 }
 
 /** 生成の要求。範囲が `objective` のときだけ `objectiveId` を持つ。 */

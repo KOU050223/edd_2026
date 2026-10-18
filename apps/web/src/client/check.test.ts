@@ -104,8 +104,12 @@ test("保存済みの組を読み、形が違えば失敗にする", async () =>
   await expect(fetchSavedChecks("go.defer", ok)).resolves.toEqual({
     checks: [CHECK],
     mapChecks: [],
+    // 古い API が返さなくても、コードを渡さない扱いにする（#326）。
+    repoCode: false,
   });
   expect(ok).toHaveBeenCalledWith("/api/v1/checks?conceptId=go.defer", expect.anything());
+  const repo = vi.fn(async () => Response.json({ checks: [], mapChecks: [], repoCode: true }));
+  await expect(fetchSavedChecks("go.defer", repo)).resolves.toMatchObject({ repoCode: true });
 
   vi.spyOn(console, "error").mockImplementation(() => {});
   const broken = vi.fn(async () =>

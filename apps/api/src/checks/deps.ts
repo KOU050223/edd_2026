@@ -10,6 +10,7 @@ import type {
   UserPlanRepository,
   UserSettingsRepository,
 } from "../repository/types.js";
+import type { RepoCodeDeps } from "./repo-code.js";
 
 /** 確認問題のルート（`routes/checks.ts`）と生成（`checks/generate.ts`）が使う依存。 */
 export interface ChecksDeps {
@@ -50,5 +51,10 @@ export interface ChecksDeps {
    * 生成の入力（表示名・概要・前提・次）と「理解すること」を、固定の一覧に無ければここから引く。
    */
   maps: LearningMapRepository;
+  /**
+   * リポジトリから作ったマップのノードで、根拠のファイルを読む（#326）。
+   * 省略すると読まず、今までと同じ問題を作る。
+   */
+  repoCode?: RepoCodeDeps;
   now: () => Date;
 }

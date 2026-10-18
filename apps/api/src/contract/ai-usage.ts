@@ -81,6 +81,29 @@ export const AI_USAGE_LIMITS = {
 } as const;
 
 /**
+ * リポジトリのコードを入れる確認問題（#326）だけの、1回の入力上限（tokens）。
+ *
+ * ほかの生成は {@link AI_USAGE_LIMITS} の `inputTokensPerRequest` のまま。1回 8,048 を超えうるので、
+ * 回数は {@link usageUnitsOf} で大きさから数え、費用の前提（1回 8,048 まで）を崩さない。
+ */
+export const REPO_CODE_CHECK_INPUT_TOKENS = 12_000;
+
+/**
+ * 1回の呼び出しの最悪の消費（入力の見積もり + 出力の上限）を、何回分として数えるか。
+ *
+ * 1回 8,048（入力 + 出力の上限）を超える分は、超えた分だけ回数を増やす（#245・#326）。
+ */
+export function usageUnitsOf(worstCaseTokens: number): number {
+  return Math.max(
+    1,
+    Math.ceil(
+      worstCaseTokens /
+        (AI_USAGE_LIMITS.inputTokensPerRequest + AI_USAGE_LIMITS.outputTokensPerRequest),
+    ),
+  );
+}
+
+/**
  * 入力の上界を見積もるときに使う、1 token あたりの最小バイト数。
  *
  * Gemini のトークナイザを Worker 上で正確に再現はできない。送信前に拒否する

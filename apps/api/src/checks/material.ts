@@ -77,13 +77,15 @@ export async function solvedQuestionsFor(
  * 質問は新しい順に並んでいる。新しいものから残りの予算の分だけ載せ、入らなくなったら
  * 古いものを落とす。上限で 500 にすると、同じ履歴からは何度試しても作れなくなる。
  * 見積もりは UTF-8 のバイト数（`estimateInputTokens`）なので、削るのもバイト数で行う。
+ *
+ * @param limit 1回の入力の上限。リポジトリのコードを入れる組は広い（#326）。
  */
 export function fitQuestionsToInputLimit(
   input: Parameters<typeof buildCheckPrompt>[0],
   base: CheckRequest,
   questions: readonly string[],
+  limit: number = AI_USAGE_LIMITS.inputTokensPerRequest,
 ): string[] {
-  const limit = AI_USAGE_LIMITS.inputTokensPerRequest;
   const fits = (candidate: readonly string[]) =>
     estimateInputTokens(buildCheckPrompt(input, { ...base, solvedQuestions: candidate })) <= limit;
   if (fits(questions)) return [...questions];
