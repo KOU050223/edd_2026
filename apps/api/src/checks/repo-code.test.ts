@@ -135,6 +135,22 @@ describe("excerptOf", () => {
       "1: # 注文\n2: \n3: 注文を確定する。",
     );
   });
+
+  it("ほとんどの行に出る言葉に埋もれず、珍しい言葉に一致した行を先に取る", () => {
+    const lines = Array.from(
+      { length: 400 },
+      (_, i) => `  order.items[${String(i)}] = order.total;`,
+    );
+    lines[299] = "export function confirmOrder(order: Order) {";
+    // `order` はファイル名の語として必ず入り、全行に一致する。
+    const keywords = keywordsOf(["confirmOrder が在庫を引き当てる。", "order"]);
+
+    const excerpt = excerptOf(lines.join("\n"), keywords, 2_000);
+
+    expect(excerpt).toContain("300: export function confirmOrder(order: Order) {");
+    expect(excerpt).toContain("297:   order.items[296] = order.total;");
+    expect(bytesOf(excerpt)).toBeLessThanOrEqual(2_000);
+  });
 });
 
 describe("repoCodeMaterialFor", () => {

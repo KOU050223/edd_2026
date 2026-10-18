@@ -316,6 +316,8 @@ const GAP = "…";
 /**
  * 1ファイルから、探す言葉に一致した行とその前後を抜き出す。行番号を付け、省いた行は `…` にする。
  *
+ * 一致した行は**珍しい言葉に一致した行から**取る（{@link lineScores}）。ファイル名の語のように
+ * ほとんどの行に出る言葉で先頭から埋まり、肝心の定義が落ちるのを防ぐ。
  * 一致した行（前後を含む）を先に、宣言の行を後に、`maxBytes` に収まる分だけ取る。
  * どちらも無ければ先頭から取る。出力は元の行の順に並べる。
  *
@@ -323,13 +325,19 @@ const GAP = "…";
  */
 export function excerptOf(text: string, keywords: readonly string[], maxBytes: number): string {
   const lines = text.split(/\r?\n/);
-  const matches = matchingLines(lines, keywords);
+  const scores = lineScores(lines, keywords);
+  const matches = lines
+    .map((_, index) => index)
+    .filter((index) => (scores[index] ?? 0) > 0)
+    .sort((a, b) => (scores[b] ?? 0) - (scores[a] ?? 0) || a - b);
 
-  // 取る順。前後を含む一致 → 宣言 → 先頭。
+  // 取る順。前後を含む一致（点の高い順。一致した行から近い順に前後を足す）→ 宣言 → 先頭。
   const priority: number[] = [];
   for (const index of matches) {
-    for (let i = index - CONTEXT_LINES; i <= index + CONTEXT_LINES; i += 1) {
-      if (i >= 0 && i < lines.length) priority.push(i);
+    priority.push(index);
+    for (let distance = 1; distance <= CONTEXT_LINES; distance += 1) {
+      if (index - distance >= 0) priority.push(index - distance);
+      if (index + distance < lines.length) priority.push(index + distance);
     }
   }
   lines.forEach((line, index) => {
@@ -360,14 +368,20 @@ export function excerptOf(text: string, keywords: readonly string[], maxBytes: n
   return ordered.length === 0 ? "" : out.join("\n");
 }
 
-/** 探す言葉のどれかを含む行の位置。 */
-function matchingLines(lines: readonly string[], keywords: readonly string[]): number[] {
-  const matches: number[] = [];
-  lines.forEach((line, index) => {
-    const lower = line.toLowerCase();
-    if (keywords.some((keyword) => lower.includes(keyword))) matches.push(index);
-  });
-  return matches;
+/**
+ * 行ごとの点。言葉ごとに「その言葉を含む行の数」の逆数を持たせ、行が含む言葉の分を足す。
+ *
+ * 1行にしか出ない言葉（定義の名前など）は 1 点、100 行に出る言葉は 0.01 点になる。
+ * ファイル全体の合計は、そのファイルに出てくる言葉の種類の数になる。
+ */
+function lineScores(lines: readonly string[], keywords: readonly string[]): number[] {
+  const lowered = lines.map((line) => line.toLowerCase());
+  const scores = lines.map(() => 0);
+  for (const keyword of keywords) {
+    const hits = lowered.flatMap((line, index) => (line.includes(keyword) ? [index] : []));
+    for (const index of hits) scores[index] = (scores[index] ?? 0) + 1 / hits.length;
+  }
+  return scores;
 }
 
 function renderLine(lines: readonly string[], index: number): string {
@@ -377,8 +391,8 @@ function renderLine(lines: readonly string[], index: number): string {
 }
 
 /**
- * 読めたファイルに予算を分ける。一致の多いファイルから順に、残りを残りのファイル数で等分した分を渡し、
- * 使わなかった分は次へ回す。読めなかったファイルは `null` のまま。
+ * 読めたファイルに予算を分ける。探す言葉が多く出てくるファイルから順に、残りを残りのファイル数で
+ * 等分した分を渡し、使わなかった分は次へ回す。読めなかったファイルは `null` のまま。
  */
 function allocateExcerpts(
   texts: readonly (string | null)[],
@@ -386,12 +400,12 @@ function allocateExcerpts(
   budgetBytes: number,
 ): (string | null)[] {
   const order = texts
-    .flatMap((text, index) =>
-      text === null
-        ? []
-        : [{ index, text, matched: matchingLines(text.split(/\r?\n/), keywords).length }],
-    )
-    .sort((a, b) => b.matched - a.matched || a.index - b.index);
+    .flatMap((text, index) => {
+      if (text === null) return [];
+      const score = lineScores(text.split(/\r?\n/), keywords).reduce((sum, s) => sum + s, 0);
+      return [{ index, text, score }];
+    })
+    .sort((a, b) => b.score - a.score || a.index - b.index);
 
   const out: (string | null)[] = texts.map(() => null);
   let remaining = budgetBytes;
