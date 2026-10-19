@@ -41,6 +41,7 @@ import { createFixedMapsRoute } from "./routes/fixed-maps.js";
 import { randomKey } from "./maps/content.js";
 import { createRepoMapsRoute } from "./routes/repo-maps.js";
 import { createGitHubClient } from "./repo-maps/github.js";
+import { cacheApiRepoFileCache } from "./checks/repo-code.js";
 import { D1RepoMapDraftRepository } from "./repo-maps/d1.js";
 
 /** Cloudflare Worker から提供する HTTP API。 */
@@ -199,8 +200,8 @@ app.route(
   })),
 );
 
-// 確認問題（#184 / #236）。利用者ごとに生成して保存する。生成は `ai_usage` に1組1回で数える。
-// レート制限はルート側が自分で掛けている。
+// 確認問題（#184 / #236）。利用者ごとに生成して保存する。生成は `ai_usage` に1組1回で数える
+// （リポジトリのコードを入れた組は大きさで 1〜2 回、#326）。レート制限はルート側が自分で掛けている。
 app.route(
   "/v1",
   createChecksRoute((env) => ({
@@ -220,6 +221,15 @@ app.route(
     identity: new D1IdentityRepository(env.DB),
     maps: new D1LearningMapRepository(env.DB),
     audit: new D1AuditLogRepository(env.DB),
+    // リポジトリから作ったマップのノードは、根拠のファイルを読んで問題に使う（#326）。
+    // 読んだ本文は D1 に置かず、Cache API に一時的に置くだけ。
+    repoCode: {
+      github: createGitHubClient({
+        token: env.GITHUB_TOKEN,
+        fetchFn: (input, init) => globalThis.fetch(input, init),
+      }),
+      cache: cacheApiRepoFileCache(),
+    },
     // テスト中は回数上限を外す。値がちょうど "off" のときだけ外し、無い・別の値なら効かせる（#255）。
     enforceUsageLimits: env.CHECK_GENERATION_LIMITS !== "off",
     now: () => new Date(),

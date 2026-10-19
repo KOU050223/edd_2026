@@ -7,8 +7,8 @@
  * 1. 対象（Concept と「理解すること」）を確かめる
  * 2. 生成の同意を確かめる
  * 3. 設定（API キー、モデルの allowlist）を確かめる
- * 4. プロンプトを組む（材料は入力上限に収める）
- * 5. 回数を確保する
+ * 4. プロンプトを組む（材料は入力上限に収める。リポジトリのノードなら根拠のコードも読む、#326）
+ * 5. 回数を確保する（コードを入れた組は大きさで 1〜2 回分）
  * 6. 上流へ送り、実消費を数え、問題として検証して保存する
  */
 
@@ -26,10 +26,12 @@ import {
 } from "@gakushu-sochi/domain";
 import {
   AI_USAGE_LIMITS,
+  REPO_CODE_CHECK_INPUT_TOKENS,
   planLimits,
   ALLOWED_MODELS,
   estimateInputTokens,
   isAllowedModel,
+  usageUnitsOf,
   utcDayKey,
   utcMonthKey,
   type AiUsageLimitKind,
@@ -39,6 +41,13 @@ import type { ChecksDeps } from "./deps.js";
 import { failureBody, limitReached, notConfiguredBody, upstreamFailureBody } from "./errors.js";
 import { loadUserConceptCatalog } from "../maps/catalog.js";
 import { fitQuestionsToInputLimit, solvedQuestionsFor } from "./material.js";
+import {
+  hasReadablePath,
+  REPO_CODE_BUDGET_BYTES,
+  repoCodeMaterialFor,
+  repoNodeSourcesFor,
+  repoSummariesOf,
+} from "./repo-code.js";
 import {
   buildCheckPrompt,
   checkPromptInputFor,
@@ -101,13 +110,15 @@ export async function generateCheck(
   // 材料（学習イベントと会話）を読む前の時刻。上流を待つ間に学習データが削除されたら、
   // 削除前の履歴から作った問題を保存しない（`PersonalCheckRepository.put`）。
   const startedAtMs = deps.now().getTime();
-  const built = await buildRequest(deps, userId, input, promptInput, objective);
+  const built = await buildRequest(deps, userId, input, promptInput, objective, mapId);
   if (!built.ok) return built.outcome;
   const { request, prompt } = built.value;
   const estimatedInputTokens = estimateInputTokens(prompt);
+  // コードを入れた組は 1回 8,048 を超えうる。超えた分だけ回数を増やす（#326）。
+  const usageUnits = usageUnitsOf(estimatedInputTokens + AI_USAGE_LIMITS.outputTokensPerRequest);
 
   const now = deps.now();
-  const reserved = await reserveUsage(deps, userId, now);
+  const reserved = await reserveUsage(deps, userId, now, usageUnits);
   if (!reserved.ok) return reserved.outcome;
   const { monthKey, dayKey } = reserved.value;
 
@@ -215,6 +226,10 @@ export async function generateCheck(
     scope,
     level,
     materialCount: request.solvedQuestions.length,
+    repoSourceCount: request.repoCode?.sources.length ?? 0,
+    repoExcerptCount:
+      request.repoCode?.sources.filter((source) => source.excerpt !== undefined).length ?? 0,
+    usageUnits,
     model: check.model,
     totalTokens: generated.totalTokens ?? "unknown",
   });
@@ -356,15 +371,22 @@ function resolveUpstreamConfig(
   return { ok: true, value: { apiKey: deps.apiKey, models } };
 }
 
-/** プロンプトを組む。材料（自力解決した質問）は「理解すること」を狙う組にだけ載せる。 */
+/**
+ * プロンプトを組む。材料（自力解決した質問）は「理解すること」を狙う組にだけ載せる。
+ *
+ * リポジトリから作ったマップのノードなら、根拠の要約と、読めたファイルから抜き出したコードも載せ、
+ * 入力の上限を {@link REPO_CODE_CHECK_INPUT_TOKENS} に広げる（#326）。コードの予算を先に決め、
+ * 残りに質問を収める。
+ */
 async function buildRequest(
   deps: ChecksDeps,
   userId: string,
   { conceptId, scope, level }: GenerateCheckInput,
   promptInput: CheckPromptInput,
   objective: LearningObjective | undefined,
+  mapId: string | undefined,
 ): Promise<Step<{ request: CheckRequest; prompt: string }>> {
-  const base: CheckRequest = {
+  const plain: CheckRequest = {
     scope,
     level,
     ...(objective === undefined ? {} : { objective: { id: objective.id, label: objective.label } }),
@@ -373,7 +395,8 @@ async function buildRequest(
   // 材料の無いプロンプトが上限を超えるのは、定義と方針の文面の見積もり違いである。
   // 利用者には縮めようがないため、こちらの不備として 500 を返す。
   if (
-    estimateInputTokens(buildCheckPrompt(promptInput, base)) > AI_USAGE_LIMITS.inputTokensPerRequest
+    estimateInputTokens(buildCheckPrompt(promptInput, plain)) >
+    AI_USAGE_LIMITS.inputTokensPerRequest
   ) {
     console.error("check prompt exceeds the per-request input limit without material", {
       conceptId,
@@ -381,25 +404,83 @@ async function buildRequest(
     });
     return { ok: false, outcome: { status: 500, body: { error: "check prompt is too large" } } };
   }
-  const request: CheckRequest = {
+  const questions =
+    objective === undefined ? [] : await solvedQuestionsFor(deps, userId, objective.id);
+  const fit = (base: CheckRequest, limit: number): CheckRequest => ({
     ...base,
-    solvedQuestions:
-      objective === undefined
-        ? []
-        : fitQuestionsToInputLimit(
-            promptInput,
-            base,
-            await solvedQuestionsFor(deps, userId, objective.id),
-          ),
-  };
-  return { ok: true, value: { request, prompt: buildCheckPrompt(promptInput, request) } };
+    solvedQuestions: fitQuestionsToInputLimit(promptInput, base, questions, limit),
+  });
+  const { base, limit } = await withRepoCode(deps, userId, conceptId, promptInput, plain, mapId);
+  const request = fit(base, limit);
+  const prompt = buildCheckPrompt(promptInput, request);
+  // 組み上がったプロンプトで上限を確かめ直す。根拠の見積もりが外れても、上限を超えては送らない。
+  if (estimateInputTokens(prompt) > limit) {
+    console.error("check prompt with repo sources exceeds the input limit; sending without them", {
+      conceptId,
+      limit,
+    });
+    const fallback = fit(plain, AI_USAGE_LIMITS.inputTokensPerRequest);
+    return {
+      ok: true,
+      value: { request: fallback, prompt: buildCheckPrompt(promptInput, fallback) },
+    };
+  }
+  return { ok: true, value: { request, prompt } };
 }
 
-/** 1組の生成につき1回を確保する。上流へ送る前に行う（`ai.ts` と同じ理由）。 */
+/**
+ * リポジトリから作ったマップのノードなら、根拠を載せた要求と、入力の上限を返す（#326）。
+ * そうでなければ、そのままの要求と今の上限。
+ *
+ * 上限を広げるのは、本文を読むファイル（パスのある根拠）があるときだけ。Issue だけのノードは
+ * 要約だけを今の上限の中で載せる。画面の「最大 2N 回」（`GET /v1/checks` の `repoCode`）と揃える。
+ */
+async function withRepoCode(
+  deps: ChecksDeps,
+  userId: string,
+  conceptId: string,
+  promptInput: CheckPromptInput,
+  plain: CheckRequest,
+  mapId: string | undefined,
+): Promise<{ base: CheckRequest; limit: number }> {
+  const unchanged = { base: plain, limit: AI_USAGE_LIMITS.inputTokensPerRequest };
+  if (deps.repoCode === undefined || mapId === undefined) return unchanged;
+  const node = await repoNodeSourcesFor(deps.maps, userId, mapId, conceptId);
+  if (node === null) return unchanged;
+
+  const readable = node.sources.some(hasReadablePath);
+  const limit = readable ? REPO_CODE_CHECK_INPUT_TOKENS : AI_USAGE_LIMITS.inputTokensPerRequest;
+  // 要約だけを載せた大きさから、コードに回せる分を決める。抜粋ごとの見出しの分を先に引いておく。
+  const summaries = repoSummariesOf(node);
+  const room =
+    limit -
+    estimateInputTokens(buildCheckPrompt(promptInput, { ...plain, repoCode: summaries })) -
+    REPO_EXCERPT_OVERHEAD_BYTES * node.sources.length;
+  if (room < 0) {
+    // 要約だけで上限を超えるのは、根拠の要約の長さの見積もり違いである。根拠を入れずに作る。
+    console.error("repo sources exceed the input limit; generating without them", { conceptId });
+    return unchanged;
+  }
+  if (!readable) return { base: { ...plain, repoCode: summaries }, limit };
+  const budget = Math.min(REPO_CODE_BUDGET_BYTES, room);
+  const hints = [promptInput.label, promptInput.summary, plain.objective?.label ?? ""];
+  const material =
+    budget > 0 ? await repoCodeMaterialFor(deps.repoCode, node, hints, budget) : summaries;
+  return { base: { ...plain, repoCode: material }, limit };
+}
+
+/** 抜粋 1 件に付く見出しと改行の分（バイト）。 */
+const REPO_EXCERPT_OVERHEAD_BYTES = 100;
+
+/**
+ * 回数（`amount`）を確保する。ふつうは 1組につき1回で、コードを入れた組は大きさで 2 回になる（#326）。
+ * 上流へ送る前に行う（`ai.ts` と同じ理由）。
+ */
 async function reserveUsage(
   deps: ChecksDeps,
   userId: string,
   now: Date,
+  amount: number,
 ): Promise<Step<{ monthKey: string; dayKey: string }>> {
   const monthKey = utcMonthKey(now);
   const dayKey = utcDayKey(now);
@@ -426,10 +507,11 @@ async function reserveUsage(
     dayKey,
     updatedAt: now.toISOString(),
     limits: { dailyRequests: limits.dailyRequests, monthlyRequests: limits.monthlyRequests },
+    amount,
   });
   if (!reserved) {
     const kind: AiUsageLimitKind =
-      after.monthlyRequests >= limits.monthlyRequests ? "monthly" : "daily";
+      after.monthlyRequests + amount > limits.monthlyRequests ? "monthly" : "daily";
     return { ok: false, outcome: { status: 429, body: limitReached(kind, now, limits) } };
   }
   return { ok: true, value: { monthKey, dayKey } };

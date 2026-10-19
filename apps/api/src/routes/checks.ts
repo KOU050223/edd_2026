@@ -33,6 +33,7 @@ import { vValidator } from "@hono/valibot-validator";
 import * as v from "valibot";
 import {
   CHECK_GENERATION_CONSENT_VERSION,
+  CONCEPT_BY_ID,
   checkTargetOf,
   type ConsentRecord,
   type PersonalConceptCheck,
@@ -41,6 +42,7 @@ import type { AuthVariables } from "../auth/middleware.js";
 import { rateLimit } from "../auth/rate-limit.js";
 import type { ChecksDeps } from "../checks/deps.js";
 import { conceptIdSchema, generateCheck, generateSchema } from "../checks/generate.js";
+import { hasReadablePath, repoNodeSourcesFor } from "../checks/repo-code.js";
 
 export type { ChecksDeps } from "../checks/deps.js";
 
@@ -74,6 +76,29 @@ export interface CheckGenerationConsentBody {
 export interface SavedChecksBody {
   checks: PersonalConceptCheck[];
   mapChecks: PersonalConceptCheck[];
+  /**
+   * リポジトリから作った自分のマップのノードで、生成のときに根拠のファイルを読むか（#326）。
+   * 画面はこれを見て、公開コードも AI に渡すことと、回数が 2 回分になりうることを出す。
+   */
+  repoCode: boolean;
+}
+
+/**
+ * 生成のときに根拠のファイルを読むノードか（#326）。
+ *
+ * 自分のマップのノードの ID は `<マップの ID>.<識別子>` なので、前半のマップを見る。
+ * 固定の Concept・取り込んだマップのノードは、リポジトリから作った自分のマップに無いので false。
+ */
+async function readsRepoCode(
+  deps: ChecksDeps,
+  userId: string,
+  conceptId: string,
+): Promise<boolean> {
+  if (deps.repoCode === undefined || CONCEPT_BY_ID.has(conceptId)) return false;
+  const mapId = conceptId.slice(0, Math.max(conceptId.indexOf("."), 0));
+  if (mapId.length === 0) return false;
+  const node = await repoNodeSourcesFor(deps.maps, userId, mapId, conceptId);
+  return node?.sources.some(hasReadablePath) === true;
 }
 
 /** `GET /v1/checks:export` の応答。 */
@@ -110,14 +135,16 @@ export function createChecksRoute(resolve: ChecksDepsResolver) {
     const { conceptId } = c.req.valid("query");
     const userId = c.get("user").userId;
     const deps = resolve(c.env);
-    const [checks, published] = await Promise.all([
+    const [checks, published, repoCode] = await Promise.all([
       deps.checks.listByConcept(userId, conceptId),
       deps.maps.listImportedChecksByConcept(userId, conceptId),
+      readsRepoCode(deps, userId, conceptId),
     ]);
     const own = new Set(checks.map(checkTargetOf));
     const body: SavedChecksBody = {
       checks,
       mapChecks: published.filter((check) => !own.has(checkTargetOf(check))),
+      repoCode,
     };
     return c.json(body, 200, { "cache-control": "no-store" });
   });

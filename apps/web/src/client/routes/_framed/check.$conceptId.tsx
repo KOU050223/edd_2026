@@ -694,7 +694,9 @@ function CheckPage() {
                 onClick={() => request(targets)}
               >
                 {targets.length > 0
-                  ? `${targets.length} 組作る（AI 利用 ${targets.length} 回）`
+                  ? loaded.repoCode
+                    ? `${targets.length} 組作る（AI 利用 最大 ${targets.length * 2} 回）`
+                    : `${targets.length} 組作る（AI 利用 ${targets.length} 回）`
                   : scope === "objective"
                     ? "項目を選んでください"
                     : "作る問題がありません"}
@@ -702,6 +704,13 @@ function CheckPage() {
             )}
             {reviewable && (
               <span className="muted">保存済みの問題を出します（AI は使いません）。</span>
+            )}
+            {!reviewable && loaded.repoCode && (
+              <span className="muted">
+                このマップのリポジトリのコード（公開）も AI
+                に渡し、そのコードに即した問題を作ります。コードが長いと、1組で AI 利用 2
+                回分になります。
+              </span>
             )}
             {scope === "concept" && targets.length === 0 && checks.length === 0 && understood && (
               <span className="muted">
@@ -882,17 +891,18 @@ export const Route = createFileRoute("/_framed/check/$conceptId")({
     // 読むだけで、AI は呼ばない。生成は利用者が「作る」を押したときだけ。
     const retry = takeLoginRetry();
     const mapId = mapIdOfConcept(params.conceptId);
-    const [{ checks, mapChecks }, profile, overrides, consent, map, fixed] = await Promise.all([
-      fetchSavedChecks(params.conceptId, fetch, retry),
-      requestJson<MapProfile>("/api/v1/learning-profile", fetch, retry),
-      requestJson<MasteryOverrides>("/api/v1/mastery-overrides", fetch, retry),
-      fetchGenerationConsent(fetch, retry),
-      // 手で作ったノードは、そのマップから定義を引く（#242）。取り込んだマップのノードは ID の前半が
-      // 元のマップなので、自分のノードを持つマップを探して引く（#244）。どちらにも無ければ 404。
-      mapId === undefined ? undefined : fetchOwnMapContaining(params.conceptId, fetch, retry),
-      // 固定の Concept の項目は API の表から読む（#245）。
-      mapId === undefined ? fetchFixedMaps(fetch, retry) : undefined,
-    ]);
+    const [{ checks, mapChecks, repoCode }, profile, overrides, consent, map, fixed] =
+      await Promise.all([
+        fetchSavedChecks(params.conceptId, fetch, retry),
+        requestJson<MapProfile>("/api/v1/learning-profile", fetch, retry),
+        requestJson<MasteryOverrides>("/api/v1/mastery-overrides", fetch, retry),
+        fetchGenerationConsent(fetch, retry),
+        // 手で作ったノードは、そのマップから定義を引く（#242）。取り込んだマップのノードは ID の前半が
+        // 元のマップなので、自分のノードを持つマップを探して引く（#244）。どちらにも無ければ 404。
+        mapId === undefined ? undefined : fetchOwnMapContaining(params.conceptId, fetch, retry),
+        // 固定の Concept の項目は API の表から読む（#245）。
+        mapId === undefined ? fetchFixedMaps(fetch, retry) : undefined,
+      ]);
 
     // 対象の Concept と同じ領域（手で作ったノードならそのマップ）の定義・項目・見出し。
     let area: { definitions: readonly DomainConcept[]; objectives: readonly LearningObjective[] };
@@ -942,7 +952,7 @@ export const Route = createFileRoute("/_framed/check/$conceptId")({
         .filter((candidate) => areaIds.has(candidate.conceptId))
         .map((candidate) => candidate.status),
     );
-    return { checks, mapChecks, consent, objectives, recommended, label, areaName };
+    return { checks, mapChecks, repoCode, consent, objectives, recommended, label, areaName };
   },
   errorComponent: CheckError,
   // 同じルートのまま Concept だけ変わっても、前の Concept の問題や選択を持ち越さない。

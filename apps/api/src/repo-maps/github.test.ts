@@ -211,6 +211,34 @@ describe("ファイルの本文", () => {
     const client = createGitHubClient({ token: "t", fetchFn: f.fn });
     await expect(kindOf(client.getBlobText(ref, "s", 100))).resolves.toBe("not-found");
   });
+
+  test("パスで読むときは commit で固定し、パスの区切りごとに符号化する（#326）", async () => {
+    const f = text("export const a = 1;\n");
+    const client = createGitHubClient({ token: "t", fetchFn: f.fn });
+    await expect(client.getFileText(ref, SHA, "src/注文 #1.ts", 1000)).resolves.toEqual({
+      text: "export const a = 1;\n",
+      truncated: false,
+    });
+    expect(f.calls[0]?.url).toBe(
+      `https://api.github.com/repos/o/r/contents/src/${encodeURIComponent("注文 #1.ts")}?ref=${SHA}`,
+    );
+    expect((f.calls[0]?.init?.headers as Record<string, string>).accept).toBe(
+      "application/vnd.github.raw+json",
+    );
+  });
+
+  test("パスで読むときも上限で切り、404 は種類で返す（#326）", async () => {
+    const client = createGitHubClient({ token: "t", fetchFn: text("abcdef").fn });
+    await expect(client.getFileText(ref, SHA, "a.ts", 3)).resolves.toEqual({
+      text: "abc",
+      truncated: true,
+    });
+    const missing = createGitHubClient({
+      token: "t",
+      fetchFn: fakeFetch(() => new Response("", { status: 404 })).fn,
+    });
+    await expect(kindOf(missing.getFileText(ref, SHA, "a.ts", 100))).resolves.toBe("not-found");
+  });
 });
 
 describe("Issue", () => {
