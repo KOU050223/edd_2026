@@ -42,6 +42,7 @@ import { failureBody, limitReached, notConfiguredBody, upstreamFailureBody } fro
 import { loadUserConceptCatalog } from "../maps/catalog.js";
 import { fitQuestionsToInputLimit, solvedQuestionsFor } from "./material.js";
 import {
+  hasReadablePath,
   REPO_CODE_BUDGET_BYTES,
   repoCodeMaterialFor,
   repoNodeSourcesFor,
@@ -403,25 +404,36 @@ async function buildRequest(
     });
     return { ok: false, outcome: { status: 500, body: { error: "check prompt is too large" } } };
   }
-  const { base, limit } = await withRepoCode(deps, userId, conceptId, promptInput, plain, mapId);
-  const request: CheckRequest = {
+  const questions =
+    objective === undefined ? [] : await solvedQuestionsFor(deps, userId, objective.id);
+  const fit = (base: CheckRequest, limit: number): CheckRequest => ({
     ...base,
-    solvedQuestions:
-      objective === undefined
-        ? []
-        : fitQuestionsToInputLimit(
-            promptInput,
-            base,
-            await solvedQuestionsFor(deps, userId, objective.id),
-            limit,
-          ),
-  };
-  return { ok: true, value: { request, prompt: buildCheckPrompt(promptInput, request) } };
+    solvedQuestions: fitQuestionsToInputLimit(promptInput, base, questions, limit),
+  });
+  const { base, limit } = await withRepoCode(deps, userId, conceptId, promptInput, plain, mapId);
+  const request = fit(base, limit);
+  const prompt = buildCheckPrompt(promptInput, request);
+  // 組み上がったプロンプトで上限を確かめ直す。根拠の見積もりが外れても、上限を超えては送らない。
+  if (estimateInputTokens(prompt) > limit) {
+    console.error("check prompt with repo sources exceeds the input limit; sending without them", {
+      conceptId,
+      limit,
+    });
+    const fallback = fit(plain, AI_USAGE_LIMITS.inputTokensPerRequest);
+    return {
+      ok: true,
+      value: { request: fallback, prompt: buildCheckPrompt(promptInput, fallback) },
+    };
+  }
+  return { ok: true, value: { request, prompt } };
 }
 
 /**
- * リポジトリから作ったマップのノードなら、根拠を載せた要求と、広げた入力の上限を返す（#326）。
+ * リポジトリから作ったマップのノードなら、根拠を載せた要求と、入力の上限を返す（#326）。
  * そうでなければ、そのままの要求と今の上限。
+ *
+ * 上限を広げるのは、本文を読むファイル（パスのある根拠）があるときだけ。Issue だけのノードは
+ * 要約だけを今の上限の中で載せる。画面の「最大 2N 回」（`GET /v1/checks` の `repoCode`）と揃える。
  */
 async function withRepoCode(
   deps: ChecksDeps,
@@ -436,7 +448,8 @@ async function withRepoCode(
   const node = await repoNodeSourcesFor(deps.maps, userId, mapId, conceptId);
   if (node === null) return unchanged;
 
-  const limit = REPO_CODE_CHECK_INPUT_TOKENS;
+  const readable = node.sources.some(hasReadablePath);
+  const limit = readable ? REPO_CODE_CHECK_INPUT_TOKENS : AI_USAGE_LIMITS.inputTokensPerRequest;
   // 要約だけを載せた大きさから、コードに回せる分を決める。抜粋ごとの見出しの分を先に引いておく。
   const summaries = repoSummariesOf(node);
   const room =
@@ -448,6 +461,7 @@ async function withRepoCode(
     console.error("repo sources exceed the input limit; generating without them", { conceptId });
     return unchanged;
   }
+  if (!readable) return { base: { ...plain, repoCode: summaries }, limit };
   const budget = Math.min(REPO_CODE_BUDGET_BYTES, room);
   const hints = [promptInput.label, promptInput.summary, plain.objective?.label ?? ""];
   const material =

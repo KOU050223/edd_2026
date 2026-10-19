@@ -59,7 +59,8 @@ export function cacheApiRepoFileCache(): RepoFileCache | undefined {
 
 /** コードを読むのに使う依存。無ければコードを読まない（今までと同じ問題を作る）。 */
 export interface RepoCodeDeps {
-  github: Pick<GitHubClient, "getFileText">;
+  /** `getRepo` は、読む前に今も公開かを確かめるのに使う。 */
+  github: Pick<GitHubClient, "getFileText" | "getRepo">;
   /** 省略は置かない（毎回 GitHub から読む）。 */
   cache?: RepoFileCache;
 }
@@ -111,8 +112,12 @@ export function hasReadablePath(
 /**
  * 根拠を、プロンプトへ載せる材料にする。本文を読めたファイルは関係する行を抜き出して添える。
  *
+ * **読む前に、リポジトリが今も公開かを GitHub に確かめる。** マップを作った後に非公開になっても、
+ * 運営のトークンでは読めてしまう。置き場に残った本文も、確かめられなければ使わない。
+ * 確かめられないとき（非公開・消えた・上限など）は要約だけにする。
+ *
  * @param hints 探す言葉の元（表示名・概要・「理解すること」など）。根拠の要約とパスも足す。
- * @param budgetBytes 抜き出したコードの合計の上限。
+ * @param budgetBytes 抜き出したコードの合計の上限（区切りの印を置き換えた後のバイト数）。
  */
 export async function repoCodeMaterialFor(
   deps: RepoCodeDeps,
@@ -121,6 +126,7 @@ export async function repoCodeMaterialFor(
   budgetBytes: number,
 ): Promise<RepoCodeMaterial> {
   const readable = node.sources.filter(hasReadablePath).slice(0, REPO_CODE_MAX_FILES);
+  if (readable.length === 0 || !(await isPublic(deps, node.repo))) return repoSummariesOf(node);
   const texts = await Promise.all(
     readable.map((source) => readFile(deps, node.repo, node.commitSha, source.path)),
   );
@@ -150,9 +156,37 @@ export function repoSummariesOf(node: RepoNodeSources): RepoCodeMaterial {
 function sourceOf(source: RepoMapNodeSource): RepoCodeSource {
   return {
     kind: source.kind,
-    ref: source.kind === "issue" ? `#${String(source.issueNumber)}` : (source.path ?? ""),
-    summary: source.summary.slice(0, SUMMARY_MAX_CHARS),
+    ref: escapeFence(
+      source.kind === "issue" ? `#${String(source.issueNumber)}` : (source.path ?? ""),
+    ),
+    summary: escapeFence(source.summary.slice(0, SUMMARY_MAX_CHARS)),
   };
+}
+
+/**
+ * 資料の区切りの印（`<<<` `>>>`）を全角に置き換える。置き換えると長くなるので、
+ * 大きさを測る前（材料を作るとき）に済ませる。プロンプトの側でも同じ置き換えをするが、
+ * 置き換え済みの文字列は変わらない。
+ */
+export function escapeFence(text: string): string {
+  return text.replaceAll("<<<", "＜＜＜").replaceAll(">>>", "＞＞＞");
+}
+
+/** リポジトリが今も公開か。`getRepo` は非公開を not-found にする。確かめられなければ false。 */
+async function isPublic(deps: RepoCodeDeps, repo: RepoRef): Promise<boolean> {
+  try {
+    await deps.github.getRepo(repo);
+    return true;
+  } catch (error) {
+    if (!(error instanceof GitHubError)) throw error;
+    const detail = { repo: `${repo.owner}/${repo.name}`, kind: error.kind };
+    if (error.kind === "unauthorized") {
+      console.error("repo visibility could not be checked; github is not configured", detail);
+    } else {
+      console.warn("repo is not readable as public; using summaries only", detail);
+    }
+    return false;
+  }
 }
 
 /** 読んだ本文のキャッシュの鍵。リポジトリ・SHA・パス・読んだ量で決まる。 */
@@ -387,7 +421,8 @@ function lineScores(lines: readonly string[], keywords: readonly string[]): numb
 function renderLine(lines: readonly string[], index: number): string {
   const line = lines[index] ?? "";
   const clipped = line.length > MAX_LINE_CHARS ? `${line.slice(0, MAX_LINE_CHARS)}…` : line;
-  return `${String(index + 1)}: ${clipped}`;
+  // 置き換えた後の長さで予算を数える（置き換えると 1 文字 1 バイトが 3 バイトになる）。
+  return `${String(index + 1)}: ${escapeFence(clipped)}`;
 }
 
 /**

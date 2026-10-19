@@ -1164,14 +1164,60 @@ describe("リポジトリから作ったマップのノード（#326）", () => 
     '  order.status = "confirmed";',
     "}",
   ].join("\n");
+  const REPO_OBJECTIVE = `${REPO_NODE}:shortage`;
   const REPO_CONCEPT = {
     conceptId: REPO_NODE,
-    scope: "concept",
+    scope: "objective",
     level: "basic",
+    objectiveId: REPO_OBJECTIVE,
     consentVersion: CHECK_GENERATION_CONSENT_VERSION,
   };
 
-  async function seedRepoMap(harness: Harness) {
+  /** 狙う項目で本人が自力解決した会話を置く（`seedSolvedConversation` のリポジトリのノード版）。 */
+  async function seedRepoSolved(harness: Harness, questionText: string, count = 1) {
+    const occurredAt = "2026-09-20T00:00:00.000Z";
+    await harness.settings.put(USER_A, { saveConversationHistory: true }, occurredAt);
+    for (let i = 0; i < count; i += 1) {
+      const sessionId = `conv-repo-${String(i)}`;
+      await harness.events.append(USER_A, [
+        {
+          event: {
+            id: `event-repo-${String(i)}`,
+            occurredAt,
+            type: "solved_independently",
+            origin: "vscode",
+            conceptIds: [REPO_NODE],
+            objectiveIds: [REPO_OBJECTIVE],
+            sessionId,
+          },
+          clientId: "vscode-1",
+          receivedAtMs: Date.parse(occurredAt),
+        },
+      ]);
+      await harness.conversations.upsert(
+        USER_A,
+        {
+          id: sessionId,
+          origin: "vscode",
+          occurredAt,
+          updatedAt: occurredAt,
+          complete: true,
+          messages: [{ role: "user", text: questionText, at: occurredAt }],
+        },
+        Date.parse(occurredAt),
+      );
+    }
+  }
+
+  async function seedRepoMap(harness: Harness, options: { issueOnly?: boolean } = {}) {
+    const issue = {
+      conceptId: REPO_NODE,
+      position: 1,
+      kind: "issue" as const,
+      path: null,
+      issueNumber: 12,
+      summary: "在庫の二重引き当てを直す。",
+    };
     const { created } = await harness.maps.create(USER_A, {
       id: REPO_MAP_ID,
       content: {
@@ -1185,25 +1231,28 @@ describe("リポジトリから作ったマップのノード（#326）", () => 
       repoSource: {
         url: "github.com/acme/shop",
         commitSha: SHA,
-        nodeSources: [
-          {
-            conceptId: REPO_NODE,
-            position: 0,
-            kind: "code",
-            path: "src/order.ts",
-            issueNumber: null,
-            summary: "confirmOrder が在庫を引き当てる。",
-          },
-          {
-            conceptId: REPO_NODE,
-            position: 1,
-            kind: "issue",
-            path: null,
-            issueNumber: 12,
-            summary: "在庫の二重引き当てを直す。",
-          },
-        ],
+        nodeSources: options.issueOnly
+          ? [{ ...issue, position: 0 }]
+          : [
+              {
+                conceptId: REPO_NODE,
+                position: 0,
+                kind: "code",
+                path: "src/order.ts",
+                issueNumber: null,
+                summary: "confirmOrder が在庫を引き当てる。",
+              },
+              issue,
+            ],
       },
+      objectives: [
+        {
+          id: REPO_OBJECTIVE,
+          conceptId: REPO_NODE,
+          label: "在庫が足りなければ失敗する",
+          source: "manual",
+        },
+      ],
       nowIso: "2026-09-01T00:00:00.000Z",
       nowMs: 0,
       maxMaps: 20,
@@ -1212,10 +1261,14 @@ describe("リポジトリから作ったマップのノード（#326）", () => 
   }
 
   /** 呼ばれたパスを記録し、決めた本文（無ければ失敗）を返す GitHub。 */
-  function fakeGitHub(files: Record<string, string> | GitHubError) {
+  function fakeGitHub(files: Record<string, string> | GitHubError, repoError?: GitHubError) {
     const calls: string[] = [];
     return {
       calls,
+      getRepo: () =>
+        repoError === undefined
+          ? Promise.resolve({ owner: "acme", name: "shop", defaultBranch: "main" })
+          : Promise.reject(repoError),
       getFileText: (_ref: unknown, sha: string, path: string) => {
         calls.push(`${sha}:${path}`);
         if (files instanceof GitHubError) return Promise.reject(files);
@@ -1335,6 +1388,49 @@ describe("リポジトリから作ったマップのノード（#326）", () => 
     expect(github.calls).toEqual([]);
     expect(sentPrompt(fetchMock)).not.toContain("このリポジトリの資料");
     await expect(usedToday(harness)).resolves.toBe(1);
+  });
+
+  it("根拠が Issue だけのノードは、上限を広げず要約だけを載せ、1 回分で数える", async () => {
+    const fetchMock = stubUpstream(generatedCheck({ conceptId: REPO_NODE }));
+    silenceInfo();
+    const github = fakeGitHub({});
+    const harness = buildApp([], { repoCode: { github } });
+    await seedRepoMap(harness, { issueOnly: true });
+    // 上限が 12,000 なら丸ごと載り、2 回分になる長さ。
+    await seedRepoSolved(harness, "在庫の引き当てで失敗するのはなぜか。".repeat(50), 3);
+
+    const response = await generate(harness, REPO_CONCEPT);
+
+    expect(response.status).toBe(200);
+    expect(github.calls).toEqual([]);
+    const prompt = sentPrompt(fetchMock);
+    expect(prompt).toContain("<<<資料: Issue #12");
+    expect(new TextEncoder().encode(prompt).length).toBeLessThanOrEqual(
+      AI_USAGE_LIMITS.inputTokensPerRequest,
+    );
+    await expect(usedToday(harness)).resolves.toBe(1);
+    const sources = await call(harness, `/checks?conceptId=${REPO_NODE}`);
+    await expect(sources.json()).resolves.toMatchObject({ repoCode: false });
+  });
+
+  it("リポジトリが非公開になっていたら、本文を読まず要約だけで作る", async () => {
+    const fetchMock = stubUpstream(generatedCheck({ conceptId: REPO_NODE }));
+    silenceInfo();
+    silenceWarn();
+    const github = fakeGitHub(
+      { "src/order.ts": ORDER_TS },
+      new GitHubError("not-found", "リポジトリが見つかりません"),
+    );
+    const harness = buildApp([], { repoCode: { github } });
+    await seedRepoMap(harness);
+
+    const response = await generate(harness, REPO_CONCEPT);
+
+    expect(response.status).toBe(200);
+    expect(github.calls).toEqual([]);
+    const prompt = sentPrompt(fetchMock);
+    expect(prompt).toContain("要約: confirmOrder が在庫を引き当てる。");
+    expect(prompt).not.toContain("export function confirmOrder");
   });
 
   it("GET /v1/checks は、根拠のファイルを読むノードかを返す", async () => {

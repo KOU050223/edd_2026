@@ -35,11 +35,19 @@ function node(sources: RepoMapNodeSource[]): RepoNodeSources {
   };
 }
 
-/** 呼ばれたパスを記録し、決めた本文を返す GitHub。 */
-function fakeGitHub(files: Record<string, string>) {
+/** 呼ばれたパスを記録し、決めた本文を返す GitHub。`repoError` を渡すと公開を確かめられない。 */
+function fakeGitHub(files: Record<string, string>, repoError?: GitHubError) {
   const calls: string[] = [];
+  const visibility = { checks: 0 };
   return {
     calls,
+    visibility,
+    getRepo: () => {
+      visibility.checks += 1;
+      return repoError === undefined
+        ? Promise.resolve({ owner: "acme", name: "shop", defaultBranch: "main" })
+        : Promise.reject(repoError);
+    },
     getFileText: (_ref: unknown, _sha: string, path: string) => {
       calls.push(path);
       const text = files[path];
@@ -200,6 +208,50 @@ describe("repoCodeMaterialFor", () => {
     expect(cache.keys()).toEqual([
       repoFileCacheKey({ owner: "acme", name: "shop" }, SHA, "src/order.ts"),
     ]);
+    // 置き場に当たっても、公開かどうかは毎回確かめる。
+    expect(github.visibility.checks).toBe(2);
+  });
+
+  it("非公開になった・確かめられないリポジトリは、置き場にあっても本文を使わず要約だけにする", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const cache = memoryCache();
+    await repoCodeMaterialFor(
+      { github: fakeGitHub({ "src/order.ts": ORDER_TS }), cache },
+      node([source()]),
+      [],
+      6_000,
+    );
+    const now = fakeGitHub(
+      { "src/order.ts": ORDER_TS },
+      new GitHubError("not-found", "リポジトリが見つかりません"),
+    );
+
+    const material = await repoCodeMaterialFor({ github: now, cache }, node([source()]), [], 6_000);
+
+    expect(material.sources).toEqual([
+      { kind: "code", ref: "src/order.ts", summary: "confirmOrder が在庫を引き当てる。" },
+    ]);
+    expect(now.calls).toEqual([]);
+    expect(warn).toHaveBeenCalledWith("repo is not readable as public; using summaries only", {
+      repo: "acme/shop",
+      kind: "not-found",
+    });
+  });
+
+  it("区切りの印は置き換えた後の長さで予算に収める", async () => {
+    const markers = Array.from({ length: 300 }, () => "<<< confirmOrder >>>").join("\n");
+    const material = await repoCodeMaterialFor(
+      { github: fakeGitHub({ "src/order.ts": markers }) },
+      node([source({ summary: "<<<confirmOrder>>>" })]),
+      [],
+      1_000,
+    );
+
+    const excerpt = material.sources[0]?.excerpt ?? "";
+    expect(excerpt).not.toContain("<<<");
+    expect(excerpt).toContain("＜＜＜ confirmOrder ＞＞＞");
+    expect(bytesOf(excerpt)).toBeLessThanOrEqual(1_000);
+    expect(material.sources[0]?.summary).toBe("＜＜＜confirmOrder＞＞＞");
   });
 
   it("読めないファイルは要約だけにし、失敗にしない", async () => {
