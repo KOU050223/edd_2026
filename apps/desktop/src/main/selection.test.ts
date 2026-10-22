@@ -75,8 +75,10 @@ describe("captureSelection", () => {
   });
 
   it("restores the complete clipboard snapshot", async () => {
-    const originalItems = [{ types: ["text/plain", "text/html"], getType: async () => new Blob() }];
-    const selectedItems = [{ types: ["text/plain"], getType: async () => new Blob() }];
+    const originalItems = [
+      { types: ["text/plain", "text/html"], getType: async () => new Blob([]) },
+    ];
+    const selectedItems = [{ types: ["text/plain"], getType: async () => new Blob([]) }];
     let current = { items: originalItems, fingerprint: "original" };
     let restoredItems: readonly unknown[] | undefined;
 
@@ -100,7 +102,7 @@ describe("captureSelection", () => {
   });
 
   it("does not overwrite clipboard content changed during capture", async () => {
-    const originalItems = [{ types: ["text/plain"], getType: async () => new Blob() }];
+    const originalItems = [{ types: ["text/plain"], getType: async () => new Blob([]) }];
     let current = { items: originalItems, fingerprint: "original" };
     let restoreCount = 0;
 

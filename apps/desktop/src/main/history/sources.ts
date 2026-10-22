@@ -151,10 +151,11 @@ async function* scanJsonlFiles(
     }
     const body = texts.join("\n\n").trim();
     if (body.length === 0) continue;
+    const title = titleFrom(texts[0]);
     yield {
       sourceId: meta.sourceId,
       ...(meta.observedAt === undefined ? {} : { observedAt: meta.observedAt }),
-      ...(titleFrom(texts[0]) === undefined ? {} : { title: titleFrom(texts[0]) }),
+      ...(title === undefined ? {} : { title }),
       body: body.slice(0, RAW_BODY_MAX_LENGTH),
       externalRefHash: meta.ref,
     };
@@ -375,11 +376,12 @@ export function createVSCodeAdapter(deps: AdapterDeps): HistorySourceAdapter {
         const texts = extractVSCodeSession(parsed);
         const body = texts.join("\n\n").trim();
         if (body.length === 0) continue;
+        const title = titleFrom(texts[0]);
         yield {
           // 絶対パスは保存先へ漏らさない（sourceId は Evidence ID の一部）。
           sourceId: sha256(file),
           observedAt: new Date(stat.mtimeMs).toISOString(),
-          ...(titleFrom(texts[0]) === undefined ? {} : { title: titleFrom(texts[0]) }),
+          ...(title === undefined ? {} : { title }),
           body: body.slice(0, RAW_BODY_MAX_LENGTH),
           externalRefHash: sha256(file),
         };
@@ -421,12 +423,8 @@ function extractExportConversation(value: unknown): { title?: string; texts: str
         texts.push(...parts.filter((part): part is string => typeof part === "string"));
       }
     }
-    return {
-      ...(titleFrom(typeof item.title === "string" ? item.title : undefined) === undefined
-        ? {}
-        : { title: titleFrom(item.title as string) }),
-      texts,
-    };
+    const title = titleFrom(typeof item.title === "string" ? item.title : undefined);
+    return { ...(title === undefined ? {} : { title }), texts };
   }
 
   // Claude: {name, chat_messages: [{sender: "human"|"assistant", text}]}
@@ -438,7 +436,8 @@ function extractExportConversation(value: unknown): { title?: string; texts: str
       if (typeof text === "string" && text.length > 0) texts.push(text);
     }
     const name = typeof item.name === "string" ? item.name : undefined;
-    return { ...(name === undefined ? {} : { title: titleFrom(name) }), texts };
+    const title = name === undefined ? undefined : titleFrom(name);
+    return { ...(title === undefined ? {} : { title }), texts };
   }
 
   return null;

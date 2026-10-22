@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 
-// @ts-expect-error -- renderer は素の JS。markdown.test.ts と同じ読み方をする。
 import { AUTH_LABELS, authStatusLabel, shouldApplyAuthState } from "./auth-status.js";
 
 describe("authStatusLabel", () => {

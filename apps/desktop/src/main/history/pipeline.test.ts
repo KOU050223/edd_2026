@@ -11,8 +11,18 @@ import { createLocalRuleProvider } from "./local-rules.js";
 import { mergePastedAnalysis, runImportPipeline, type ImportProgress } from "./pipeline.js";
 
 const CONCEPTS: Concept[] = [
-  { id: "go.pointer_receiver", label: "値レシーバとポインタレシーバ", language: "go" },
-  { id: "go.error_handling", label: "error 型と if err != nil", language: "go" },
+  {
+    id: "go.pointer_receiver",
+    label: "値レシーバとポインタレシーバ",
+    language: "go",
+    source: { kind: "manual" },
+  },
+  {
+    id: "go.error_handling",
+    label: "error 型と if err != nil",
+    language: "go",
+    source: { kind: "manual" },
+  },
 ];
 
 function adapterWith(

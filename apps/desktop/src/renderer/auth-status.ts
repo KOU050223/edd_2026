@@ -1,7 +1,11 @@
 // ログイン状態の表示文言を決める。renderer.js から切り出してあるのは、
-// DOM なしで表示規則だけをテストするため（markdown.js と同じ形）。
+// DOM なしで表示規則だけをテストするため（markdown.ts と同じ形）。
 
-/** @typedef {{ loggingIn: boolean, loggingOut?: boolean, hasRefreshToken: boolean }} AuthView */
+export interface AuthView {
+  loggingIn: boolean;
+  loggingOut?: boolean;
+  hasRefreshToken: boolean;
+}
 
 export const AUTH_LABELS = {
   loggingIn: "ブラウザでログインしています…",
@@ -17,11 +21,8 @@ export const AUTH_LABELS = {
  * ログイン・ログアウト処理中は、保存済みトークンの有無より進行中の表示を優先する。
  * 主処理の途中に届いた更新で「未ログイン」へ戻すと、実際には走っている
  * ログインについて画面が嘘をつく（.agents/rules/rules.md RULE-005 / RULE-007）。
- *
- * @param {AuthView} view
- * @returns {string}
  */
-export function authStatusLabel(view) {
+export function authStatusLabel(view: AuthView): string {
   if (view.loggingIn) return AUTH_LABELS.loggingIn;
   if (view.loggingOut) return AUTH_LABELS.loggingOut;
   return view.hasRefreshToken ? AUTH_LABELS.loggedIn : AUTH_LABELS.loggedOut;
@@ -32,10 +33,7 @@ export function authStatusLabel(view) {
  *
  * ログイン・ログアウト処理中は取り込まない。押下の無効化（disabled）は見た目でしかなく、
  * 別経路から届く更新は素通りするため、状態で弾く（RULE-007）。
- *
- * @param {AuthView} view
- * @returns {boolean}
  */
-export function shouldApplyAuthState(view) {
+export function shouldApplyAuthState(view: AuthView): boolean {
   return !view.loggingIn && !view.loggingOut;
 }

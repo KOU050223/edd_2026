@@ -23,7 +23,10 @@ export class OAuthTokenError extends Error {
   readonly code: string | undefined;
   readonly status: number;
 
-  constructor(message: string, options: { code?: string; status: number; cause?: unknown }) {
+  constructor(
+    message: string,
+    options: { code?: string | undefined; status: number; cause?: unknown },
+  ) {
     super(message, options.cause === undefined ? undefined : { cause: options.cause });
     this.name = "OAuthTokenError";
     this.code = options.code;
