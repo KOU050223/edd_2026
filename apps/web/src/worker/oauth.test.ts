@@ -1,6 +1,7 @@
 import { expect, test } from "vitest";
 import {
   buildAuthorizationUrl,
+  buildLogoutUrl,
   createPkcePair,
   exchangeAuthorizationCode,
   OAuthTokenError,
@@ -41,6 +42,16 @@ test("state は毎回違う値になる", () => {
 
   expect(values.size).toBe(20);
   for (const value of values) expect(value).toMatch(/^[A-Za-z0-9_-]{43}$/);
+});
+
+test("ログアウトの URL は IdP の /v2/logout へ client_id と戻り先を載せる（#301）", () => {
+  const url = new URL(buildLogoutUrl(config, "https://web.example.test/"));
+
+  expect(url.origin + url.pathname).toBe("https://idp.example.test/v2/logout");
+  expect(url.searchParams.get("client_id")).toBe("web-client");
+  expect(url.searchParams.get("returnTo")).toBe("https://web.example.test/");
+  // 秘密はブラウザが開く URL に載せない。
+  expect(url.search).not.toContain("web-secret");
 });
 
 test("認可 URL に offline_access と audience を載せる", () => {

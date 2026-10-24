@@ -101,6 +101,22 @@ export function buildAuthorizationUrl(
   return url.toString();
 }
 
+/**
+ * IdP のログアウトの URL（#301）。Auth0 のセッション（Auth0 のドメインの Cookie）を消し、`returnTo` へ戻す。
+ *
+ * これを通さないと、次の `/authorize` がログイン画面を出さずに同じアカウントでログインし直し、
+ * 別のアカウントに切り替えられない。`returnTo` は Auth0 のアプリケーションの
+ * 「Allowed Logout URLs」に登録したものだけが通る（docs/auth.md §8）。
+ */
+export function buildLogoutUrl(
+  config: Pick<OAuthConfig, "issuer" | "clientId">,
+  returnTo: string,
+): string {
+  const url = new URL("/v2/logout", config.issuer);
+  url.search = new URLSearchParams({ client_id: config.clientId, returnTo }).toString();
+  return url.toString();
+}
+
 export async function exchangeAuthorizationCode(
   config: OAuthConfig,
   code: string,
