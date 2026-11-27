@@ -434,7 +434,7 @@ Refresh Token は既存の `createCredentialStore` にそのまま載る。
 
 | 操作                           | 実装                                                                                                                                |
 | ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
-| Web ログアウト                 | KV のセッション削除（現状のまま）+ IdP の Refresh Token 撤回                                                                        |
+| Web ログアウト                 | KV のセッション削除（現状のまま）+ IdP の Refresh Token 撤回 + IdP のログアウト（`/v2/logout`、#301）                               |
 | Desktop / VS Code のログアウト | ローカルの Refresh Token 破棄 + `POST /oauth/revoke`                                                                                |
 | 端末を紛失した                 | IdP 側で当該 Refresh Token を撤回。**最大でアクセストークンの寿命（15分）だけ遅延する**                                             |
 | 退会                           | `DELETE FROM users WHERE id = ?` の1文で learning_events / devices が消える（`ON DELETE CASCADE` 済み）。IdP 側のユーザーも削除する |
@@ -448,6 +448,14 @@ Refresh Token は既存の `createCredentialStore` にそのまま載る。
 ログアウトも同様に、**先にローカルの Refresh Token を破棄する**。
 利用者を守っているのはローカルの破棄であり、`POST /oauth/revoke` の成否ではない。
 撤回に失敗した場合は**握りつぶさずログへ残す**（AGENTS.md）。
+
+Web のログアウトは、最後に IdP のセッションも消す（#301）。KV を消しても Auth0 のセッション
+（Auth0 のドメインの Cookie）が残っていると、次の `/authorize` がログイン画面を出さずに同じアカウントで
+戻ってきて、別のアカウントに切り替えられない。`POST /logout` は KV を消したあと、撤回の完了を待たずに（撤回は `waitUntil` で応答のあとに走らせる）
+`/v2/logout?client_id=…&returnTo=<トップ>` を返し、画面がそこへ移る。撤回を待つと、IdP が遅いときに
+画面の締め切り（10 秒）が先に来て、IdP のログアウトへ移れない（PR #303 のレビュー）。GET の 302 にしないのは、
+別のサイトのリンクから勝手にログアウトさせないため。戻り先は Auth0 の Allowed Logout URLs に
+登録が要る（`apps/web/README.md`）。
 露出はアクセストークンの寿命に上限される。
 
 なお、定期的な突合ジョブや撤回の永続リトライキューは**今は作らない**。
