@@ -1,6 +1,10 @@
 import type { HistoryProviderId, LearningEvidence, UnmappedCandidate } from "@gakushu-sochi/domain";
 
 import { authedApiRequest, type AuthedApiDeps } from "../api-request.js";
+import type { CreateImportSessionResult, ImportSessionView } from "../../shared/types.js";
+
+// DTO の正本は src/shared/types.ts（IPC の契約側）。ここからも使えるように再 export する。
+export type { CreateImportSessionResult, ImportSessionView } from "../../shared/types.js";
 
 /**
  * 履歴インポート系 API のクライアント（Issue #157）。
@@ -17,19 +21,6 @@ export type HistoryApiDeps = AuthedApiDeps;
 
 const request = authedApiRequest;
 
-export interface ImportSessionView {
-  id: string;
-  status: string;
-  importedBy: string;
-  providers: HistoryProviderId[];
-  conversationCount: number;
-  ignoredCount: number;
-  evidenceCount: number;
-  conceptCount: number;
-  createdAt: string;
-  updatedAt: string;
-}
-
 export interface CreateImportSessionBody {
   id: string;
   importedBy: "desktop" | "agent" | "file" | "connector";
@@ -38,10 +29,6 @@ export interface CreateImportSessionBody {
   ignoredCount?: number;
   unmappedCandidates?: UnmappedCandidate[];
   evidence: LearningEvidence[];
-}
-
-export interface CreateImportSessionResult extends ImportSessionView {
-  alreadyExisted: boolean;
 }
 
 export function createImportSession(

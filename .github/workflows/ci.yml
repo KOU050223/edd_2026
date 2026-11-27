@@ -37,6 +37,10 @@ jobs:
         run: npm run check:worker-types
       - name: Build Web assets
         run: npm run build:web
+      - name: Build Desktop app
+        run: npm run build --workspace=@gakushu-sochi/desktop
+      - name: Check Desktop bundle sizes
+        run: node apps/desktop/scripts/check-bundle-size.mjs
       - name: Check project rules
         run: npm run test:project-rules
       - name: Run tests

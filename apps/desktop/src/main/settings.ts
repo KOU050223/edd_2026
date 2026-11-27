@@ -1,5 +1,10 @@
 import { PERSONA_MAX_LENGTH } from "@gakushu-sochi/domain";
 
+import type { DesktopSettings } from "../shared/types.js";
+
+// DTO の正本は src/shared/types.ts（IPC の契約側）。ここからも使えるように再 export する。
+export type { DesktopSettings } from "../shared/types.js";
+
 /**
  * Managed AI の1回あたりの出力上限（tokens）。
  *
@@ -18,30 +23,6 @@ export const MANAGED_AI_MAX_OUTPUT_TOKENS = 2_048;
  * 設定を利用者に作らせることになる。**サーバー側を直すときは、この値も一緒に動かす。**
  */
 export const MANAGED_AI_MODELS = ["gemini-3.6-flash", "gemini-3.8-flash"] as const;
-
-// persona の上限は domain が正本（PERSONA_MAX_LENGTH）。ここを緩めると、
-// 保存できるのに送信すると必ず 400 で弾かれる設定を利用者に作らせることになる。
-export interface DesktopSettings {
-  apiBaseUrl: string;
-  shortcut: string;
-  model: string;
-  temperature: number;
-  maxTokens: number;
-  restoreClipboard: boolean;
-  launchAtLogin: boolean;
-  /** 応答の人物像・口調（自由記述）。空文字は未設定。 */
-  persona: string;
-  /**
-   * 「質問履歴の保存」オプトインのローカルキャッシュ（Issue #204）。
-   *
-   * 正はサーバーの `user_settings.saveConversationHistory`。本文を送る前の
-   * プリチェックに使うだけで、キャッシュが true でもサーバー側が無効なら
-   * `PUT /v1/conversations` は 403 で拒否される（docs/conversation-history.md）。
-   * ここが true に偽装されても本文の保存は増えず、古い true のまま残ると
-   * 無意味な送信が毎回失敗するため、403 が返ったら false へ戻す。
-   */
-  saveConversationHistory: boolean;
-}
 
 export const DEFAULT_SETTINGS: DesktopSettings = {
   apiBaseUrl: "http://localhost:8787",
@@ -119,32 +100,14 @@ export function isManagedAiModel(value: string): boolean {
   return (MANAGED_AI_MODELS as readonly string[]).includes(value);
 }
 
-function isSettings(value: unknown): value is DesktopSettings {
-  if (typeof value !== "object" || value === null) return false;
-  const settings = value as Record<string, unknown>;
-  return (
-    typeof settings.apiBaseUrl === "string" &&
-    isSafeApiBaseUrl(settings.apiBaseUrl) &&
-    typeof settings.shortcut === "string" &&
-    settings.shortcut.length > 0 &&
-    typeof settings.model === "string" &&
-    isManagedAiModel(settings.model) &&
-    typeof settings.temperature === "number" &&
-    settings.temperature >= 0 &&
-    settings.temperature <= 2 &&
-    typeof settings.maxTokens === "number" &&
-    Number.isInteger(settings.maxTokens) &&
-    settings.maxTokens > 0 &&
-    settings.maxTokens <= MANAGED_AI_MAX_OUTPUT_TOKENS &&
-    typeof settings.restoreClipboard === "boolean" &&
-    typeof settings.launchAtLogin === "boolean" &&
-    typeof settings.persona === "string" &&
-    settings.persona.length <= PERSONA_MAX_LENGTH &&
-    typeof settings.saveConversationHistory === "boolean"
-  );
-}
-
-function isSafeApiBaseUrl(value: string): boolean {
+/**
+ * 各項目の制約をまとめた述語群。
+ *
+ * `isSettings`（古い settings.json の読み込み用の寛容な検査）と
+ * `settings:save` のスキーマ（src/main/ipc/schemas.ts）の両方がここを正本にして、
+ * モデルの一覧・persona の上限・URL の扱い・数値の範囲が 2 か所でずれないようにする。
+ */
+export function isSafeApiBaseUrl(value: string): boolean {
   try {
     const url = new URL(value);
     if (url.protocol === "https:") return true;
@@ -153,4 +116,42 @@ function isSafeApiBaseUrl(value: string): boolean {
   } catch {
     return false;
   }
+}
+
+export function isValidShortcut(value: string): boolean {
+  return value.length > 0;
+}
+
+export function isValidTemperature(value: number): boolean {
+  return value >= 0 && value <= 2;
+}
+
+export function isValidMaxTokens(value: number): boolean {
+  return Number.isInteger(value) && value > 0 && value <= MANAGED_AI_MAX_OUTPUT_TOKENS;
+}
+
+export function isValidPersona(value: string): boolean {
+  return value.length <= PERSONA_MAX_LENGTH;
+}
+
+function isSettings(value: unknown): value is DesktopSettings {
+  if (typeof value !== "object" || value === null) return false;
+  const settings = value as Record<string, unknown>;
+  return (
+    typeof settings.apiBaseUrl === "string" &&
+    isSafeApiBaseUrl(settings.apiBaseUrl) &&
+    typeof settings.shortcut === "string" &&
+    isValidShortcut(settings.shortcut) &&
+    typeof settings.model === "string" &&
+    isManagedAiModel(settings.model) &&
+    typeof settings.temperature === "number" &&
+    isValidTemperature(settings.temperature) &&
+    typeof settings.maxTokens === "number" &&
+    isValidMaxTokens(settings.maxTokens) &&
+    typeof settings.restoreClipboard === "boolean" &&
+    typeof settings.launchAtLogin === "boolean" &&
+    typeof settings.persona === "string" &&
+    isValidPersona(settings.persona) &&
+    typeof settings.saveConversationHistory === "boolean"
+  );
 }

@@ -173,10 +173,11 @@ test("desktop-v* タグで Desktop の GitHub Release を作る", () => {
   assert.match(desktopRelease, /--publish never/);
   assert.match(desktopRelease, /gh release create/);
   assert.match(desktopRelease, /contents: write/);
-  // publish 先の設定が変わると手動 publish の行き先も変わる。向き先を固定する。
-  assert.deepEqual(desktopPackageJson.build.publish, [
-    { provider: "github", owner: "KOU050223", repo: "edd_2026" },
-  ]);
+  // Desktop のリリース経路は desktop-v* タグ → gh release create の 1 本だけ
+  // （docs/release.md）。electron-builder に publish 設定を持たせると、文書にない
+  // 手動 publish の経路と、誰も読まない更新情報（latest-mac.yml）が生まれるので
+  // 持たせない。自動更新を入れるとき（#278）に、この検査ごと見直す。
+  assert.equal(desktopPackageJson.build.publish, undefined);
   // Cask の正本は homebrew-tap に置く。GITHUB_TOKEN は他リポジトリを push できないので
   // 専用 PAT を使う。トークンをURLに埋めるとログに漏れるため checkout の token に渡す。
   assert.match(desktopRelease, /repository: KOU050223\/homebrew-tap/);

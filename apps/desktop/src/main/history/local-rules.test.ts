@@ -5,9 +5,19 @@ import type { Concept, RawConversation } from "@gakushu-sochi/domain";
 import { createLocalRuleProvider } from "./local-rules.js";
 
 const CONCEPTS: Concept[] = [
-  { id: "go.pointer_receiver", label: "値レシーバとポインタレシーバ", language: "go" },
-  { id: "go.error_handling", label: "error 型と if err != nil", language: "go" },
-  { id: "ts.type_narrowing", label: "型の絞り込み", language: "ts" },
+  {
+    id: "go.pointer_receiver",
+    label: "値レシーバとポインタレシーバ",
+    language: "go",
+    source: { kind: "manual" },
+  },
+  {
+    id: "go.error_handling",
+    label: "error 型と if err != nil",
+    language: "go",
+    source: { kind: "manual" },
+  },
+  { id: "ts.type_narrowing", label: "型の絞り込み", language: "ts", source: { kind: "manual" } },
 ];
 
 function conv(body: string): RawConversation {

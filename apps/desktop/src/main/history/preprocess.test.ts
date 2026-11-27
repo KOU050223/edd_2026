@@ -10,7 +10,7 @@ import {
 } from "./preprocess.js";
 
 function conv(body: string, ref = "ref-1"): RawConversation {
-  return { sourceId: "s1", externalRefHash: ref, observedAtMs: 1000, body };
+  return { sourceId: "s1", externalRefHash: ref, observedAt: "2026-01-01T00:00:00Z", body };
 }
 
 describe("sanitizeConversation", () => {

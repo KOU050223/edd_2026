@@ -1,6 +1,10 @@
 import { CONVERSATION_ORIGINS, type Conversation } from "@gakushu-sochi/domain";
 
 import { ApiRequestError, authedApiRequest, type AuthedApiDeps } from "./api-request.js";
+import type { ConversationSummary, ListConversationsResult } from "../shared/types.js";
+
+// DTO の正本は src/shared/types.ts（IPC の契約側）。ここからも使えるように再 export する。
+export type { ConversationSummary, ListConversationsResult } from "../shared/types.js";
 
 /**
  * 会話履歴とユーザー設定の API クライアント（Issue #204）。
@@ -120,30 +124,6 @@ export function putConversation(
 // ---------------------------------------------------------------------------
 
 const MESSAGE_ROLES = ["context", "user", "assistant"] as const;
-
-/**
- * `GET /v1/conversations` の応答要素
- * （apps/api/src/contract/conversations.ts の `ConversationSummary` と対応）。
- * 本文（`messages`）は一覧には含まれない。
- */
-export interface ConversationSummary {
-  id: string;
-  origin: string;
-  clientId?: string;
-  title?: string;
-  language?: string;
-  fileName?: string;
-  occurredAt: string;
-  updatedAt: string;
-  messageCount: number;
-  complete: boolean;
-}
-
-export interface ListConversationsResult {
-  conversations: ConversationSummary[];
-  /** 末尾まで読んだら `null`。 */
-  nextCursor: string | null;
-}
 
 const isConversationSummary = hasShape<ConversationSummary>({
   id: isString,

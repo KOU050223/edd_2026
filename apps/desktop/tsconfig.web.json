@@ -1,0 +1,14 @@
+{
+  // renderer と shared の検査。Node 型は入れない（DOM だけの世界に保つ）。
+  // src/shared/*.test.ts は node:fs でソースを読む Node 前提のテストなので、
+  // ここでは除き tsconfig.node.json 側だけで検査する。
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx"
+  },
+  "include": ["src/renderer/**/*.ts", "src/renderer/**/*.tsx", "src/shared/**/*.ts"],
+  "exclude": ["src/shared/**/*.test.ts", "node_modules", "out"]
+}

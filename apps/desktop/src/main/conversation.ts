@@ -27,12 +27,14 @@ export interface BuildConversationInput {
 }
 
 export function buildConversation(input: BuildConversationInput): Conversation {
+  // 既定の質問文はどの会話も同じ先頭になるため、未入力のときは
+  // 選択テキストの先頭行をタイトルにする。
+  const title =
+    deriveConversationTitle(input.userQuestion) ?? deriveConversationTitle(input.selection);
   return {
     id: input.id,
     origin: "desktop",
-    // 既定の質問文はどの会話も同じ先頭になるため、未入力のときは
-    // 選択テキストの先頭行をタイトルにする。
-    title: deriveConversationTitle(input.userQuestion) ?? deriveConversationTitle(input.selection),
+    ...(title === undefined ? {} : { title }),
     occurredAt: input.occurredAt,
     updatedAt: input.answeredAt,
     complete: input.complete,

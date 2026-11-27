@@ -156,7 +156,7 @@ describe("createManagedAnalysisProvider", () => {
   });
 
   it("sends conversations and returns observations", async () => {
-    const requests: { url: string; init?: RequestInit }[] = [];
+    const requests: { url: string; init?: RequestInit | undefined }[] = [];
     const provider = createManagedAnalysisProvider({
       baseUrl: "https://api.example.test/v1",
       getAccessToken: () => Promise.resolve("token"),
